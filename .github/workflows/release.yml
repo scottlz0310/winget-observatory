@@ -1,0 +1,24 @@
+name: Release
+
+# prepare-release.yml が作る `chore(release): vX.Y.Z` PR のマージ（main への push）で起動する。
+# tag と GitHub Release の作成・公開を行う。
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: startsWith(github.event.head_commit.message, 'chore(release):')
+    uses: scottlz0310/release-automate/.github/workflows/reusable-publish-release.yml@3c860f1b178eb5b942d87c800153bc47887a7bfd # v3.2.1
+    permissions:
+      contents: write
+    with:
+      draft: false
