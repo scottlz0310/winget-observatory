@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  biome:
+    name: Biome (Docs & Configs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: 依存関係をインストール
+        run: bun install --frozen-lockfile
+
+      - name: Lint と Formatting を検査
+        run: bun run check
+
+  powershell:
+    name: PowerShell Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: スクリプト構文検査
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/check-syntax.ps1
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          # renovate: datasource=nuget registryUrl=https://www.powershellgallery.com/api/v2 depName=PSScriptAnalyzer
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
+          if ($results) {
+            $results | Format-Table -AutoSize
+            exit 1
+          }
+          Write-Host "PSScriptAnalyzer passed with no errors."

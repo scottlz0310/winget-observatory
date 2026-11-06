@@ -1,0 +1,16 @@
+# Node / Bun
+node_modules/
+bun.lockb
+
+# Temporary & backup files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.local

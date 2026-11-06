@@ -1,0 +1,68 @@
+name: Observe Winget Queue
+
+on:
+  schedule:
+    # 4時間おき（15分）に実行
+    - cron: "15 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      target_pr:
+        description: "ターゲットPR番号（空欄時はスクリプト既定値）"
+        required: false
+        default: "464302"
+      repository:
+        description: "対象リポジトリ"
+        required: false
+        default: "microsoft/winget-pkgs"
+
+concurrency:
+  group: observe-winget-queue
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  observe:
+    name: Collect Metrics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Run Winget Observatory Scripts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINGET_TARGET_PR: ${{ inputs.target_pr || '464302' }}
+          WINGET_REPOSITORY: ${{ inputs.repository || 'microsoft/winget-pkgs' }}
+        run: |
+          Write-Host "Target PR: $env:WINGET_TARGET_PR"
+          Write-Host "Repository: $env:WINGET_REPOSITORY"
+
+          # 1. 進捗メトリクス計測（CSVログ追記 & JSONスナップショット生成）
+          Write-Host "`n=== Running progress-winget.ps1 ==="
+          ./progress-winget.ps1 `
+            -PrNumber ([int]$env:WINGET_TARGET_PR) `
+            -Repository $env:WINGET_REPOSITORY `
+            -LogPath "data/progress-history.csv" `
+            -SnapshotPath "data/latest-progress.json"
+
+          # 2. キュー境界探索（JSONスナップショット生成）
+          Write-Host "`n=== Running explore-winget-depths.ps1 ==="
+          ./explore-winget-depths.ps1 `
+            -TargetPr ([int]$env:WINGET_TARGET_PR) `
+            -Repository $env:WINGET_REPOSITORY `
+            -OutputPath "data/latest-depths.json"
+
+      - name: Commit and push metrics data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --staged --quiet; then
+            echo "No changes in data directory."
+          else
+            git commit -m "chore(data): record winget observatory metrics [skip ci]"
+            git push
+          fi
