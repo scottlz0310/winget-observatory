@@ -6,12 +6,24 @@ param(
     [int]$TargetPr = $(if ($env:WINGET_TARGET_PR) { [int]$env:WINGET_TARGET_PR } else { 464302 }),
     [string]$Repository = $(if ($env:WINGET_REPOSITORY) { $env:WINGET_REPOSITORY } else { "microsoft/winget-pkgs" }),
     [string]$OutputPath = "",
+    [string]$HistoryPath = "",
     [switch]$NoTargetPr,
+    [switch]$NoHistory,
     [switch]$AsJson
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$script:JstOffset = [TimeSpan]::FromHours(9)
+
+function Format-JstDateTime {
+    param(
+        [Parameter(Mandatory)][DateTimeOffset]$Dto,
+        [string]$Format = "yyyy-MM-dd HH:mm"
+    )
+    return $Dto.ToOffset($script:JstOffset).ToString($Format)
+}
 
 function Invoke-GhSearch {
     param(
@@ -28,11 +40,13 @@ function Invoke-GhSearch {
 
 function Format-Row {
     param($Item)
+    $createdDto = [DateTimeOffset]::Parse($Item.created_at)
+    $updatedDto = [DateTimeOffset]::Parse($Item.updated_at)
     [pscustomobject]@{
         PR        = "#$($Item.number)"
         Number    = $Item.number
-        作成日時  = [DateTimeOffset]::Parse($Item.created_at).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-        更新日時  = [DateTimeOffset]::Parse($Item.updated_at).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        作成日時  = Format-JstDateTime $createdDto
+        更新日時  = Format-JstDateTime $updatedDto
         CreatedAt = $Item.created_at
         UpdatedAt = $Item.updated_at
         タイトル  = if ($Item.title.Length -gt 45) { $Item.title.Substring(0, 42) + "..." } else { $Item.title }
@@ -51,17 +65,17 @@ if ($hasTarget) {
         $targetCreated = [DateTimeOffset]::Parse($targetJson.createdAt)
         $targetCreatedIso = $targetCreated.ToString("yyyy-MM-ddTHH:mm:ssZ")
         $targetInfo = [pscustomobject]@{
-            Number    = $TargetPr
-            Title     = $targetJson.title
-            Url       = $targetJson.url
-            CreatedAt = $targetJson.createdAt
-            CreatedAtJst = $targetCreated.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            Number       = $TargetPr
+            Title        = $targetJson.title
+            Url          = $targetJson.url
+            CreatedAt    = $targetJson.createdAt
+            CreatedAtJst = Format-JstDateTime $targetCreated
         }
 
         if (-not $AsJson) {
             Write-Host "=== winget-pkgs キュー境界探索 ==="
             Write-Host "基準PR : #$TargetPr ($($targetJson.title))"
-            Write-Host "作成日 : $($targetCreated.ToLocalTime().ToString('yyyy-MM-dd HH:mm'))"
+            Write-Host "作成日 : $(Format-JstDateTime $targetCreated)"
             Write-Host ""
         }
     }
@@ -141,8 +155,10 @@ if (-not $AsJson) {
     }
 }
 
+$nowUtc = [DateTimeOffset]::UtcNow
 $resultData = [pscustomobject]@{
-    Timestamp      = [DateTimeOffset]::UtcNow.ToString("o")
+    Timestamp      = $nowUtc.ToString("o")
+    TimestampJst   = Format-JstDateTime $nowUtc "yyyy-MM-dd HH:mm:ss"
     Repository     = $Repository
     TargetPr       = if ($hasTarget) { $targetInfo } else { $null }
     HealthyBottom  = @($healthyBottom | ForEach-Object { Format-Row $_ })
@@ -155,10 +171,57 @@ if ($AsJson) {
     $resultData | ConvertTo-Json -Depth 5
 }
 
-if ($OutputPath) {
-    $parentDir = Split-Path -Parent $OutputPath
-    if ($parentDir -and (-not (Test-Path $parentDir))) {
-        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+# ディレクトリ解決
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$baseDataDir = if (Test-Path (Join-Path $scriptDir "..\data")) {
+    (Resolve-Path (Join-Path $scriptDir "..\data")).Path
+} elseif (Test-Path (Join-Path (Get-Location).Path "data")) {
+    (Resolve-Path (Join-Path (Get-Location).Path "data")).Path
+} else {
+    Join-Path $scriptDir "..\data"
+}
+
+# 1. JSONL 履歴ファイルへの追記（蓄積）
+if (-not $NoHistory) {
+    $resolvedHistoryPath = if (-not [string]::IsNullOrWhiteSpace($HistoryPath)) {
+        $HistoryPath
+    } elseif ($env:WINGET_DEPTHS_HISTORY_PATH) {
+        $env:WINGET_DEPTHS_HISTORY_PATH
+    } else {
+        Join-Path $baseDataDir "depths-history.jsonl"
     }
-    $resultData | ConvertTo-Json -Depth 5 | Set-Content -Path $OutputPath -Encoding utf8
+
+    try {
+        $historyDir = Split-Path -Parent $resolvedHistoryPath
+        if ($historyDir -and (-not (Test-Path $historyDir))) {
+            New-Item -ItemType Directory -Path $historyDir -Force | Out-Null
+        }
+        $jsonLine = $resultData | ConvertTo-Json -Depth 5 -Compress
+        [System.IO.File]::AppendAllLines($resolvedHistoryPath, [string[]]@($jsonLine), [System.Text.Encoding]::UTF8)
+    }
+    catch {
+        throw "キュー境界履歴 (JSONL) の保存に失敗しました ($resolvedHistoryPath): $($_.Exception.Message)"
+    }
+}
+
+# 2. 最新スナップショット JSON の上書き保存
+$resolvedOutputPath = if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+    $OutputPath
+} elseif ($env:WINGET_DEPTHS_OUTPUT_PATH) {
+    $env:WINGET_DEPTHS_OUTPUT_PATH
+} else {
+    Join-Path $baseDataDir "latest-depths.json"
+}
+
+if ($resolvedOutputPath) {
+    try {
+        $parentDir = Split-Path -Parent $resolvedOutputPath
+        if ($parentDir -and (-not (Test-Path $parentDir))) {
+            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+        }
+        $resultData | ConvertTo-Json -Depth 5 | Set-Content -Path $resolvedOutputPath -Encoding utf8
+    }
+    catch {
+        throw "最新スナップショット (JSON) の保存に失敗しました ($resolvedOutputPath): $($_.Exception.Message)"
+    }
 }
