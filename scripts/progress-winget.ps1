@@ -567,14 +567,24 @@ try {
 
     # 過去ログファイルの確認と前回レコードの読み込み
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    $baseDataDir = if (Test-Path (Join-Path $scriptDir "..\data")) {
+        (Resolve-Path (Join-Path $scriptDir "..\data")).Path
+    } elseif (Test-Path (Join-Path (Get-Location).Path "data")) {
+        (Resolve-Path (Join-Path (Get-Location).Path "data")).Path
+    } else {
+        Join-Path $scriptDir "..\data"
+    }
+
     $historyCsvPath = if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
         $LogPath
     } elseif ($env:WINGET_LOG_PATH) {
         $env:WINGET_LOG_PATH
+    } elseif (Test-Path (Join-Path $baseDataDir "progress-history.csv")) {
+        Join-Path $baseDataDir "progress-history.csv"
     } elseif (Test-Path (Join-Path $scriptDir "progress-history.csv")) {
         Join-Path $scriptDir "progress-history.csv"
     } else {
-        Join-Path $scriptDir "data\progress-history.csv"
+        Join-Path $baseDataDir "progress-history.csv"
     }
     $prevRecord = $null
     $pastHistory = [System.Collections.Generic.List[object]]::new()
@@ -974,7 +984,7 @@ try {
         } elseif ($env:WINGET_SNAPSHOT_PATH) {
             $env:WINGET_SNAPSHOT_PATH
         } else {
-            Join-Path $scriptDir "data\latest-progress.json"
+            Join-Path $baseDataDir "latest-progress.json"
         }
 
         try {

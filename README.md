@@ -21,19 +21,19 @@
 
 ## 主なツール
 
-### 1. `progress-winget.ps1`（進捗メトリクス計測）
+### 1. `scripts/progress-winget.ps1`（進捗メトリクス計測）
 
 指定した PR またはキュー全体の待機時間、消化前線、待ち件数、過去 30 日間のマージ実績サンプル（中央値・P90）を算出・記録します。
 
 ```powershell
 # デフォルト（環境変数または既定PR）で実行
-./progress-winget.ps1
+./scripts/progress-winget.ps1
 
 # PR番号を指定して実行
-./progress-winget.ps1 -PrNumber 464302
+./scripts/progress-winget.ps1 -PrNumber 464302
 
 # 出力先を指定
-./progress-winget.ps1 -PrNumber 464302 -LogPath "data/progress-history.csv" -SnapshotPath "data/latest-progress.json"
+./scripts/progress-winget.ps1 -PrNumber 464302 -LogPath "data/progress-history.csv" -SnapshotPath "data/latest-progress.json"
 ```
 
 **計測項目:**
@@ -44,16 +44,16 @@
 - **通算待機日数 (Total)** / **レビュー待ち時間 (Turn)** / **条件成立後待機 (Ready)**
 - **マージ実績との比較**: 過去サンプルの中央値（Median）および 90%タイル（P90）との比較
 
-### 2. `explore-winget-depths.ps1`（キュー境界探索）
+### 2. `scripts/explore-winget-depths.ps1`（キュー境界探索）
 
 現在のキューの各「底（境界）」を立体的にスキャンします。
 
 ```powershell
 # キュー境界を探索
-./explore-winget-depths.ps1
+./scripts/explore-winget-depths.ps1
 
 # JSON 出力でスナップショット保存
-./explore-winget-depths.ps1 -OutputPath "data/latest-depths.json"
+./scripts/explore-winget-depths.ps1 -OutputPath "data/latest-depths.json"
 ```
 
 **スキャン境界:**

@@ -42,7 +42,7 @@ jobs:
 
           # 1. 進捗メトリクス計測（CSVログ追記 & JSONスナップショット生成）
           Write-Host "`n=== Running progress-winget.ps1 ==="
-          ./progress-winget.ps1 `
+          ./scripts/progress-winget.ps1 `
             -PrNumber ([int]$env:WINGET_TARGET_PR) `
             -Repository $env:WINGET_REPOSITORY `
             -LogPath "data/progress-history.csv" `
@@ -50,7 +50,7 @@ jobs:
 
           # 2. キュー境界探索（JSONスナップショット生成）
           Write-Host "`n=== Running explore-winget-depths.ps1 ==="
-          ./explore-winget-depths.ps1 `
+          ./scripts/explore-winget-depths.ps1 `
             -TargetPr ([int]$env:WINGET_TARGET_PR) `
             -Repository $env:WINGET_REPOSITORY `
             -OutputPath "data/latest-depths.json"

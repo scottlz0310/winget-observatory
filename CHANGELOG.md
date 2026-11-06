@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 観測スクリプト（`progress-winget.ps1`, `explore-winget-depths.ps1`）を `scripts/` ディレクトリへ集約
+- スクリプト配置変更に伴うデータディレクトリ（`data/`）の自動解決ロジックを強化
+- GitHub Actions 観測ワークフローおよびドキュメントのスクリプト実行パスを更新
+
 ## [0.1.0] - 2026-11-06
 
 ### Added
