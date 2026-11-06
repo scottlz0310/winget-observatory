@@ -51,3 +51,9 @@ jobs:
             exit 1
           }
           Write-Host "PSScriptAnalyzer passed with no errors."
+
+      - name: テスト実行
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pwsh -NoProfile -File tests/run-all-tests.ps1

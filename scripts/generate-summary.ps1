@@ -54,12 +54,14 @@ $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("> [!NOTE]")
 
+$script:JstOffset = [TimeSpan]::FromHours(9)
+
 $updatedJst = if ($progress -and $progress.TimestampJst) {
     $progress.TimestampJst
 } elseif ($depths -and $depths.TimestampJst) {
     $depths.TimestampJst
 } else {
-    [DateTimeOffset]::UtcNow.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+    [DateTimeOffset]::UtcNow.ToOffset($script:JstOffset).ToString("yyyy-MM-dd HH:mm:ss")
 }
 
 $targetPrNum = if ($progress -and $progress.TargetPr) {
@@ -249,5 +251,10 @@ if ($parent -and (-not (Test-Path $parent))) {
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
 }
 
-[System.IO.File]::WriteAllText($resolvedOutputPath, $content, [System.Text.Encoding]::UTF8)
+try {
+    [System.IO.File]::WriteAllText($resolvedOutputPath, $content, [System.Text.Encoding]::UTF8)
+}
+catch {
+    throw "サマリードキュメントの保存に失敗しました ($resolvedOutputPath): $($_.Exception.Message)"
+}
 Write-Host "Summary generated successfully: $resolvedOutputPath"

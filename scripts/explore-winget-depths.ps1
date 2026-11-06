@@ -15,6 +15,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$script:JstOffset = [TimeSpan]::FromHours(9)
+
+function Format-JstDateTime {
+    param(
+        [Parameter(Mandatory)][DateTimeOffset]$Dto,
+        [string]$Format = "yyyy-MM-dd HH:mm"
+    )
+    return $Dto.ToOffset($script:JstOffset).ToString($Format)
+}
+
 function Invoke-GhSearch {
     param(
         [Parameter(Mandatory)][string]$Query,
@@ -30,11 +40,13 @@ function Invoke-GhSearch {
 
 function Format-Row {
     param($Item)
+    $createdDto = [DateTimeOffset]::Parse($Item.created_at)
+    $updatedDto = [DateTimeOffset]::Parse($Item.updated_at)
     [pscustomobject]@{
         PR        = "#$($Item.number)"
         Number    = $Item.number
-        作成日時  = [DateTimeOffset]::Parse($Item.created_at).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-        更新日時  = [DateTimeOffset]::Parse($Item.updated_at).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        作成日時  = Format-JstDateTime $createdDto
+        更新日時  = Format-JstDateTime $updatedDto
         CreatedAt = $Item.created_at
         UpdatedAt = $Item.updated_at
         タイトル  = if ($Item.title.Length -gt 45) { $Item.title.Substring(0, 42) + "..." } else { $Item.title }
@@ -57,13 +69,13 @@ if ($hasTarget) {
             Title        = $targetJson.title
             Url          = $targetJson.url
             CreatedAt    = $targetJson.createdAt
-            CreatedAtJst = $targetCreated.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            CreatedAtJst = Format-JstDateTime $targetCreated
         }
 
         if (-not $AsJson) {
             Write-Host "=== winget-pkgs キュー境界探索 ==="
             Write-Host "基準PR : #$TargetPr ($($targetJson.title))"
-            Write-Host "作成日 : $($targetCreated.ToLocalTime().ToString('yyyy-MM-dd HH:mm'))"
+            Write-Host "作成日 : $(Format-JstDateTime $targetCreated)"
             Write-Host ""
         }
     }
@@ -146,7 +158,7 @@ if (-not $AsJson) {
 $nowUtc = [DateTimeOffset]::UtcNow
 $resultData = [pscustomobject]@{
     Timestamp      = $nowUtc.ToString("o")
-    TimestampJst   = $nowUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+    TimestampJst   = Format-JstDateTime $nowUtc "yyyy-MM-dd HH:mm:ss"
     Repository     = $Repository
     TargetPr       = if ($hasTarget) { $targetInfo } else { $null }
     HealthyBottom  = @($healthyBottom | ForEach-Object { Format-Row $_ })
@@ -188,7 +200,7 @@ if (-not $NoHistory) {
         [System.IO.File]::AppendAllLines($resolvedHistoryPath, [string[]]@($jsonLine), [System.Text.Encoding]::UTF8)
     }
     catch {
-        Write-Warning "キュー境界履歴 (JSONL) の保存に失敗しました: $($_.Exception.Message)"
+        throw "キュー境界履歴 (JSONL) の保存に失敗しました ($resolvedHistoryPath): $($_.Exception.Message)"
     }
 }
 
@@ -210,6 +222,6 @@ if ($resolvedOutputPath) {
         $resultData | ConvertTo-Json -Depth 5 | Set-Content -Path $resolvedOutputPath -Encoding utf8
     }
     catch {
-        Write-Warning "最新スナップショット (JSON) の保存に失敗しました: $($_.Exception.Message)"
+        throw "最新スナップショット (JSON) の保存に失敗しました ($resolvedOutputPath): $($_.Exception.Message)"
     }
 }

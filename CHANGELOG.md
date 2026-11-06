@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/explore-winget-depths.ps1`, `scripts/progress-winget.ps1`, `scripts/generate-summary.ps1` において、`ToLocalTime()` 依存による実行環境（GitHub Actions 等の UTC ランナー）での JST 日時ズレを解消し、`ToOffset([TimeSpan]::FromHours(9))` による明示的な JST 変換に統一
+- 観測データ保存（CSV, JSON, JSONL）失敗時に例外を握りつぶさずコンテキスト付きで再 throw してプロセスを非ゼロ終了するよう修正
+- `CHANGELOG.md` 末尾に `[Unreleased]` 比較リンク定義を追加し、`release-automate` による版確定処理の正規表現契約を満たすよう対応
+
 ### Added
 
 - `microsoft/winget-pkgs` のレビュートリアージ・キュー境界・消化速度を定点観測する PowerShell スクリプト群を追加
@@ -25,3 +31,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Biome 2.x および Lefthook の pre-commit 構成
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
+
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/tree/HEAD

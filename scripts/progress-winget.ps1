@@ -148,9 +148,13 @@ function Format-Delta {
     }
 }
 
+$script:JstOffset = [TimeSpan]::FromHours(9)
+
 function Format-DateTimeWithDay {
     param([DateTimeOffset]$Dto)
-    return $Dto.ToLocalTime().ToString("yyyy-MM-dd(ddd) HH:mm")
+    $jst = $Dto.ToOffset($script:JstOffset)
+    $dayOfWeekJa = @("日", "月", "火", "水", "木", "金", "土")[[int]$jst.DayOfWeek]
+    return "$($jst.ToString('yyyy-MM-dd'))($dayOfWeekJa) $($jst.ToString('HH:mm'))"
 }
 
 function Test-BlockedLabel {
@@ -748,8 +752,8 @@ try {
     }
 
     if ($null -ne $frontPr) {
-        $frontCreatedText = $frontPr.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")
-        $frontMergedText = $frontPr.MergedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        $frontCreatedText = $frontPr.CreatedAt.ToOffset($script:JstOffset).ToString("yyyy-MM-dd")
+        $frontMergedText = $frontPr.MergedAt.ToOffset($script:JstOffset).ToString("yyyy-MM-dd HH:mm")
         Write-Host "消化前線（直近マージPR）   : #$($frontPr.Number) (作成: $frontCreatedText / マージ: $frontMergedText)$frontDeltaText"
         if ($null -ne $queueInfo.ActiveAheadCount) {
             $deltaActive = if ($null -ne $prevRecord -and $prevRecord.ActiveAhead) {
@@ -912,9 +916,9 @@ try {
 
     # ---------- 実行ログの保存と直近履歴テーブル ----------
     if (-not $NoLog -and $null -ne $queueInfo) {
-        $nowJst = [DateTimeOffset]::UtcNow.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+        $nowJst = [DateTimeOffset]::UtcNow.ToOffset($script:JstOffset).ToString("yyyy-MM-dd HH:mm:ss")
         $frontNumVal = if ($null -ne $frontPr) { $frontPr.Number } else { "" }
-        $frontCreatedVal = if ($null -ne $frontPr) { $frontPr.CreatedAt.ToString("yyyy-MM-dd HH:mm") } else { "" }
+        $frontCreatedVal = if ($null -ne $frontPr) { $frontPr.CreatedAt.ToOffset($script:JstOffset).ToString("yyyy-MM-dd HH:mm") } else { "" }
         $activeVal = if ($null -ne $queueInfo.ActiveAheadCount) { $queueInfo.ActiveAheadCount } else { "" }
 
         $logRow = [pscustomobject]@{
@@ -975,7 +979,7 @@ try {
             $pastHistory.Add($logRow)
         }
         catch {
-            Write-Warning "履歴ファイルへの保存に失敗しました: $($_.Exception.Message)"
+            throw "履歴ファイルへの保存に失敗しました ($historyCsvPath): $($_.Exception.Message)"
         }
 
         # スナップショット JSON の保存（最新状態の構造化データ）
@@ -1019,7 +1023,7 @@ try {
             $snapshotData | ConvertTo-Json -Depth 5 | Set-Content -Path $resolvedSnapshotPath -Encoding utf8
         }
         catch {
-            Write-Warning "スナップショットファイルへの保存に失敗しました: $($_.Exception.Message)"
+            throw "スナップショットファイルへの保存に失敗しました ($resolvedSnapshotPath): $($_.Exception.Message)"
         }
 
         if ($pastHistory.Count -gt 0) {
