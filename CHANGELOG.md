@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-06
+
 ### Changed
 
 - `package.json` の初期バージョンを `0.0.0` に設定（`release-automate` による `0.1.0` リリース準備 PR 作成時のバージョンバンプ契約に対応）
@@ -36,4 +38,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/tree/HEAD
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/scottlz0310/winget-observatory/releases/tag/v0.1.0

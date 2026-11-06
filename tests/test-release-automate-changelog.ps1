@@ -30,8 +30,8 @@ if ($unreleasedLinkMatches.Count -ne 1) {
 }
 Write-Host "OK: '^[Unreleased]:...' 比較リンク定義が 1 件存在します ($($unreleasedLinkMatches[0].Value))。"
 
-# 3. release-automate の版確定処理シミュレーション (バージョン 0.1.0)
-$testVersion = "0.1.0"
+# 3. release-automate の版確定処理シミュレーション (任意のダミーバージョン)
+$testVersion = "999.0.0"
 $repoUrl = "https://github.com/scottlz0310/winget-observatory"
 $tag = "v$testVersion"
 $today = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(9)).ToString("yyyy-MM-dd")
