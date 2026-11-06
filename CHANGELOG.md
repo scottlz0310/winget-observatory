@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- キュー境界探索の時系列 JSONL 蓄積機能（`data/depths-history.jsonl`）を追加
+- 観測データを人が見て一目で把握できるまとめドキュメント自動生成スクリプト（`scripts/generate-summary.ps1` -> `SUMMARY.md`）を追加
+
 ### Changed
 
 - 観測スクリプト（`progress-winget.ps1`, `explore-winget-depths.ps1`）を `scripts/` ディレクトリへ集約
 - スクリプト配置変更に伴うデータディレクトリ（`data/`）の自動解決ロジックを強化
-- GitHub Actions 観測ワークフローおよびドキュメントのスクリプト実行パスを更新
+- GitHub Actions 観測ワークフローで `SUMMARY.md` および `depths-history.jsonl` の自動更新・コミットに対応
 
 ## [0.1.0] - 2026-11-06
 

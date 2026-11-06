@@ -1,5 +1,6 @@
 {
-  "Timestamp": "2026-11-06T14:26:52.8425224+00:00",
+  "Timestamp": "2026-11-06T14:33:02.4196219+00:00",
+  "TimestampJst": "2026-11-06 23:33:02",
   "Repository": "microsoft/winget-pkgs",
   "TargetPr": {
     "Number": 464302,
