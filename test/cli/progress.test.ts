@@ -598,7 +598,19 @@ describe("CLI: progress のコミット表示", () => {
           created_at: "2026-11-01T01:00:00Z",
           label: { name },
         })),
-      searchIssuesDetailed: async () => ({ totalCount: 0, items: [] }),
+      searchIssuesDetailed: async () => ({
+        totalCount: 1,
+        items: [
+          {
+            number: 100,
+            title: "Oldest healthy PR",
+            html_url: "https://github.com/test/repo/pull/100",
+            created_at: "2026-09-01T00:00:00Z",
+            updated_at: "2026-09-02T00:00:00Z",
+            labels: [],
+          },
+        ],
+      }),
     } as unknown as GitHubApiClient;
 
     const logs: string[] = [];
@@ -609,6 +621,7 @@ describe("CLI: progress のコミット表示", () => {
         lookbackDays: 30,
         sampleSize: 30,
         fetchLimit: 1000,
+        staleDays: 14,
         queueLimit: 500,
         noLog: true,
         asJson: false,
