@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`, `src/api/github.ts`: 待ち行列の指標を再設計（Issue #18）。消化前線を「直近マージ PR」から「条件を満たす最古の未マージ PR」に変更して単調に進むようにし、実質待ちを「更新順で自 PR より前に並ぶ健康な PR の数」（指摘なく順番待ちをしている PR の待ち順位）に変更。履歴 CSV に算出基準を示す `QueueBasis` 列を追加し、旧定義の行（空欄）との前回比は出力しない
+- `src/domain/progress.ts`, `src/domain/depths.ts`: 「健康な PR」の検索条件を `buildHealthyQueryParts` に一本化し、`progress` と `explore-depths` で除外ラベルの定義がずれていた問題を解消
+- `src/cli/explore-depths.ts`: 遭難の底（更新が最も古い健康な PR）の取得件数を 3 件から 10 件に拡張
 - `README.md`: 累積待ち件数の定義を実装（検索ヒット件数）に合わせて修正し、`progress` / `explore-depths` の主なオプション、基準 PR が観測対象外のときの挙動、前提 Bun のバージョン指針（`.bun-version`）、`data/` ディレクトリの位置づけを追記（Issue #18）
 - `scripts/build-pages.ts`: 「手番所要日数」の説明を実装（最新コミット→マージ）に合わせて修正（Issue #18）
 - `src/domain/progress.ts`, `scripts/lib/dropbox.ts`: パーセンタイル算出方式の注記（R-7）と Dropbox 保存先パスのコメントを実装に合わせて修正（Issue #18）
