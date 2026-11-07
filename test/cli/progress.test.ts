@@ -384,3 +384,66 @@ describe("CLI: runProgressCli with mock client", () => {
     expect(res.snapshot?.FrontNumber).toBe(2000);
   });
 });
+
+describe("CLI: runProgressCli のエラー伝播", () => {
+  test("マージ済みサンプルの計測に失敗した場合は握りつぶさず PR 番号付きで中断する", async () => {
+    const readyLabels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
+    let timelineCalls = 0;
+    const mockClient = {
+      getPullRequestDetails: async () => ({
+        number: 200,
+        title: "Valid PR",
+        url: "https://github.com/test/repo/pull/200",
+        state: "OPEN" as const,
+        isDraft: false,
+        createdAt: "2026-11-01T00:00:00Z",
+        mergedAt: null,
+        closedAt: null,
+        labels: readyLabels,
+        commits: [{ oid: "abc", messageHeadline: "fix", committedDate: "2026-11-01T00:00:00Z" }],
+      }),
+      getIssueTimeline: async () => {
+        timelineCalls++;
+        if (timelineCalls > 1) {
+          throw new Error("rate limited");
+        }
+        return readyLabels.map((name) => ({
+          event: "labeled",
+          created_at: "2026-11-01T01:00:00Z",
+          label: { name },
+        }));
+      },
+      searchIssuesDetailed: async () => ({
+        totalCount: 1,
+        items: [
+          {
+            number: 100,
+            title: "Merged PR",
+            html_url: "https://github.com/test/repo/pull/100",
+            created_at: "2026-10-01T00:00:00Z",
+            updated_at: "2026-11-02T00:00:00Z",
+            labels: readyLabels.map((name) => ({ name })),
+            pull_request: { merged_at: "2026-11-02T00:00:00Z" },
+          },
+        ],
+      }),
+    } as unknown as GitHubApiClient;
+
+    await expect(
+      runProgressCli(
+        {
+          targetPr: 200,
+          repository: "test/repo",
+          lookbackDays: 30,
+          sampleSize: 30,
+          fetchLimit: 1000,
+          queueLimit: 500,
+          noLog: true,
+          asJson: false,
+        },
+        mockClient,
+        () => {},
+      ),
+    ).rejects.toThrow(/#100 のサンプル計測に失敗しました: rate limited/);
+  });
+});

@@ -301,7 +301,6 @@ describe("Domain: CSV and Snapshot helpers", () => {
       stats: {
         sampleCount: 10,
         skippedCount: 1,
-        failedCount: 0,
         total: { median: 3.5, p75: 5.0, max: 7.2 },
         turn: { median: 2.0, p75: 3.0, max: 4.5 },
         ready: { median: 1.8, p75: 2.5, max: 3.8 },

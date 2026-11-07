@@ -169,3 +169,24 @@ describe("buildDashboard", () => {
     }
   });
 });
+
+describe("buildDashboard: 読み込み失敗時の中断", () => {
+  test.each([
+    ["latest-progress.json", "進捗スナップショット"],
+    ["latest-depths.json", "キュー境界スナップショット"],
+  ])("%s が壊れている場合は空のダッシュボードを出力せず、パス付きで中断する", (file, label) => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-broken-"));
+    try {
+      const dataDir = join(tempDir, "data");
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(join(dataDir, file), "{ broken json", "utf-8");
+
+      const outputDir = join(tempDir, "site");
+      expect(() => buildDashboard({ dataDir, outputDir })).toThrow(label);
+      expect(() => buildDashboard({ dataDir, outputDir })).toThrow(file);
+      expect(existsSync(join(outputDir, "index.html"))).toBeFalse();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});

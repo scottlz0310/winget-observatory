@@ -280,7 +280,6 @@ export function simulateReadySince(
 export function calculateProgressStats(
   samples: MergedCandidateSample[],
   skippedCount = 0,
-  failedCount = 0,
 ): ProgressStatsSummary | null {
   if (samples.length === 0) {
     return null;
@@ -301,7 +300,6 @@ export function calculateProgressStats(
   return {
     sampleCount: samples.length,
     skippedCount,
-    failedCount,
     total: calcMetrics(totalValues),
     turn: calcMetrics(turnValues),
     ready: calcMetrics(readyValues),

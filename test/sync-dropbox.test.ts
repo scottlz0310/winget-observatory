@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { downloadMetricsFiles } from "../scripts/sync-dropbox";
+import { downloadMetricsFiles, parseArgs } from "../scripts/sync-dropbox";
 
 describe("sync-dropbox CLI credentials validation", () => {
   const scriptPath = resolve(__dirname, "../scripts/sync-dropbox.ts");
@@ -101,5 +101,34 @@ describe("downloadMetricsFiles with legacy fallback", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("sync-dropbox parseArgs", () => {
+  test.each([
+    [["--direction", "upload"], { direction: "upload", dryRun: false, allowSkip: false }],
+    [
+      ["--direction", "download", "--dry-run", "--allow-skip"],
+      { direction: "download", dryRun: true, allowSkip: true },
+    ],
+  ])("正しい引数 %j を解釈する", (args, expected) => {
+    expect(parseArgs(args, "/work")).toMatchObject(expected);
+  });
+
+  test("--data-dir は cwd 基準で解決する", () => {
+    expect(parseArgs(["--direction", "upload", "--data-dir", "out"], "/work").dataDir).toBe(
+      resolve("/work", "out"),
+    );
+  });
+
+  test.each([
+    [[], "--direction オプション"],
+    [["--direction"], "--direction オプションには値が必要です"],
+    [["--direction", "--dry-run"], "--direction オプションには値が必要です"],
+    [["--direction", "sync"], "無効な direction: sync"],
+    [["--direction", "upload", "--data-dir"], "--data-dir オプションには値が必要です"],
+    [["--direction", "upload", "--unknown"], "未知のオプションです: --unknown"],
+  ])("不正な引数 %j は暗黙の upload にせず拒否する", (args, message) => {
+    expect(() => parseArgs(args, "/work")).toThrow(message);
   });
 });
