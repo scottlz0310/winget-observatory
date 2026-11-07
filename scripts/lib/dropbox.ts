@@ -8,10 +8,10 @@ const UPLOAD_URL = "https://content.dropboxapi.com/2/files/upload";
 const DOWNLOAD_URL = "https://content.dropboxapi.com/2/files/download";
 
 /** 読み書きを許可する、アプリフォルダー内のプレフィックス */
-export const DROPBOX_ROOT = "/winget-observatory/";
+export const DROPBOX_ROOT = "/data/";
 
 /** プレフィックス配下の英数字・_・.・-・/ だけの安全なパス（連続する / や . / .. を拒否） */
-const SAFE_PATH = /^\/winget-observatory\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/;
+const SAFE_PATH = /^\/data\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/;
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
