@@ -6,6 +6,8 @@ import type {
   TargetPrInfo,
 } from "../models/depths";
 
+import { buildHealthyQueryParts } from "./progress";
+
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
@@ -74,26 +76,7 @@ export function formatTargetPrInfo(view: GitHubPrView): TargetPrInfo {
  * 健康的な大底（Healthy Bottom）のベースクエリを構築する。
  */
 export function buildHealthyBaseQuery(repository: string): string {
-  return [
-    `repo:${repository}`,
-    "is:pr",
-    "is:open",
-    "draft:false",
-    "label:New-Package",
-    "label:Azure-Pipeline-Passed",
-    "label:Validation-Completed",
-    "-label:Needs-CLA",
-    "-label:Needs-Author-Feedback",
-    "-label:Changes-Requested",
-    "-label:Blocking-Issue",
-    "-label:Blocked-InstallerType",
-    "-label:Author-Not-Authorized",
-    "-label:Author-Not-Verified",
-    "-label:Validation-Merge-Conflict",
-    "-label:Validation-SmartScreen",
-    "-label:Package-Flagged",
-    "-label:PUA-Detection",
-  ].join(" ");
+  return buildHealthyQueryParts(repository).join(" ");
 }
 
 /**

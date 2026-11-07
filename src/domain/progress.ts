@@ -74,6 +74,23 @@ export const BLOCKED_PATTERNS: readonly RegExp[] = [
   /^Validation-Submission-(Expired|Failed|Mismatch|Missing|Unsupported)$/,
 ] as const;
 
+/**
+ * 「健康な未マージ PR」（比較条件を満たす PR）を検索する GitHub Search クエリの条件部分。
+ * progress（前線・待ち件数）と explore-depths（各底）で同じ定義を使い、判定のずれを防ぐ。
+ * 名前パターンで判定する阻害ラベル（BLOCKED_PATTERNS）は検索クエリで表現できないため含まない。
+ */
+export function buildHealthyQueryParts(repository: string): string[] {
+  return [
+    `repo:${repository}`,
+    "is:pr",
+    "is:open",
+    "draft:false",
+    ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
+    ...BLOCKED_LABELS.map((b) => `-label:"${b}"`),
+    ...INVESTIGATION_LABELS.map((inv) => `-label:"${inv}"`),
+  ];
+}
+
 const BLOCKED_LABEL_SET = new Set<string>(BLOCKED_LABELS);
 const INVESTIGATION_LABEL_SET = new Set<string>(INVESTIGATION_LABELS);
 
@@ -347,6 +364,7 @@ export function migrateCsvRecord(raw: Record<string, string>): ProgressHistoryRo
     FrontCreatedAt: raw.FrontCreatedAt ?? "",
     ActiveAhead: raw.ActiveAhead ?? "",
     TotalAhead: raw.TotalAhead ?? "",
+    StaleAhead: raw.StaleAhead ?? "",
     Behind: raw.Behind ?? "",
     TotalLifetimeDays: raw.TotalLifetimeDays ?? "",
     TurnLatencyDays: raw.TurnLatencyDays ?? "",
@@ -371,6 +389,7 @@ export function serializeCsvRows(rows: ProgressHistoryRow[]): string {
     "TurnLatencyDays",
     "WaitDays",
     "CommitCount",
+    "StaleAhead",
   ];
 
   const headerLine = headers.map((h) => `"${h}"`).join(",");
@@ -393,10 +412,12 @@ export function createProgressSnapshot(params: {
   prTitle: string;
   prUrl: string;
   prState: string;
-  frontNumber: number | string;
+  frontNumber: number;
   frontCreatedAt: string;
-  activeAhead: number | string;
+  activeAhead: number;
   totalAhead: number;
+  staleAhead: number;
+  staleDays: number;
   behind: number;
   totalLifetimeDays: number;
   turnLatencyDays: number;
@@ -415,6 +436,8 @@ export function createProgressSnapshot(params: {
     frontCreatedAt,
     activeAhead,
     totalAhead,
+    staleAhead,
+    staleDays,
     behind,
     totalLifetimeDays,
     turnLatencyDays,
@@ -435,6 +458,8 @@ export function createProgressSnapshot(params: {
     FrontCreatedAt: frontCreatedAt,
     ActiveAhead: activeAhead,
     TotalAhead: totalAhead,
+    StaleAhead: staleAhead,
+    StaleDays: staleDays,
     Behind: behind,
     TotalLifetimeDays: Number(totalLifetimeDays.toFixed(2)),
     TurnLatencyDays: Number(turnLatencyDays.toFixed(2)),

@@ -16,6 +16,9 @@ import type {
   TargetPrInfo,
 } from "../models/depths";
 
+/** 放置の底として取得・表示する件数 */
+const STALE_BOTTOM_LIMIT = 10;
+
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
   let targetPr = 464302;
   if (process.env.WINGET_TARGET_PR) {
@@ -154,7 +157,7 @@ export async function runExploreDepths(
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
   // 3. 遭難・放置の底（Stale Bottom）
-  const staleItems = await client.searchIssues(healthyBase, "updated", "asc", 3);
+  const staleItems = await client.searchIssues(healthyBase, "updated", "asc", STALE_BOTTOM_LIMIT);
   const staleBottom = staleItems.map(formatDepthsRow);
 
   // 4. 特急レーン（Express Lane）
