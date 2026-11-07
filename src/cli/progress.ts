@@ -581,17 +581,27 @@ export async function runProgressCli(
   return { snapshot };
 }
 
+/**
+ * 基準 PR が観測対象外で記録をスキップしたことを、Actions 上で見落とさないよう warning として出力する。
+ */
+export function reportSkippedObservation(
+  snapshot: ProgressSnapshot | null,
+  env: NodeJS.ProcessEnv,
+  log: (msg: string) => void = console.log,
+): void {
+  if (snapshot === null && env.GITHUB_ACTIONS) {
+    log(
+      "::warning::基準 PR が観測対象外（クローズ済み・Draft・比較条件未達）のため、今回は履歴とスナップショットを記録していません",
+    );
+  }
+}
+
 // 直接実行時のエントリポイント
 if (import.meta.main) {
   try {
     const options = parseArgs(process.argv.slice(2));
     const { snapshot } = await runProgressCli(options);
-    if (snapshot === null && process.env.GITHUB_ACTIONS) {
-      // 基準 PR が観測対象外のとき、履歴の記録が止まっていることを Actions 上で見落とさないようにする
-      console.log(
-        "::warning::基準 PR が観測対象外（クローズ済み・Draft・比較条件未達）のため、今回は履歴とスナップショットを記録していません",
-      );
-    }
+    reportSkippedObservation(snapshot, process.env);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`エラー: ${message}`);
