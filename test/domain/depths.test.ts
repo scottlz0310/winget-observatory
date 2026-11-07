@@ -64,6 +64,7 @@ describe("Domain: depths logic", () => {
       title: "New package: scottlz0310.clp2cfg version 0.1.0",
       url: "https://github.com/microsoft/winget-pkgs/pull/464302",
       createdAt: "2026-10-28T21:47:38Z",
+      updatedAt: "2026-11-02T03:00:00Z",
     };
 
     const targetInfo = formatTargetPrInfo(view);
@@ -72,6 +73,7 @@ describe("Domain: depths logic", () => {
     expect(targetInfo.Url).toBe(view.url);
     expect(targetInfo.CreatedAt).toBe(view.createdAt);
     expect(targetInfo.CreatedAtJst).toBe("2026-10-29 06:47");
+    expect(targetInfo.UpdatedAt).toBe("2026-11-02T03:00:00Z");
   });
 
   test("クエリ生成関数が正しい GitHub Search クエリを構築する", () => {

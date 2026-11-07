@@ -61,6 +61,7 @@ describe("API: GitHubApiClient", () => {
           title: "New package: sample",
           html_url: "https://github.com/microsoft/winget-pkgs/pull/464302",
           created_at: "2026-10-28T21:47:38Z",
+          updated_at: "2026-11-02T03:00:00Z",
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -75,6 +76,7 @@ describe("API: GitHubApiClient", () => {
     expect(pr.number).toBe(464302);
     expect(pr.title).toBe("New package: sample");
     expect(pr.url).toBe("https://github.com/microsoft/winget-pkgs/pull/464302");
+    expect(pr.updatedAt).toBe("2026-11-02T03:00:00Z");
     expect(capturedUrl).toBe("https://api.github.com/repos/microsoft/winget-pkgs/pulls/464302");
   });
 

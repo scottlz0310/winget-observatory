@@ -17,6 +17,7 @@ export interface GitHubPrView {
   title: string;
   url: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -28,6 +29,8 @@ export interface TargetPrInfo {
   Url: string;
   CreatedAt: string;
   CreatedAtJst: string;
+  /** 基準 PR の最終更新時刻（マージ時期の予想モデルが使う） */
+  UpdatedAt: string;
 }
 
 /**
