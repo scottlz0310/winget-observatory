@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDashboard } from "../../scripts/build-pages";
@@ -129,6 +129,7 @@ describe("CLI: runProgressCli with mock client", () => {
         state: "CLOSED" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: "2026-11-02T00:00:00Z",
         labels: [],
@@ -166,6 +167,7 @@ describe("CLI: runProgressCli with mock client", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels: ["New-Package"], // 2つ不足
@@ -207,6 +209,7 @@ describe("CLI: runProgressCli with mock client", () => {
           state: "OPEN" as const,
           isDraft: false,
           createdAt: "2026-11-01T00:00:00Z",
+          updatedAt: "2026-11-01T00:00:00Z",
           mergedAt: null,
           closedAt: null,
           labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
@@ -237,7 +240,16 @@ describe("CLI: runProgressCli with mock client", () => {
         ],
         searchIssuesDetailed: async () => ({
           totalCount: 5,
-          items: [],
+          items: [
+            {
+              number: 100,
+              title: "Oldest healthy PR",
+              html_url: "https://github.com/test/repo/pull/100",
+              created_at: "2026-10-01T00:00:00Z",
+              updated_at: "2026-10-02T00:00:00Z",
+              labels: [],
+            },
+          ],
         }),
       } as unknown as GitHubApiClient;
 
@@ -297,6 +309,7 @@ describe("CLI: runProgressCli with mock client", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
@@ -372,7 +385,19 @@ describe("CLI: runProgressCli with mock client", () => {
           }
           return { totalCount: 150, items: [] };
         }
-        return { totalCount: 0, items: [] };
+        return {
+          totalCount: 3,
+          items: [
+            {
+              number: 100,
+              title: "Oldest healthy PR",
+              html_url: "https://github.com/test/repo/pull/100",
+              created_at: "2026-10-01T00:00:00Z",
+              updated_at: "2026-10-02T00:00:00Z",
+              labels: [],
+            },
+          ],
+        };
       },
     } as unknown as GitHubApiClient;
 
@@ -394,9 +419,152 @@ describe("CLI: runProgressCli with mock client", () => {
     // 2ページ目まで検索APIが呼ばれたこと
     expect(searchPageCalls).toContain(1);
     expect(searchPageCalls).toContain(2);
-    // 2ページ目の有効候補が集計され、前線PRとして採用されたこと
+    // 2ページ目の有効候補が統計サンプルとして集計されたこと（前線はマージ実績ではなく最古の健康な未マージ PR）
     expect(res.snapshot).not.toBeNull();
-    expect(res.snapshot?.FrontNumber).toBe(2000);
+    expect(res.snapshot?.FrontNumber).toBe(100);
+    expect(res.snapshot?.TotalMedianDays).not.toBeNull();
+  });
+});
+
+describe("CLI: 前線・実質待ち（更新順）の算出", () => {
+  const labels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
+  const frontItem = {
+    number: 100,
+    title: "Oldest healthy PR",
+    html_url: "https://github.com/test/repo/pull/100",
+    created_at: "2026-09-01T00:00:00Z",
+    updated_at: "2026-09-02T00:00:00Z",
+    labels: [],
+  };
+
+  const createMockClient = (queries: string[]) =>
+    ({
+      getPullRequestDetails: async () => ({
+        number: 200,
+        title: "Valid PR",
+        url: "https://github.com/test/repo/pull/200",
+        state: "OPEN" as const,
+        isDraft: false,
+        createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
+        mergedAt: null,
+        closedAt: null,
+        labels,
+        commits: [{ oid: "abc", messageHeadline: "fix", committedDate: "2026-11-01T00:00:00Z" }],
+      }),
+      getIssueTimeline: async () =>
+        labels.map((name) => ({
+          event: "labeled",
+          created_at: "2026-11-01T01:00:00Z",
+          label: { name },
+        })),
+      searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+        queries.push(query);
+        if (query.includes("is:merged")) return { totalCount: 0, items: [] };
+        if (query.includes("updated:<")) return { totalCount: 60, items: [] };
+        if (query.includes("created:<")) return { totalCount: 100, items: [] };
+        return { totalCount: 150, items: [frontItem] };
+      },
+    }) as unknown as GitHubApiClient;
+
+  const baseOptions = {
+    targetPr: 200,
+    repository: "test/repo",
+    lookbackDays: 30,
+    sampleSize: 30,
+    fetchLimit: 1000,
+    queueLimit: 500,
+    asJson: false,
+  };
+
+  test("前線は最古の健康な未マージ PR、実質待ちは更新順で自 PR より前の健康な PR 数とする", async () => {
+    const queries: string[] = [];
+    const res = await runProgressCli(
+      { ...baseOptions, noLog: true },
+      createMockClient(queries),
+      () => {},
+    );
+
+    expect(res.snapshot).toMatchObject({
+      FrontNumber: 100,
+      TotalAhead: 100,
+      ActiveAhead: 60,
+      Behind: 49,
+    });
+    // 指摘なく順番待ちしている PR は更新が止まっているため、基準 PR の更新時刻より前に更新された健康な PR を数える
+    const updatedQuery = queries.find((q) => q.includes("updated:<")) ?? "";
+    expect(updatedQuery).toContain("updated:<2026-11-01T00:00:00.000Z");
+    expect(updatedQuery).not.toContain("created:<");
+  });
+
+  test("前回行が旧定義（QueueBasis 列なし）の場合は定義が異なるため前回比を出さない", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-"));
+    try {
+      const logPath = join(tmpDir, "progress-history.csv");
+      writeFileSync(
+        logPath,
+        [
+          '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount"',
+          '"2026-11-06 23:22:44","200","447466","2026-10-06 10:13","1618","2133","756","9.07","9.07","9","1"',
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const logs: string[] = [];
+      await runProgressCli(
+        { ...baseOptions, logPath, snapshotPath: join(tmpDir, "latest.json"), noLog: false },
+        createMockClient([]),
+        (msg) => logs.push(msg),
+      );
+
+      expect(logs.some((l) => l.includes("前回比"))).toBeFalse();
+      // 新しい行は QueueBasis 列を含み、旧行は空欄のまま温存される
+      const csv = readFileSync(logPath, "utf-8");
+      expect(csv.split("\n")[0]).toContain('"QueueBasis"');
+      expect(csv).toContain('"447466"');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("前回行が新定義なら前回比を出す", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-newdef-"));
+    try {
+      const logPath = join(tmpDir, "progress-history.csv");
+      writeFileSync(
+        logPath,
+        [
+          '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"',
+          '"2026-11-06 23:22:44","200","90","2026-08-01 10:00","70","115","50","9","9","9","1","updated"',
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const logs: string[] = [];
+      await runProgressCli(
+        { ...baseOptions, logPath, snapshotPath: join(tmpDir, "latest.json"), noLog: false },
+        createMockClient([]),
+        (msg) => logs.push(msg),
+      );
+
+      expect(logs.find((l) => l.startsWith("実質待ちPR"))).toContain("[前回比 -10 件]");
+      expect(logs.find((l) => l.startsWith("消化前線"))).toContain("[前回 #90 から +10 件前進]");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("検索結果に前線が存在しない場合は黙って続行せず中断する", async () => {
+    const mockClient = {
+      ...createMockClient([]),
+      searchIssuesDetailed: async () => ({ totalCount: 0, items: [] }),
+    } as unknown as GitHubApiClient;
+
+    await expect(
+      runProgressCli({ ...baseOptions, noLog: true }, mockClient, () => {}),
+    ).rejects.toThrow("前線");
   });
 });
 
@@ -411,6 +579,7 @@ describe("CLI: progress のコミット表示", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels,
@@ -433,7 +602,19 @@ describe("CLI: progress のコミット表示", () => {
           created_at: "2026-11-01T01:00:00Z",
           label: { name },
         })),
-      searchIssuesDetailed: async () => ({ totalCount: 0, items: [] }),
+      searchIssuesDetailed: async () => ({
+        totalCount: 1,
+        items: [
+          {
+            number: 100,
+            title: "Oldest healthy PR",
+            html_url: "https://github.com/test/repo/pull/100",
+            created_at: "2026-09-01T00:00:00Z",
+            updated_at: "2026-09-02T00:00:00Z",
+            labels: [],
+          },
+        ],
+      }),
     } as unknown as GitHubApiClient;
 
     const logs: string[] = [];
@@ -470,6 +651,7 @@ describe("CLI: runProgressCli のエラー伝播", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels: readyLabels,
@@ -538,6 +720,7 @@ describe("CLI: progress の保全とスキップ通知", () => {
           state: "OPEN" as const,
           isDraft: false,
           createdAt: "2026-11-01T00:00:00Z",
+          updatedAt: "2026-11-01T00:00:00Z",
           mergedAt: null,
           closedAt: null,
           labels,

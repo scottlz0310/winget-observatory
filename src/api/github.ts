@@ -264,6 +264,7 @@ export class GitHubApiClient {
       state,
       isDraft: Boolean(prData.draft),
       createdAt: String(prData.created_at),
+      updatedAt: String(prData.updated_at),
       mergedAt: prData.merged_at ? String(prData.merged_at) : null,
       closedAt: prData.closed_at ? String(prData.closed_at) : null,
       labels,
