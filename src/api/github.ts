@@ -135,6 +135,7 @@ export class GitHubApiClient {
       title: String(item.title),
       url: String(item.html_url),
       createdAt: String(item.created_at),
+      updatedAt: String(item.updated_at),
     };
   }
 
