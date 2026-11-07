@@ -3,6 +3,12 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import {
+  calculateDashboardMetrics,
+  formatDeltaBadge,
+  parseTimestampToMs,
+} from "../src/domain/dashboard";
+import type { HistoryRecord } from "../src/models/dashboard";
 
 interface BuildOptions {
   dataDir: string;
@@ -103,6 +109,34 @@ function parseCsv(csvText: string): Array<Record<string, string>> {
   return rows;
 }
 
+function csvRowsToHistoryRecords(csvRows: Array<Record<string, string>>): HistoryRecord[] {
+  return csvRows
+    .map((row) => {
+      const timestamp = row.Timestamp ?? "";
+      const timestampMs = parseTimestampToMs(timestamp);
+      const targetPr = Number(row.TargetPr) || 0;
+      const frontNumber = Number(row.FrontNumber) || 0;
+      const frontCreatedAt = row.FrontCreatedAt || undefined;
+      const activeAhead = Number(row.ActiveAhead) || 0;
+      const totalAhead = Number(row.TotalAhead) || 0;
+      const behind = Number(row.Behind) || 0;
+      const waitDays = Number(row.WaitDays) || 0;
+
+      return {
+        timestamp,
+        timestampMs,
+        targetPr,
+        frontNumber,
+        frontCreatedAt,
+        activeAhead,
+        totalAhead,
+        behind,
+        waitDays,
+      };
+    })
+    .filter((r) => !Number.isNaN(r.timestampMs));
+}
+
 function escapeHtml(str: string | number | undefined | null): string {
   if (str === undefined || str === null || str === "") return "-";
   return String(str)
@@ -118,6 +152,10 @@ function formatNumber(num: number | undefined | null): string {
   return num.toLocaleString();
 }
 
+function renderBadgeHtml(badge: { text: string; className: string; label: string }): string {
+  return `<span class="delta-badge ${badge.className}" title="${escapeHtml(badge.label)}">${escapeHtml(badge.text)}</span>`;
+}
+
 function generateHtml(
   progress: LatestProgress | null,
   depths: LatestDepths | null,
@@ -130,9 +168,27 @@ function generateHtml(
   const targetUrl =
     progress?.PrUrl || depths?.TargetPr?.Url || `https://github.com/${repo}/pull/${targetPrNum}`;
 
-  const recentHistory = csvRows.slice(-10).reverse();
+  const targetCreatedAt =
+    depths?.TargetPr?.CreatedAtJst || depths?.TargetPr?.CreatedAt || undefined;
+  const frontCreatedAt = progress?.FrontCreatedAt || undefined;
+  const currentActiveAhead = progress?.ActiveAhead ?? 0;
+
+  const historyRecords = csvRowsToHistoryRecords(csvRows);
+  const metrics = calculateDashboardMetrics(
+    historyRecords,
+    currentActiveAhead,
+    frontCreatedAt,
+    targetCreatedAt,
+  );
+
+  const activeDeltaBadge = formatDeltaBadge(metrics.latestDelta.activeAheadDelta);
+  const frontDeltaBadge = formatDeltaBadge(metrics.latestDelta.frontNumberDelta);
+  const behindDeltaBadge = formatDeltaBadge(metrics.latestDelta.behindDelta);
 
   const healthyBottomFirst = depths?.HealthyBottom?.[0];
+
+  // 直近 10 件の推移（差分付き、新しい順）
+  const recentHistoryWithDeltas = metrics.historyWithDeltas.slice(-10).reverse();
 
   return `<!DOCTYPE html>
 <html lang="ja">
@@ -202,9 +258,39 @@ function generateHtml(
       color: var(--primary);
       text-decoration: none;
     }
+    .delta-badge {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    .delta-progress {
+      background-color: #dcfce7;
+      color: #15803d;
+    }
+    .delta-rewind {
+      background-color: #fee2e2;
+      color: #b91c1c;
+    }
+    .delta-neutral {
+      background-color: var(--code-bg);
+      color: var(--text-muted);
+    }
+    @media (prefers-color-scheme: dark) {
+      .delta-progress {
+        background-color: #14532d;
+        color: #86efac;
+      }
+      .delta-rewind {
+        background-color: #7f1d1d;
+        color: #fca5a5;
+      }
+    }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 1.25rem;
       margin-bottom: 2rem;
     }
@@ -229,7 +315,14 @@ function generateHtml(
     .card-subtext {
       font-size: 0.75rem;
       color: var(--text-muted);
-      margin-top: 0.25rem;
+      margin-top: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
+    .stat-card {
+      padding: 1rem 1.25rem;
     }
     .flow-container {
       display: flex;
@@ -259,7 +352,9 @@ function generateHtml(
     .flow-arrow {
       color: var(--text-muted);
       font-weight: bold;
-      font-size: 1.25rem;
+      font-size: 1.1rem;
+      text-align: center;
+      white-space: nowrap;
     }
     .section-title {
       font-size: 1.25rem;
@@ -316,24 +411,98 @@ function generateHtml(
 
     <div class="grid">
       <div class="card">
-        <div class="card-title">現在の消化前線</div>
-        <div class="card-value">${progress?.FrontNumber ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${progress.FrontNumber}" target="_blank">#${progress.FrontNumber}</a>` : "-"}</div>
-        <div class="card-subtext">起票: ${escapeHtml(progress?.FrontCreatedAt)}</div>
-      </div>
-      <div class="card">
         <div class="card-title">実質待ち件数 (前線〜自PR)</div>
         <div class="card-value">${formatNumber(progress?.ActiveAhead)} <span style="font-size: 1rem; font-weight: normal;">件</span></div>
-        <div class="card-subtext">全期間累積待ち: ${formatNumber(progress?.TotalAhead)} 件</div>
+        <div class="card-subtext">
+          <span>前回比: ${renderBadgeHtml(activeDeltaBadge)}</span>
+          <span>/ 全期間累積: ${formatNumber(progress?.TotalAhead)} 件</span>
+        </div>
       </div>
+
       <div class="card">
-        <div class="card-title">後続の準備完了 PR</div>
-        <div class="card-value">${formatNumber(progress?.Behind)} <span style="font-size: 1rem; font-weight: normal;">件</span></div>
-        <div class="card-subtext">自 PR 以降のキュー待機数</div>
+        <div class="card-title">到着予測 (ETA) &amp; 消化速度</div>
+        <div class="card-value">${
+          metrics.velocity.etaDays !== null
+            ? `約 ${metrics.velocity.etaDays} <span style="font-size: 1rem; font-weight: normal;">日後</span>`
+            : `<span style="font-size: 1.25rem; color: var(--text-muted);">-</span>`
+        }</div>
+        <div class="card-subtext">${
+          metrics.velocity.etaDateJst
+            ? `<span>予測到達日: <strong>${escapeHtml(metrics.velocity.etaDateJst)}</strong></span> <span>(速度: ${escapeHtml(metrics.velocity.velocityPerDay)} 件/日)</span>`
+            : metrics.velocity.velocityPerDay !== null && metrics.velocity.velocityPerDay <= 0
+              ? `<span>速度: ${escapeHtml(metrics.velocity.velocityPerDay)} 件/日 (キュー停滞または後退中)</span>`
+              : `<span>観測データ蓄積待ち (30分以上の推移が必要)</span>`
+        }</div>
       </div>
+
+      <div class="card">
+        <div class="card-title">カレンダー距離 (日付ギャップ)</div>
+        <div class="card-value">${
+          metrics.calendarGap.gapDays !== null
+            ? `差 ${metrics.calendarGap.gapDays} <span style="font-size: 1rem; font-weight: normal;">日</span>`
+            : `<span style="font-size: 1.25rem; color: var(--text-muted);">-</span>`
+        }</div>
+        <div class="card-subtext">
+          <span>前線: ${escapeHtml(metrics.calendarGap.frontCreatedAt)}</span>
+          ${metrics.calendarGap.targetCreatedAt ? `<span>/ 自PR: ${escapeHtml(metrics.calendarGap.targetCreatedAt)}</span>` : ""}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">現在の消化前線</div>
+        <div class="card-value">${progress?.FrontNumber ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${progress.FrontNumber}" target="_blank">#${progress.FrontNumber}</a>` : "-"}</div>
+        <div class="card-subtext">
+          <span>起票: ${escapeHtml(progress?.FrontCreatedAt)}</span>
+          <span>(前回比: ${renderBadgeHtml(frontDeltaBadge)})</span>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-title">待機日数 (Wait / Turn)</div>
         <div class="card-value">${escapeHtml(progress?.WaitDays)} <span style="font-size: 1rem; font-weight: normal;">日</span></div>
-        <div class="card-subtext">通算待機: ${escapeHtml(progress?.TotalLifetimeDays)} 日</div>
+        <div class="card-subtext">通算待機: ${escapeHtml(progress?.TotalLifetimeDays)} 日 / 修正手番: ${escapeHtml(progress?.TurnLatencyDays)} 日</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">後続の準備完了 PR</div>
+        <div class="card-value">${formatNumber(progress?.Behind)} <span style="font-size: 1rem; font-weight: normal;">件</span></div>
+        <div class="card-subtext">
+          <span>自 PR 以降のキュー待機数</span>
+          <span>(前回比: ${renderBadgeHtml(behindDeltaBadge)})</span>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="section-title">⏱️ マージ実績の所要日数統計 (直近 30 日間)</h2>
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">
+      <div class="card stat-card">
+        <div class="card-title">手番所要日数 (Turn Latency)</div>
+        <div class="card-value" style="font-size: 1.4rem;">
+          P50: <strong>${escapeHtml(progress?.TurnMedianDays)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
+          P75: <strong>${escapeHtml(progress?.TurnP75Days)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+        </div>
+        <div class="card-subtext">メンテナがレビュー・トリアージを開始してからマージされるまでの日数</div>
+      </div>
+
+      <div class="card stat-card">
+        <div class="card-title">Ready 成立後所要日数 (Ready Latency)</div>
+        <div class="card-value" style="font-size: 1.4rem;">
+          P50: <strong>${escapeHtml(progress?.ReadyMedianDays)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
+          P75: <strong>${escapeHtml(progress?.ReadyP75Days)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+        </div>
+        <div class="card-subtext">CI 通過および必須ラベル成立からマージされるまでの日数</div>
+      </div>
+
+      <div class="card stat-card">
+        <div class="card-title">通算所要日数 (Total Lifetime)</div>
+        <div class="card-value" style="font-size: 1.4rem;">
+          P50: <strong>${escapeHtml(progress?.TotalMedianDays)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
+          P75: <strong>${escapeHtml(progress?.TotalP75Days)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+        </div>
+        <div class="card-subtext">PR 起票からマージ完了までの全期間の所要日数</div>
       </div>
     </div>
 
@@ -350,7 +519,7 @@ function generateHtml(
         <strong>${progress?.FrontNumber ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${progress.FrontNumber}" target="_blank">#${progress.FrontNumber}</a>` : "-"}</strong>
         <div style="font-size: 0.7rem; color: var(--text-muted);">${escapeHtml(progress?.FrontCreatedAt)}</div>
       </div>
-      <div class="flow-arrow">… ${formatNumber(progress?.ActiveAhead)} 件 … →</div>
+      <div class="flow-arrow">… ${formatNumber(progress?.ActiveAhead)} 件 ${metrics.calendarGap.gapDays !== null ? `(差 ${metrics.calendarGap.gapDays} 日)` : ""} … →</div>
       <div class="flow-node target">
         <div style="font-size: 0.75rem; color: var(--primary);">基準 PR</div>
         <strong><a href="${escapeHtml(targetUrl)}" target="_blank">#${escapeHtml(targetPrNum)}</a></strong>
@@ -423,7 +592,7 @@ function generateHtml(
 
     <h2 class="section-title">📈 直近の観測推移ログ (最新 10 件)</h2>
     ${
-      recentHistory.length > 0
+      recentHistoryWithDeltas.length > 0
         ? `
     <table>
       <thead>
@@ -432,26 +601,29 @@ function generateHtml(
           <th>基準 PR</th>
           <th>消化前線 PR</th>
           <th>実質待ち件数</th>
+          <th>前回比 (Δ)</th>
           <th>累積待ち件数</th>
           <th>後続件数</th>
           <th>待機日数</th>
         </tr>
       </thead>
       <tbody>
-        ${recentHistory
-          .map(
-            (row) => `
+        ${recentHistoryWithDeltas
+          .map((row) => {
+            const badge = formatDeltaBadge(row.activeAheadDelta);
+            return `
         <tr>
-          <td>${escapeHtml(row.Timestamp)}</td>
-          <td>#${escapeHtml(row.TargetPr)}</td>
-          <td><a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(row.FrontNumber)}" target="_blank">#${escapeHtml(row.FrontNumber)}</a></td>
-          <td><strong>${escapeHtml(row.ActiveAhead)}</strong></td>
-          <td>${escapeHtml(row.TotalAhead)}</td>
-          <td>${escapeHtml(row.Behind)}</td>
-          <td>${escapeHtml(row.WaitDays)} 日</td>
+          <td>${escapeHtml(row.timestamp)}</td>
+          <td>#${escapeHtml(row.targetPr)}</td>
+          <td><a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(row.frontNumber)}" target="_blank">#${escapeHtml(row.frontNumber)}</a></td>
+          <td><strong>${formatNumber(row.activeAhead)}</strong></td>
+          <td>${renderBadgeHtml(badge)}</td>
+          <td>${formatNumber(row.totalAhead)}</td>
+          <td>${formatNumber(row.behind)}</td>
+          <td>${escapeHtml(row.waitDays)} 日</td>
         </tr>
-        `,
-          )
+        `;
+          })
           .join("")}
       </tbody>
     </table>
@@ -606,16 +778,16 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
               : undefined,
       };
     } catch (e) {
-      console.warn(`[Build Pages] progress JSON パース失敗: ${e}`);
+      console.warn(`[Build Pages] ${progressPath} の読み込みに失敗しました:`, e);
     }
   }
 
   let depths: LatestDepths | null = null;
   if (existsSync(depthsPath)) {
     try {
-      depths = JSON.parse(readFileSync(depthsPath, "utf-8"));
+      depths = JSON.parse(readFileSync(depthsPath, "utf-8")) as LatestDepths;
     } catch (e) {
-      console.warn(`[Build Pages] depths JSON パース失敗: ${e}`);
+      console.warn(`[Build Pages] ${depthsPath} の読み込みに失敗しました:`, e);
     }
   }
 
@@ -624,7 +796,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     try {
       csvRows = parseCsv(readFileSync(csvPath, "utf-8"));
     } catch (e) {
-      console.warn(`[Build Pages] CSV パース失敗: ${e}`);
+      console.warn(`[Build Pages] ${csvPath} の読み込みに失敗しました:`, e);
     }
   }
 
@@ -633,20 +805,24 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   writeFileSync(htmlPath, html, "utf-8");
   console.log(`[Build Pages] HTML 生成完了: ${htmlPath}`);
 
+  // RAW データファイルを site/data にコピー
   const siteDataDir = join(outputDir, "data");
   if (!existsSync(siteDataDir)) {
     mkdirSync(siteDataDir, { recursive: true });
   }
 
-  for (const filename of [
+  const copyTargets = [
     "progress-history.csv",
     "latest-progress.json",
     "latest-depths.json",
     "depths-history.jsonl",
-  ]) {
-    const srcPath = join(dataDir, filename);
-    if (existsSync(srcPath)) {
-      copyFileSync(srcPath, join(siteDataDir, filename));
+  ];
+
+  for (const file of copyTargets) {
+    const src = join(dataDir, file);
+    const dest = join(siteDataDir, file);
+    if (existsSync(src)) {
+      copyFileSync(src, dest);
     }
   }
   console.log(`[Build Pages] データファイルを ${siteDataDir} へコピー完了`);
@@ -656,6 +832,5 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
 
 if (import.meta.main) {
   const options = parseArgs();
-  console.log(`[Build Pages] データディレクトリ: ${options.dataDir}, 出力先: ${options.outputDir}`);
   buildDashboard(options);
 }

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/models/dashboard.ts`, `src/domain/dashboard.ts`: ダッシュボード算出メトリクス（直近24時間の消化速度 Velocity・到着予測 ETA、前回観測比の増減差分 Δ、前線と自 PR の起票日カレンダー距離、実績所要日数パーセンタイル集計）を算出するドメイン純粋関数および型定義を追加（Issue #12）
+- `test/domain/dashboard.test.ts`: ダッシュボード算出メトリクスの単体テストを追加
+- `scripts/build-pages.ts`: 到着予測 (ETA) & 消化速度カード、前線カレンダー距離カード、マージ実績所要日数（手番・Ready・通算）統計セクション、および直近ログテーブルへの Δ 差分バッジ表示を追加
 - `src/cli/generate-summary.ts`, `src/domain/summary.ts`, `src/models/summary.ts`: サマリーダッシュボード生成（`generate-summary` -> `SUMMARY.md`）の TypeScript (Bun) 実装を追加（Issue #7 Phase 3）。キュー状況・Mermaid 構造図・統計比較・境界探索・推移履歴を含む Markdown 生成純粋関数および CLI を配備
 - `test/domain/summary.test.ts`, `test/cli/generate-summary.test.ts`: サマリー生成のドメイン純粋関数および CLI 引数・cwd 独立性・データ読み込みの単体テストを追加
 - `src/models/progress.ts`, `src/domain/progress.ts`, `src/cli/progress.ts`: 進捗メトリクス計測（`progress-winget`）の TypeScript (Bun) 実装を追加（Issue #7 Phase 2）。ラベル判定（必須・阻害・調査中・パターン除外）、線形補間パーセンタイル計算、タイムラインシミュレーションによる条件成立日時（ReadyAt）特定、および CSV 履歴・JSON スナップショット出力 CLI を配備
