@@ -5,8 +5,5 @@ pre-commit:
   parallel: true
   commands:
     biome:
-      glob: "*.{json,jsonc,md,yml,yaml}"
+      glob: "*.{js,ts,json,jsonc,md,yml,yaml}"
       run: bunx biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
-    powershell-syntax:
-      glob: "*.ps1"
-      run: pwsh -NoProfile -File scripts/check-syntax.ps1 {staged_files}

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/cli/generate-summary.ts`, `src/domain/summary.ts`, `src/models/summary.ts`: サマリーダッシュボード生成（`generate-summary` -> `SUMMARY.md`）の TypeScript (Bun) 実装を追加（Issue #7 Phase 3）。キュー状況・Mermaid 構造図・統計比較・境界探索・推移履歴を含む Markdown 生成純粋関数および CLI を配備
+- `test/domain/summary.test.ts`, `test/cli/generate-summary.test.ts`: サマリー生成のドメイン純粋関数および CLI 引数・cwd 独立性・データ読み込みの単体テストを追加
 - `src/models/progress.ts`, `src/domain/progress.ts`, `src/cli/progress.ts`: 進捗メトリクス計測（`progress-winget`）の TypeScript (Bun) 実装を追加（Issue #7 Phase 2）。ラベル判定（必須・阻害・調査中・パターン除外）、線形補間パーセンタイル計算、タイムラインシミュレーションによる条件成立日時（ReadyAt）特定、および CSV 履歴・JSON スナップショット出力 CLI を配備
 - `test/domain/progress.test.ts`, `test/cli/progress.test.ts`: 進捗メトリクス計測のドメイン純粋関数および CLI 引数・cwd 独立性・モック API 実行の単体テストを追加
 - `src/api/github.ts`: REST API による PR 詳細取得（`getPullRequestDetails`）、タイムライン取得（`getIssueTimeline`）、および検索詳細取得（`searchIssuesDetailed`）メソッドを追加
@@ -33,12 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `.github/workflows/observe.yml`: 定期メトリクス収集ステップを PowerShell (`pwsh`) から Bun / TypeScript スクリプト（`src/cli/progress.ts`, `src/cli/explore-depths.ts`, `src/cli/generate-summary.ts`）のネイティブ実行へ刷新し、外部プロセス依存を完全排除
+- `README.md`: PowerShell スクリプトから Bun / TypeScript CLI コマンド（`bun run progress`, `bun run explore:depths`, `bun run summary`）への案内へ更新
 - `scripts/lib/dropbox.ts`: Dropbox アプリフォルダー内の二重階層を解消するため、保存先プレフィックス `DROPBOX_ROOT` を `/winget-observatory/` から `/data/` へ変更。移行互換用として旧プレフィックス `LEGACY_DROPBOX_ROOT`（`/winget-observatory/`）の読み取りを許容
 - `scripts/sync-dropbox.ts`: 新パス `/data/` にファイルが存在しない場合に旧パス `/winget-observatory/` から履歴データを自動取得・引き継ぐフォールバック機能（`downloadMetricsFiles`）を追加し、手動移行作業不要のシームレスな移行を保証
 - `.github/workflows/observe.yml`: `main` 直 push を全廃し、Dropbox への生データ保存および `actions/deploy-pages` による GitHub Pages 直接デプロイへ刷新（ブランチ保護ルールを完全遵守）
 - `.github/workflows/ci.yml`: `bun test` による TypeScript ユニットテストステップを追加
 - `package.json`: `test`, `build:pages`, `sync:dropbox` スクリプトを追加
 - `README.md`: Dropbox 連携および GitHub Pages による自動化運用に関するドキュメントを更新
+
+### Removed
+
+- レガシーな PowerShell 計測スクリプト群（`scripts/progress-winget.ps1`, `scripts/explore-winget-depths.ps1`, `scripts/generate-summary.ps1`, `scripts/check-syntax.ps1`）および PowerShell テスト群（`tests/*.ps1`）を TypeScript 化に伴い完全退役
+- `.github/workflows/ci.yml` および `lefthook.yml` から PowerShell 構文検査と PSScriptAnalyzer 検査ステップを退役（Biome & TypeScript Tests に一本化）
 
 ## [0.1.0] - 2026-11-06
 

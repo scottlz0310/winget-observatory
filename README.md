@@ -19,21 +19,21 @@
 
 ---
 
-## 主なツール
+## 主なツール (TypeScript / Bun)
 
-### 1. `scripts/progress-winget.ps1`（進捗メトリクス計測）
+### 1. `src/cli/progress.ts`（進捗メトリクス計測）
 
-指定した PR またはキュー全体の待機時間、消化前線、待ち件数、過去 30 日間のマージ実績サンプル（中央値・P90）を算出・記録します。
+指定した PR またはキュー全体の待機時間、消化前線、待ち件数、過去 30 日間のマージ実績サンプル（中央値・P75）を算出・記録します。
 
-```powershell
+```bash
 # デフォルト（環境変数または既定PR）で実行
-./scripts/progress-winget.ps1
+bun run progress
 
 # PR番号を指定して実行
-./scripts/progress-winget.ps1 -PrNumber 464302
+bun run progress --target-pr 464302
 
 # 出力先を指定
-./scripts/progress-winget.ps1 -PrNumber 464302 -LogPath "data/progress-history.csv" -SnapshotPath "data/latest-progress.json"
+bun run progress --target-pr 464302 --log-path "data/progress-history.csv" --snapshot-path "data/latest-progress.json"
 ```
 
 **計測項目:**
@@ -42,18 +42,18 @@
 - **実質待ち件数**: 前線〜対象 PR 間で現在生きている健康的な PR 件数
 - **累積待ち件数**: 前線〜対象 PR 間の総 PR 番号差
 - **通算待機日数 (Total)** / **レビュー待ち時間 (Turn)** / **条件成立後待機 (Ready)**
-- **マージ実績との比較**: 過去サンプルの中央値（Median）および 90%タイル（P90）との比較
+- **マージ実績との比較**: 過去サンプルの中央値（Median）および 75%点（P75）との比較
 
-### 2. `scripts/explore-winget-depths.ps1`（キュー境界探索）
+### 2. `src/cli/explore-depths.ts`（キュー境界探索）
 
 現在のキューの各「底（境界）」を立体的にスキャンします。
 
-```powershell
+```bash
 # キュー境界を探索
-./scripts/explore-winget-depths.ps1
+bun run explore:depths
 
 # JSON 出力でスナップショット保存
-./scripts/explore-winget-depths.ps1 -OutputPath "data/latest-depths.json"
+bun run explore:depths --output-path "data/latest-depths.json"
 ```
 
 **スキャン境界:**
@@ -63,12 +63,12 @@
 3. **遭難・放置の底 (Stale Bottom)**: 健康体の中で更新日時（updated）が最も古く、完全に止まっている PR
 4. **特急レーン・追い越し (Express Lane)**: 基準 PR 起票日以降に起票され、すでにマージされた PR
 
-### 3. `scripts/generate-summary.ps1`（まとめダッシュボード生成）
+### 3. `src/cli/generate-summary.ts`（まとめダッシュボード生成）
 
 蓄積された進捗ログ（CSV）および最新スナップショット（JSON）から、人間が見て一目で状況を把握できる Markdown ドキュメント（[`SUMMARY.md`](SUMMARY.md)）を自動生成します。
 
-```powershell
-./scripts/generate-summary.ps1 -OutputPath "SUMMARY.md"
+```bash
+bun run summary --output-path "SUMMARY.md"
 ```
 
 ---
