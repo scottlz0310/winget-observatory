@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `src/cli/generate-summary.ts`, `src/domain/summary.ts`, `src/models/summary.ts`, 対応するテスト、`SUMMARY.md`、`package.json` の `summary` スクリプト、`observe.yml` の生成ステップ、README の該当節: サマリー（`SUMMARY.md`）生成機能を廃止。cron では生成物がコミットも公開もされず捨てられており、フッターの「定期更新」も事実と異なっていたため、Issue #7 の合意どおり人間向けの閲覧先を GitHub Pages に一本化（Issue #18）
 - レガシーな PowerShell 計測スクリプト群（`scripts/progress-winget.ps1`, `scripts/explore-winget-depths.ps1`, `scripts/generate-summary.ps1`, `scripts/check-syntax.ps1`）および PowerShell テスト群（`tests/*.ps1`）を TypeScript 化に伴い完全退役
 - `.github/workflows/ci.yml` および `lefthook.yml` から PowerShell 構文検査と PSScriptAnalyzer 検査ステップを退役（Biome & TypeScript Tests に一本化）
 

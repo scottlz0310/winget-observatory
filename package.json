@@ -16,8 +16,7 @@
     "build:pages": "bun run scripts/build-pages.ts",
     "sync:dropbox": "bun run scripts/sync-dropbox.ts",
     "explore:depths": "bun run src/cli/explore-depths.ts",
-    "progress": "bun run src/cli/progress.ts",
-    "summary": "bun run src/cli/generate-summary.ts"
+    "progress": "bun run src/cli/progress.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.6",
