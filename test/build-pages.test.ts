@@ -60,9 +60,9 @@ describe("buildDashboard", () => {
     writeFileSync(join(dataDir, "latest-depths.json"), JSON.stringify(dummyDepths), "utf-8");
 
     // 24 時間で 50 件消化（150 -> 100）の時系列推移
-    const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount"
-"2026-11-06 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","4.5","4.5","4.5","1"
-"2026-11-07 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.5","5.5","5.5","1"
+    const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"
+"2026-11-06 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","4.5","4.5","4.5","1","updated"
+"2026-11-07 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.5","5.5","5.5","1","updated"
 `;
     writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
 
@@ -143,9 +143,9 @@ describe("buildDashboard", () => {
     writeFileSync(join(dataDir, "latest-progress.json"), JSON.stringify(dummyProgress), "utf-8");
 
     // 前線番号 120000 -> 119950 (-50 番号巻き戻り)
-    const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount"
-"2026-11-06 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.0","5.0","5.0","1"
-"2026-11-07 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","6.0","6.0","6.0","1"
+    const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"
+"2026-11-06 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.0","5.0","5.0","1","updated"
+"2026-11-07 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","6.0","6.0","6.0","1","updated"
 `;
     writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
 
@@ -198,4 +198,63 @@ describe("buildDashboard: 読み込み失敗時の中断", () => {
       }
     },
   );
+});
+
+describe("buildDashboard: 遭難の底と履歴の扱い", () => {
+  test("遭難の底を専用の表に更新の古い順で表示し、旧定義の履歴は推移に含めない", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-stale-"));
+    try {
+      const dataDir = join(tempDir, "data");
+      const outputDir = join(tempDir, "site");
+      mkdirSync(dataDir, { recursive: true });
+
+      const item = (number: number, updated: string) => ({
+        PR: `#${number}`,
+        Number: number,
+        作成日時: "2026-10-09 13:39",
+        更新日時: "2026-10-09 14:54",
+        CreatedAt: "2026-10-09T04:39:00Z",
+        UpdatedAt: updated,
+        タイトル: `Stale package ${number}`,
+        Title: `Stale package ${number}`,
+        Url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
+      });
+      writeFileSync(
+        join(dataDir, "latest-depths.json"),
+        JSON.stringify({
+          Timestamp: "2026-11-08T05:54:00Z",
+          TimestampJst: "2026-11-08 14:54:00",
+          StaleBottom: [item(449320, "2026-10-09T05:54:00Z"), item(449314, "2026-10-09T07:46:00Z")],
+        }),
+        "utf-8",
+      );
+      writeFileSync(
+        join(dataDir, "latest-progress.json"),
+        JSON.stringify({ TargetPr: 123, TimestampJst: "2026-11-08 14:54:00" }),
+        "utf-8",
+      );
+      // 旧定義の行（QueueBasis なし）のみ
+      writeFileSync(
+        join(dataDir, "progress-history.csv"),
+        [
+          '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount"',
+          '"2026-11-06 12:00:00","123","119950","2026-09-30 10:00","1618","2133","40","4.5","4.5","4.5","1"',
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const { htmlPath } = buildDashboard({ dataDir, outputDir });
+      const html = readFileSync(htmlPath, "utf-8");
+
+      expect(html).toContain("遭難の底（順番待ちの先頭）");
+      expect(html.indexOf("#449320")).toBeLessThan(html.indexOf("#449314"));
+      // 観測時刻(11-08 05:54Z) − 最終更新(10-09 05:54Z) = 30 日
+      expect(html).toContain("30 日");
+      expect(html).toContain("旧定義の履歴は比較できないため表示しません");
+      expect(html).not.toContain("1,618");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

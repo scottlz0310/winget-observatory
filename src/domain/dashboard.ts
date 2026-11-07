@@ -8,6 +8,8 @@ import type {
   HistoryRowWithDelta,
   VelocityMetrics,
 } from "../models/dashboard";
+import type { ProgressHistoryRow } from "../models/progress";
+import { QUEUE_BASIS } from "./progress";
 
 /**
  * タイムスタンプ文字列（JST "YYYY-MM-DD HH:mm:ss", "YYYY-MM-DD(曜日) HH:mm" または ISO 文字列）を UTC ミリ秒にパースする。
@@ -28,6 +30,49 @@ export function parseTimestampToMs(timestampStr: string): number {
   }
 
   return Date.parse(trimmed);
+}
+
+/** 空欄や非数を 0 にせず NaN として扱う（0 件と誤認させない） */
+function toNumber(value: number | string): number {
+  return value === "" ? Number.NaN : Number(value);
+}
+
+/**
+ * 履歴 CSV の行から、速度・前回比の計算に使える履歴を選別する。
+ * - 基準 PR が異なる行は混ぜない（別 PR を観測した履歴との差分は意味を持たない）
+ * - 待ち件数の算出基準（QueueBasis）が現行と異なる、または空欄の旧定義の行は除く
+ * - 必須の数値が欠けた行・時刻が不正な行は除く
+ */
+export function selectComparableHistory(
+  rows: ProgressHistoryRow[],
+  targetPr: number,
+  queueBasis: string = QUEUE_BASIS,
+): HistoryRecord[] {
+  const records: HistoryRecord[] = [];
+  for (const row of rows) {
+    if (Number(row.TargetPr) !== targetPr || row.QueueBasis !== queueBasis) continue;
+
+    const timestampMs = parseTimestampToMs(row.Timestamp);
+    const frontNumber = toNumber(row.FrontNumber);
+    const activeAhead = toNumber(row.ActiveAhead);
+    const totalAhead = toNumber(row.TotalAhead);
+    const behind = toNumber(row.Behind);
+    const waitDays = toNumber(row.WaitDays);
+    if ([timestampMs, frontNumber, activeAhead, totalAhead, behind].some(Number.isNaN)) continue;
+
+    records.push({
+      timestamp: row.Timestamp,
+      timestampMs,
+      targetPr,
+      frontNumber,
+      frontCreatedAt: row.FrontCreatedAt || undefined,
+      activeAhead,
+      totalAhead,
+      behind,
+      waitDays,
+    });
+  }
+  return records;
 }
 
 /**

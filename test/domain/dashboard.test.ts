@@ -8,8 +8,10 @@ import {
   formatDeltaBadge,
   formatJstDate,
   parseTimestampToMs,
+  selectComparableHistory,
 } from "../../src/domain/dashboard";
 import type { HistoryRecord } from "../../src/models/dashboard";
+import type { ProgressHistoryRow } from "../../src/models/progress";
 
 describe("Domain: dashboard calculations", () => {
   describe("parseTimestampToMs & formatJstDate", () => {
@@ -394,5 +396,60 @@ describe("Domain: dashboard calculations", () => {
       expect(res.historyWithDeltas.length).toBe(2);
       expect(res.historyWithDeltas[1].activeAheadDelta).toBe(-50);
     });
+  });
+});
+
+describe("selectComparableHistory", () => {
+  const baseRow: ProgressHistoryRow = {
+    Timestamp: "2026-11-07(土) 12:00",
+    TargetPr: "100",
+    FrontNumber: "50",
+    FrontCreatedAt: "2026-10-01 10:00",
+    ActiveAhead: "120",
+    TotalAhead: "150",
+    QueueBasis: "updated",
+    Behind: "30",
+    TotalLifetimeDays: "5",
+    TurnLatencyDays: "5",
+    WaitDays: "4.5",
+    CommitCount: "1",
+  };
+
+  test("新定義の行を数値に変換する", () => {
+    const [record] = selectComparableHistory([baseRow], 100);
+    expect(record).toMatchObject({
+      targetPr: 100,
+      frontNumber: 50,
+      activeAhead: 120,
+      totalAhead: 150,
+      behind: 30,
+      waitDays: 4.5,
+      frontCreatedAt: "2026-10-01 10:00",
+    });
+    expect(Number.isNaN(record.timestampMs)).toBeFalse();
+  });
+
+  test.each([
+    ["別の基準 PR の行", { TargetPr: "999" }],
+    ["QueueBasis が空欄の旧定義の行", { QueueBasis: "" }],
+    ["QueueBasis が現行と異なる行", { QueueBasis: "created" }],
+    ["ActiveAhead が空欄の行（0 件として扱わない）", { ActiveAhead: "" }],
+    ["FrontNumber が空欄の行", { FrontNumber: "" }],
+    ["時刻が不正な行", { Timestamp: "invalid" }],
+  ])("%s は履歴から除く", (_name, override) => {
+    expect(selectComparableHistory([{ ...baseRow, ...override }], 100)).toEqual([]);
+  });
+
+  test("速度・前回比の計算には新定義の行だけが渡る", () => {
+    const rows: ProgressHistoryRow[] = [
+      { ...baseRow, Timestamp: "2026-11-06(金) 12:00", ActiveAhead: "2000", QueueBasis: "" },
+      { ...baseRow, Timestamp: "2026-11-07(土) 00:00", ActiveAhead: "120" },
+      { ...baseRow, Timestamp: "2026-11-07(土) 12:00", ActiveAhead: "108" },
+    ];
+    const records = selectComparableHistory(rows, 100);
+    expect(records.map((r) => r.activeAhead)).toEqual([120, 108]);
+    // 旧定義の 2000 件が混ざらないので、12 時間で 12 件消化 = 24 件/日
+    const velocity = calculateVelocityMetrics(records, 108);
+    expect(velocity.velocityPerDay).toBe(24);
   });
 });
