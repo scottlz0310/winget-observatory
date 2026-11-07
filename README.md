@@ -127,6 +127,9 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 # 依存ツールのセットアップ
 bun install
 
+# 型チェック
+bun run typecheck
+
 # Lint / Format の確認
 bun run check
 bun run format
