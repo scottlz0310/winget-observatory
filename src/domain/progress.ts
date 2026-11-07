@@ -75,6 +75,12 @@ export const BLOCKED_PATTERNS: readonly RegExp[] = [
 ] as const;
 
 /**
+ * 履歴 CSV の ActiveAhead の算出基準（更新順）。
+ * 基準が変わったら値を変え、旧基準の行との前回比・速度計算を避ける。
+ */
+export const QUEUE_BASIS = "updated";
+
+/**
  * 「健康な未マージ PR」（比較条件を満たす PR）を検索する GitHub Search クエリの条件部分。
  * progress（前線・待ち件数）と explore-depths（各底）で同じ定義を使い、判定のずれを防ぐ。
  * 名前パターンで判定する阻害ラベル（BLOCKED_PATTERNS）は検索クエリで表現できないため含まない。

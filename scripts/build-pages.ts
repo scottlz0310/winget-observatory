@@ -7,10 +7,9 @@ import { DEFAULT_REPOSITORY, DEFAULT_TARGET_PR } from "../src/cli/args";
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
-  parseTimestampToMs,
+  selectComparableHistory,
 } from "../src/domain/dashboard";
 import { parseCsvRows } from "../src/domain/progress";
-import type { HistoryRecord } from "../src/models/dashboard";
 import type { DepthsSnapshot } from "../src/models/depths";
 import type { ProgressHistoryRow, ProgressSnapshot } from "../src/models/progress";
 
@@ -46,34 +45,6 @@ function parseArgs(): BuildOptions {
   return { dataDir, outputDir };
 }
 
-function csvRowsToHistoryRecords(csvRows: ProgressHistoryRow[]): HistoryRecord[] {
-  return csvRows
-    .map((row) => {
-      const timestamp = row.Timestamp;
-      const timestampMs = parseTimestampToMs(timestamp);
-      const targetPr = Number(row.TargetPr) || 0;
-      const frontNumber = Number(row.FrontNumber) || 0;
-      const frontCreatedAt = row.FrontCreatedAt || undefined;
-      const activeAhead = Number(row.ActiveAhead) || 0;
-      const totalAhead = Number(row.TotalAhead) || 0;
-      const behind = Number(row.Behind) || 0;
-      const waitDays = Number(row.WaitDays) || 0;
-
-      return {
-        timestamp,
-        timestampMs,
-        targetPr,
-        frontNumber,
-        frontCreatedAt,
-        activeAhead,
-        totalAhead,
-        behind,
-        waitDays,
-      };
-    })
-    .filter((r) => !Number.isNaN(r.timestampMs));
-}
-
 function escapeHtml(str: string | number | undefined | null): string {
   if (str === undefined || str === null || str === "") return "-";
   return String(str)
@@ -100,6 +71,48 @@ function formatDaysStat(val: number | null | undefined): string {
   return `<strong>${val}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>`;
 }
 
+/** 遭難の底（更新が古い順の健康な PR）の表。先頭からの遅れ = 観測時刻 − 最終更新 */
+function renderStaleBottomTable(depths: LatestDepths | null): string {
+  const items = depths?.StaleBottom ?? [];
+  if (items.length === 0) {
+    return `<p style="color: var(--text-muted); font-size: 0.875rem;">遭難の底のデータはまだありません。</p>`;
+  }
+  const observedMs = Date.parse(depths?.Timestamp ?? "");
+  const rows = items
+    .map((item, index) => {
+      const updatedMs = Date.parse(item.UpdatedAt);
+      const lag =
+        Number.isNaN(observedMs) || Number.isNaN(updatedMs)
+          ? "-"
+          : `${Math.round(((observedMs - updatedMs) / 86_400_000) * 10) / 10} 日`;
+      return `
+        <tr>
+          <td>${index + 1}</td>
+          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a></td>
+          <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
+          <td>${escapeHtml(item.更新日時 || item.UpdatedAt)}</td>
+          <td>${lag}</td>
+          <td>${escapeHtml(item.タイトル || item.Title)}</td>
+        </tr>`;
+    })
+    .join("");
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>順位</th>
+          <th>PR 番号</th>
+          <th>起票日時 (JST)</th>
+          <th>最終更新 (JST)</th>
+          <th>更新からの経過</th>
+          <th>タイトル</th>
+        </tr>
+      </thead>
+      <tbody>${rows}
+      </tbody>
+    </table>`;
+}
+
 function generateHtml(
   progress: LatestProgress | null,
   depths: LatestDepths | null,
@@ -117,7 +130,7 @@ function generateHtml(
   const frontCreatedAt = progress?.FrontCreatedAt || undefined;
   const currentActiveAhead = Number(progress?.ActiveAhead) || 0;
 
-  const historyRecords = csvRowsToHistoryRecords(csvRows);
+  const historyRecords = selectComparableHistory(csvRows, Number(targetPrNum));
   const metrics = calculateDashboardMetrics(
     historyRecords,
     currentActiveAhead,
@@ -333,6 +346,7 @@ function generateHtml(
     }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background-color: rgba(148, 163, 184, 0.05); }
+    .section-note { font-size: 0.875rem; color: var(--text-muted); margin: -0.5rem 0 1rem; }
     a { color: var(--primary); text-decoration: none; }
     a:hover { text-decoration: underline; }
     footer {
@@ -358,11 +372,11 @@ function generateHtml(
 
     <div class="grid">
       <div class="card">
-        <div class="card-title">実質待ち件数 (前線〜自PR)</div>
+        <div class="card-title">実質待ち件数 (更新順の順位)</div>
         <div class="card-value">${formatNumber(progress?.ActiveAhead)} <span style="font-size: 1rem; font-weight: normal;">件</span></div>
         <div class="card-subtext">
           <span>前回比: ${renderBadgeHtml(activeDeltaBadge)}</span>
-          <span>/ 全期間累積: ${formatNumber(progress?.TotalAhead)} 件</span>
+          <span>/ 作成順の累積: ${formatNumber(progress?.TotalAhead)} 件</span>
         </div>
       </div>
 
@@ -520,22 +534,15 @@ function generateHtml(
         `,
           )
           .join("")}
-        ${(depths?.StaleBottom ?? [])
-          .slice(0, 3)
-          .map(
-            (item) => `
-        <tr>
-          <td><span class="badge" style="background:#fee2e2;color:#b91c1c;">⚠️ 遭難・放置の底</span></td>
-          <td><a href="${escapeHtml(item.Url)}" target="_blank">#${escapeHtml(item.Number)}</a></td>
-          <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
-          <td>${escapeHtml(item.更新日時 || item.UpdatedAt)}</td>
-          <td>${escapeHtml(item.タイトル || item.Title)}</td>
-        </tr>
-        `,
-          )
-          .join("")}
       </tbody>
     </table>
+
+    <h2 class="section-title">🧗 遭難の底（順番待ちの先頭）</h2>
+    <p class="section-note">
+      指摘が一度も付かずにすぐ健康になり、そのまま順番を待つだけの PR（基準 PR と同種）のうち、最終更新が古い順です。
+      更新の古い順に処理されるなら、この先頭の進みが待ち行列の実質的な進みを表します。
+    </p>
+    ${renderStaleBottomTable(depths)}
 
     <h2 class="section-title">📈 直近の観測推移ログ (最新 10 件)</h2>
     ${
@@ -575,7 +582,7 @@ function generateHtml(
       </tbody>
     </table>
     `
-        : `<p style="color: var(--text-muted); font-size: 0.875rem;">推移データはまだ蓄積されていません。</p>`
+        : `<p style="color: var(--text-muted); font-size: 0.875rem;">現在の指標定義（更新順の待ち順位）の推移データはまだ蓄積されていません。旧定義の履歴は比較できないため表示しません。</p>`
     }
 
     <footer>

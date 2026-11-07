@@ -10,6 +10,7 @@ import {
   formatHumanDays,
   isBlockedLabel,
   parseCsvRows,
+  QUEUE_BASIS,
   REQUIRED_LABELS,
   serializeCsvRows,
   simulateReadySince,
@@ -28,9 +29,6 @@ import {
   readOptionValue,
   resolveDefaultTargetPr,
 } from "./args";
-
-/** 履歴 CSV の ActiveAhead の算出基準（更新順）。基準が変わったら値を変え、旧基準の行との前回比を避ける */
-const QUEUE_BASIS = "updated";
 
 export interface ProgressCliOptions {
   targetPr: number;

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `scripts/build-pages.ts`: 遭難の底（更新が古い順の健康な PR 上位 10 件と更新からの経過）を専用の表として追加し、「指摘なく順番待ちする PR の先頭」として説明（Issue #18）
 - `src/domain/forecast.ts`, `src/models/forecast.ts`: 遭難の底（更新が最も古い健康な PR。指摘なく順番待ちをする基準 PR と同種の PR）の推移から基準 PR のマージ時期を予想するモデルを追加（Issue #18）。先頭の遅れが一定とする「定常待ち時間モデル」と、履歴から先頭の進み（日/日）を実測する「観測速度モデル」を並列に算出し、進みが観測できない場合は理由付きで算出不能とする。`depths-history.jsonl` のパースと観測列の抽出も純粋関数として提供
 - `src/api/github.ts`, `src/domain/depths.ts`, `src/models/depths.ts`: キュー境界スナップショットの基準 PR 情報に最終更新時刻（`UpdatedAt`）を追加（予想モデルの入力）
 - `tsconfig.json`, `package.json`, `.github/workflows/ci.yml`, `lefthook.yml`: strict な型チェック（`tsc --noEmit`、`bun run typecheck`）を導入し、CI と pre-commit に組み込み（Issue #18）
@@ -30,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `src/domain/dashboard.ts`, `scripts/build-pages.ts`: ダッシュボードの履歴処理を `selectComparableHistory` に切り出して是正（Issue #18）。基準 PR が異なる行、待ち件数の算出基準（`QueueBasis`）が現行と異なる旧定義の行を速度・前回比・推移表から除外し、数値が空欄の行を `0` 件として扱って速度や ETA を歪めていた問題を解消。ラベル表記も「実質待ち件数（更新順の順位）」「作成順の累積」に修正
 - `scripts/build-pages.ts`: 進捗・境界スナップショットおよび履歴 CSV の読み込み失敗を `console.warn` で握りつぶして空のダッシュボードを公開していた問題を修正し、ファイルパス付きで中断（exit 1）するよう変更（Issue #18）
 - `src/cli/explore-depths.ts`: 基準 PR の取得失敗時に基準 PR 無しのスナップショットを履歴 JSONL へ追記して続行していた問題を修正し、中断するよう変更。エントリポイントの引数エラーも他 CLI と同じ書式で報告（Issue #18）
 - `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`: 履歴 CSV の読み込み失敗とマージ済みサンプル計測の失敗（`failed++` で黙殺していた）を PR 番号・パス付きで中断するよう変更し、常に誤解を招いていた `failedCount` を廃止。基準 PR が観測対象外で記録がスキップされた場合は Actions の warning を出力（Issue #18）
