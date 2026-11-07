@@ -8,7 +8,13 @@ import { parseArgs, resolveDefaultDataDir, runProgressCli } from "../../src/cli/
 
 describe("CLI: progress parseArgs", () => {
   test("デフォルト値が正しく設定される", () => {
-    const origEnv = { ...process.env };
+    const envKeys = [
+      "WINGET_TARGET_PR",
+      "WINGET_REPOSITORY",
+      "WINGET_LOG_PATH",
+      "WINGET_SNAPSHOT_PATH",
+    ];
+    const saved = envKeys.map((key) => [key, process.env[key]] as const);
     delete process.env.WINGET_TARGET_PR;
     delete process.env.WINGET_REPOSITORY;
     delete process.env.WINGET_LOG_PATH;
@@ -25,7 +31,11 @@ describe("CLI: progress parseArgs", () => {
       expect(opts.noLog).toBeFalse();
       expect(opts.asJson).toBeFalse();
     } finally {
-      process.env = origEnv;
+      // process.env オブジェクト自体は置換せず、変更したキーだけを復元する
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
@@ -382,5 +392,63 @@ describe("CLI: runProgressCli with mock client", () => {
     // 2ページ目の有効候補が集計され、前線PRとして採用されたこと
     expect(res.snapshot).not.toBeNull();
     expect(res.snapshot?.FrontNumber).toBe(2000);
+  });
+});
+
+describe("CLI: progress のコミット表示", () => {
+  test("複数コミットの最新コミット表示は区切り文字を重複させない", async () => {
+    const labels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
+    const mockClient = {
+      getPullRequestDetails: async () => ({
+        number: 200,
+        title: "Valid PR",
+        url: "https://github.com/test/repo/pull/200",
+        state: "OPEN" as const,
+        isDraft: false,
+        createdAt: "2026-11-01T00:00:00Z",
+        mergedAt: null,
+        closedAt: null,
+        labels,
+        commits: [
+          {
+            oid: "1111111aaaa",
+            messageHeadline: "feat: add",
+            committedDate: "2026-11-01T00:00:00Z",
+          },
+          {
+            oid: "abcdef1234",
+            messageHeadline: "fix: typo",
+            committedDate: "2026-11-02T00:00:00Z",
+          },
+        ],
+      }),
+      getIssueTimeline: async () =>
+        labels.map((name) => ({
+          event: "labeled",
+          created_at: "2026-11-01T01:00:00Z",
+          label: { name },
+        })),
+      searchIssuesDetailed: async () => ({ totalCount: 0, items: [] }),
+    } as unknown as GitHubApiClient;
+
+    const logs: string[] = [];
+    await runProgressCli(
+      {
+        targetPr: 200,
+        repository: "test/repo",
+        lookbackDays: 30,
+        sampleSize: 30,
+        fetchLimit: 1000,
+        queueLimit: 500,
+        noLog: true,
+        asJson: false,
+      },
+      mockClient,
+      (msg) => logs.push(msg),
+    );
+
+    const turnLine = logs.find((l) => l.includes("2 コミット目")) ?? "";
+    expect(turnLine).toContain("2 コミット目: abcdef1 - fix: typo)");
+    expect(turnLine).not.toContain(" -  - ");
   });
 });
