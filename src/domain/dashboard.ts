@@ -10,15 +10,17 @@ import type {
 } from "../models/dashboard";
 
 /**
- * タイムスタンプ文字列（JST "YYYY-MM-DD HH:mm:ss" または ISO 文字列）を UTC ミリ秒にパースする。
- * "YYYY-MM-DD HH:mm:ss" 形式は JST (UTC+9) として厳格に解釈し、実行環境のローカルタイムゾーンに依存しない。
+ * タイムスタンプ文字列（JST "YYYY-MM-DD HH:mm:ss", "YYYY-MM-DD(曜日) HH:mm" または ISO 文字列）を UTC ミリ秒にパースする。
+ * 日本語曜日付き形式および "YYYY-MM-DD HH:mm:ss" 形式は JST (UTC+9) として厳格に解釈し、実行環境のローカルタイムゾーンに依存しない。
  */
 export function parseTimestampToMs(timestampStr: string): number {
   if (!timestampStr) return Number.NaN;
   const trimmed = timestampStr.trim();
 
-  // "YYYY-MM-DD HH:mm:ss" または "YYYY-MM-DD HH:mm" (JST)
-  const jstMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  // "YYYY-MM-DD HH:mm:ss", "YYYY-MM-DD HH:mm", "YYYY-MM-DD(曜日) HH:mm:ss", "YYYY-MM-DD(曜日) HH:mm" (JST)
+  const jstMatch = trimmed.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:\([^)]+\))?[ T](\d{2}):(\d{2})(?::(\d{2}))?$/,
+  );
   if (jstMatch) {
     const [, year, month, day, hour, min, sec] = jstMatch;
     const isoString = `${year}-${month}-${day}T${hour}:${min}:${sec ?? "00"}+09:00`;
@@ -206,10 +208,24 @@ export function calculateCalendarGap(
   };
 }
 
+export interface DeltaBadgeOptions {
+  /**
+   * 数値の増加が改善（進行）を意味するかどうか。
+   * - false (既定): キュー待ち件数用（減少が改善・進行、増加が悪化・後退）
+   * - true: PR番号用（増加が進捗・進行、減少が巻き戻り・後退）
+   */
+  higherIsBetter?: boolean;
+  /** 表示単位（既定: "件"） */
+  unit?: string;
+}
+
 /**
  * 差分（Δ）を表示用の文字列と属性にフォーマットする
  */
-export function formatDeltaBadge(delta: number | null): {
+export function formatDeltaBadge(
+  delta: number | null,
+  options: DeltaBadgeOptions = {},
+): {
   text: string;
   className: string;
   label: string;
@@ -218,25 +234,42 @@ export function formatDeltaBadge(delta: number | null): {
     return { text: "-", className: "delta-neutral", label: "差分なし" };
   }
 
+  const { higherIsBetter = false, unit = "件" } = options;
+  const unitSuffix = unit ? ` ${unit}` : "";
+
+  if (delta === 0) {
+    return { text: "±0", className: "delta-neutral", label: "増減なし" };
+  }
+
+  if (higherIsBetter) {
+    if (delta > 0) {
+      return {
+        text: `+${delta}`,
+        className: "delta-progress",
+        label: `+${delta}${unitSuffix}進行`,
+      };
+    }
+    return {
+      text: `${delta}`,
+      className: "delta-rewind",
+      label: `${delta}${unitSuffix}後退`,
+    };
+  }
+
+  // 待ち件数用 (higherIsBetter = false: 減少が改善)
   if (delta < 0) {
-    // キュー待ちが減った（前線進行: 改善）
     return {
       text: `${delta}`,
       className: "delta-progress",
-      label: `${Math.abs(delta)} 件進行`,
+      label: `${Math.abs(delta)}${unitSuffix}進行`,
     };
   }
 
-  if (delta > 0) {
-    // キュー待ちが増えた（割り込み・巻き戻り）
-    return {
-      text: `+${delta}`,
-      className: "delta-rewind",
-      label: `+${delta} 件増加`,
-    };
-  }
-
-  return { text: "±0", className: "delta-neutral", label: "増減なし" };
+  return {
+    text: `+${delta}`,
+    className: "delta-rewind",
+    label: `+${delta}${unitSuffix}増加`,
+  };
 }
 
 /**

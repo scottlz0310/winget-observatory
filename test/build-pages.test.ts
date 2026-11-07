@@ -82,7 +82,8 @@ describe("buildDashboard", () => {
 
       // 新指標: 前回比 Δ バッジ
       expect(html).toContain("delta-badge delta-progress");
-      expect(html).toContain("-50");
+      expect(html).toContain("-50"); // 待ち件数減少（進行）
+      expect(html).toContain("+50"); // 前線番号増加（進行）
 
       // 新指標: Velocity & ETA（24時間で50件消化 = 日速50件、残り100件で約2日後）
       expect(html).toContain("到着予測 (ETA) &amp; 消化速度");
@@ -109,6 +110,60 @@ describe("buildDashboard", () => {
       // site/data へのコピー確認
       expect(existsSync(join(outputDir, "data", "latest-progress.json"))).toBe(true);
       expect(existsSync(join(outputDir, "data", "progress-history.csv"))).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("前線巻き戻り（赤バッジ）および統計 null / 0 のハンドリングを正しく処理する", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-test-null-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+
+    mkdirSync(dataDir, { recursive: true });
+
+    // 統計値が null（実績なし）と 0（即日マージ実績）の混在
+    const dummyProgress = {
+      TimestampJst: "2026-11-07 12:00:00",
+      Repository: "microsoft/winget-pkgs",
+      TargetPr: 123456,
+      PrTitle: "Test package",
+      FrontNumber: 119950, // 前回 120000 から減少（巻き戻り）
+      ActiveAhead: 150,
+      TotalAhead: 200,
+      Behind: 40,
+      WaitDays: 6.0,
+      TotalMedianDays: null,
+      TotalP75Days: null,
+      TurnMedianDays: 0, // 実測 0 日
+      TurnP75Days: 0,
+      ReadyMedianDays: null,
+      ReadyP75Days: null,
+    };
+    writeFileSync(join(dataDir, "latest-progress.json"), JSON.stringify(dummyProgress), "utf-8");
+
+    // 前線番号 120000 -> 119950 (-50 番号巻き戻り)
+    const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount"
+"2026-11-06 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.0","5.0","5.0","1"
+"2026-11-07 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","6.0","6.0","6.0","1"
+`;
+    writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
+
+    try {
+      const { htmlPath } = buildDashboard({ dataDir, outputDir });
+      const html = readFileSync(htmlPath, "utf-8");
+
+      // 前線巻き戻り: -50 が delta-rewind（赤）として表示される
+      expect(html).toContain("delta-badge delta-rewind");
+      expect(html).toContain("-50");
+
+      // 統計値: null はハイフン（-）、実測 0 は "0 日" として表示され区別される
+      expect(html).toContain("通算所要日数 (Total Lifetime)");
+      expect(html).toContain('P50: <span style="color: var(--text-muted);">-</span>');
+      expect(html).toContain("手番所要日数 (Turn Latency)");
+      expect(html).toContain(
+        '<strong>0</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>',
+      );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

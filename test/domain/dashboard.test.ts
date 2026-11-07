@@ -19,6 +19,50 @@ describe("Domain: dashboard calculations", () => {
       expect(ms).toBe(expected);
     });
 
+    test("曜日付き JST 形式 (現行 progress CLI 出力) を環境非依存で正しくパースする", () => {
+      const ms = parseTimestampToMs("2026-11-07(土) 23:00");
+      const expected = Date.parse("2026-11-07T23:00:00+09:00");
+      expect(ms).toBe(expected);
+
+      const msWithSec = parseTimestampToMs("2026-11-07(土) 23:00:45");
+      const expectedWithSec = Date.parse("2026-11-07T23:00:45+09:00");
+      expect(msWithSec).toBe(expectedWithSec);
+    });
+
+    test("旧形式と曜日付き新形式の混在時も正確に 24 時間間隔を認識して速度・ETA を算出する", () => {
+      const t1 = parseTimestampToMs("2026-11-06 23:00:00");
+      const t2 = parseTimestampToMs("2026-11-07(土) 23:00");
+      expect(t2 - t1).toBe(24 * 3600 * 1000);
+
+      const records: HistoryRecord[] = [
+        {
+          timestamp: "2026-11-06 23:00:00",
+          timestampMs: t1,
+          targetPr: 1000,
+          frontNumber: 900,
+          activeAhead: 150,
+          totalAhead: 200,
+          behind: 50,
+          waitDays: 5,
+        },
+        {
+          timestamp: "2026-11-07(土) 23:00",
+          timestampMs: t2,
+          targetPr: 1000,
+          frontNumber: 950,
+          activeAhead: 100,
+          totalAhead: 150,
+          behind: 60,
+          waitDays: 6,
+        },
+      ];
+
+      const velocity = calculateVelocityMetrics(records, 100);
+      expect(velocity.velocityPerDay).toBe(50);
+      expect(velocity.etaDays).toBe(2);
+      expect(velocity.etaDateJst).toBe("2026-11-09");
+    });
+
     test("ISO 形式の文字列を正しくパースする", () => {
       const ms = parseTimestampToMs("2026-11-06T09:22:14Z");
       expect(ms).toBe(Date.parse("2026-11-06T09:22:14Z"));
@@ -268,28 +312,48 @@ describe("Domain: dashboard calculations", () => {
   });
 
   describe("formatDeltaBadge", () => {
-    test("負数（前線進行）は delta-progress を返す", () => {
-      const b = formatDeltaBadge(-8);
-      expect(b.text).toBe("-8");
-      expect(b.className).toBe("delta-progress");
-      expect(b.label).toContain("8 件進行");
+    describe("待ち件数用 (higherIsBetter = false: 減少が改善)", () => {
+      test("負数（前線進行）は delta-progress を返す", () => {
+        const b = formatDeltaBadge(-8);
+        expect(b.text).toBe("-8");
+        expect(b.className).toBe("delta-progress");
+        expect(b.label).toContain("8 件進行");
+      });
+
+      test("正数（後退・巻き戻り）は delta-rewind を返す", () => {
+        const b = formatDeltaBadge(12);
+        expect(b.text).toBe("+12");
+        expect(b.className).toBe("delta-rewind");
+        expect(b.label).toContain("+12 件増加");
+      });
+
+      test("ゼロは delta-neutral を返す", () => {
+        const b = formatDeltaBadge(0);
+        expect(b.text).toBe("±0");
+        expect(b.className).toBe("delta-neutral");
+      });
+
+      test("null はハイフンを返す", () => {
+        const b = formatDeltaBadge(null);
+        expect(b.text).toBe("-");
+        expect(b.className).toBe("delta-neutral");
+      });
     });
 
-    test("正数（後退・巻き戻り）は delta-rewind を返す", () => {
-      const b = formatDeltaBadge(12);
-      expect(b.text).toBe("+12");
-      expect(b.className).toBe("delta-rewind");
-    });
+    describe("PR番号用 (higherIsBetter = true: 増加が進行、減少が後退)", () => {
+      test("正数（前線番号の増加）は delta-progress を返す", () => {
+        const b = formatDeltaBadge(50, { higherIsBetter: true, unit: "" });
+        expect(b.text).toBe("+50");
+        expect(b.className).toBe("delta-progress");
+        expect(b.label).toContain("+50進行");
+      });
 
-    test("ゼロは delta-neutral を返す", () => {
-      const b = formatDeltaBadge(0);
-      expect(b.text).toBe("±0");
-      expect(b.className).toBe("delta-neutral");
-    });
-
-    test("null はハイフンを返す", () => {
-      const b = formatDeltaBadge(null);
-      expect(b.text).toBe("-");
+      test("負数（前線番号の巻き戻り）は delta-rewind を返す", () => {
+        const b = formatDeltaBadge(-8546, { higherIsBetter: true, unit: "" });
+        expect(b.text).toBe("-8546");
+        expect(b.className).toBe("delta-rewind");
+        expect(b.label).toContain("-8546後退");
+      });
     });
   });
 

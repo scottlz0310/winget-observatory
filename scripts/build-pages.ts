@@ -32,12 +32,12 @@ interface LatestProgress {
   TurnLatencyDays?: number;
   WaitDays?: number;
   CommitCount?: number;
-  TotalMedianDays?: number;
-  TotalP75Days?: number;
-  TurnMedianDays?: number;
-  TurnP75Days?: number;
-  ReadyMedianDays?: number;
-  ReadyP75Days?: number;
+  TotalMedianDays?: number | null;
+  TotalP75Days?: number | null;
+  TurnMedianDays?: number | null;
+  TurnP75Days?: number | null;
+  ReadyMedianDays?: number | null;
+  ReadyP75Days?: number | null;
 }
 
 interface DepthsItem {
@@ -152,8 +152,23 @@ function formatNumber(num: number | undefined | null): string {
   return num.toLocaleString();
 }
 
+function parseOptionalNumber(primary: unknown, fallback: unknown): number | null | undefined {
+  const val = primary !== undefined ? primary : fallback;
+  if (val === undefined) return undefined;
+  if (val === null || val === "") return null;
+  const num = Number(val);
+  return Number.isNaN(num) ? null : num;
+}
+
 function renderBadgeHtml(badge: { text: string; className: string; label: string }): string {
   return `<span class="delta-badge ${badge.className}" title="${escapeHtml(badge.label)}">${escapeHtml(badge.text)}</span>`;
+}
+
+function formatDaysStat(val: number | null | undefined): string {
+  if (val === null || val === undefined || Number.isNaN(val)) {
+    return `<span style="color: var(--text-muted);">-</span>`;
+  }
+  return `<strong>${val}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>`;
 }
 
 function generateHtml(
@@ -182,7 +197,10 @@ function generateHtml(
   );
 
   const activeDeltaBadge = formatDeltaBadge(metrics.latestDelta.activeAheadDelta);
-  const frontDeltaBadge = formatDeltaBadge(metrics.latestDelta.frontNumberDelta);
+  const frontDeltaBadge = formatDeltaBadge(metrics.latestDelta.frontNumberDelta, {
+    higherIsBetter: true,
+    unit: "",
+  });
   const behindDeltaBadge = formatDeltaBadge(metrics.latestDelta.behindDelta);
 
   const healthyBottomFirst = depths?.HealthyBottom?.[0];
@@ -478,9 +496,9 @@ function generateHtml(
       <div class="card stat-card">
         <div class="card-title">手番所要日数 (Turn Latency)</div>
         <div class="card-value" style="font-size: 1.4rem;">
-          P50: <strong>${escapeHtml(progress?.TurnMedianDays)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          P50: ${formatDaysStat(progress?.TurnMedianDays)}
           <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          P75: <strong>${escapeHtml(progress?.TurnP75Days)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          P75: ${formatDaysStat(progress?.TurnP75Days)}
         </div>
         <div class="card-subtext">メンテナがレビュー・トリアージを開始してからマージされるまでの日数</div>
       </div>
@@ -488,9 +506,9 @@ function generateHtml(
       <div class="card stat-card">
         <div class="card-title">Ready 成立後所要日数 (Ready Latency)</div>
         <div class="card-value" style="font-size: 1.4rem;">
-          P50: <strong>${escapeHtml(progress?.ReadyMedianDays)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          P50: ${formatDaysStat(progress?.ReadyMedianDays)}
           <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          P75: <strong>${escapeHtml(progress?.ReadyP75Days)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          P75: ${formatDaysStat(progress?.ReadyP75Days)}
         </div>
         <div class="card-subtext">CI 通過および必須ラベル成立からマージされるまでの日数</div>
       </div>
@@ -498,9 +516,9 @@ function generateHtml(
       <div class="card stat-card">
         <div class="card-title">通算所要日数 (Total Lifetime)</div>
         <div class="card-value" style="font-size: 1.4rem;">
-          P50: <strong>${escapeHtml(progress?.TotalMedianDays)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          P50: ${formatDaysStat(progress?.TotalMedianDays)}
           <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          P75: <strong>${escapeHtml(progress?.TotalP75Days)}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>
+          P75: ${formatDaysStat(progress?.TotalP75Days)}
         </div>
         <div class="card-subtext">PR 起票からマージ完了までの全期間の所要日数</div>
       </div>
@@ -740,42 +758,12 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
             : raw.commitCount !== undefined
               ? Number(raw.commitCount)
               : undefined,
-        TotalMedianDays:
-          raw.TotalMedianDays !== undefined
-            ? Number(raw.TotalMedianDays)
-            : raw.totalMedianDays !== undefined
-              ? Number(raw.totalMedianDays)
-              : undefined,
-        TotalP75Days:
-          raw.TotalP75Days !== undefined
-            ? Number(raw.TotalP75Days)
-            : raw.totalP75Days !== undefined
-              ? Number(raw.totalP75Days)
-              : undefined,
-        TurnMedianDays:
-          raw.TurnMedianDays !== undefined
-            ? Number(raw.TurnMedianDays)
-            : raw.turnMedianDays !== undefined
-              ? Number(raw.turnMedianDays)
-              : undefined,
-        TurnP75Days:
-          raw.TurnP75Days !== undefined
-            ? Number(raw.TurnP75Days)
-            : raw.turnP75Days !== undefined
-              ? Number(raw.turnP75Days)
-              : undefined,
-        ReadyMedianDays:
-          raw.ReadyMedianDays !== undefined
-            ? Number(raw.ReadyMedianDays)
-            : raw.readyMedianDays !== undefined
-              ? Number(raw.readyMedianDays)
-              : undefined,
-        ReadyP75Days:
-          raw.ReadyP75Days !== undefined
-            ? Number(raw.ReadyP75Days)
-            : raw.readyP75Days !== undefined
-              ? Number(raw.readyP75Days)
-              : undefined,
+        TotalMedianDays: parseOptionalNumber(raw.TotalMedianDays, raw.totalMedianDays),
+        TotalP75Days: parseOptionalNumber(raw.TotalP75Days, raw.totalP75Days),
+        TurnMedianDays: parseOptionalNumber(raw.TurnMedianDays, raw.turnMedianDays),
+        TurnP75Days: parseOptionalNumber(raw.TurnP75Days, raw.turnP75Days),
+        ReadyMedianDays: parseOptionalNumber(raw.ReadyMedianDays, raw.readyMedianDays),
+        ReadyP75Days: parseOptionalNumber(raw.ReadyP75Days, raw.readyP75Days),
       };
     } catch (e) {
       console.warn(`[Build Pages] ${progressPath} の読み込みに失敗しました:`, e);
