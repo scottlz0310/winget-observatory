@@ -52,34 +52,33 @@ jobs:
         run: bun run scripts/sync-dropbox.ts --direction download
 
       - name: Run Winget Observatory Scripts
-        shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WINGET_TARGET_PR: ${{ inputs.target_pr || '464302' }}
           WINGET_REPOSITORY: ${{ inputs.repository || 'microsoft/winget-pkgs' }}
         run: |
-          Write-Host "Target PR: $env:WINGET_TARGET_PR"
-          Write-Host "Repository: $env:WINGET_REPOSITORY"
+          echo "Target PR: $WINGET_TARGET_PR"
+          echo "Repository: $WINGET_REPOSITORY"
 
           # 1. 進捗メトリクス計測（CSVログ追記 & JSONスナップショット生成）
-          Write-Host "`n=== Running progress-winget.ps1 ==="
-          ./scripts/progress-winget.ps1 `
-            -PrNumber ([int]$env:WINGET_TARGET_PR) `
-            -Repository $env:WINGET_REPOSITORY `
-            -LogPath "data/progress-history.csv" `
-            -SnapshotPath "data/latest-progress.json"
+          echo "=== Running progress CLI ==="
+          bun run src/cli/progress.ts \
+            --target-pr "$WINGET_TARGET_PR" \
+            --repo "$WINGET_REPOSITORY" \
+            --log-path "data/progress-history.csv" \
+            --snapshot-path "data/latest-progress.json"
 
           # 2. キュー境界探索（JSONL追記 & 最新JSONスナップショット生成）
-          Write-Host "`n=== Running explore-winget-depths.ps1 ==="
-          ./scripts/explore-winget-depths.ps1 `
-            -TargetPr ([int]$env:WINGET_TARGET_PR) `
-            -Repository $env:WINGET_REPOSITORY `
-            -HistoryPath "data/depths-history.jsonl" `
-            -OutputPath "data/latest-depths.json"
+          echo "=== Running explore-depths CLI ==="
+          bun run src/cli/explore-depths.ts \
+            --target-pr "$WINGET_TARGET_PR" \
+            --repository "$WINGET_REPOSITORY" \
+            --history-path "data/depths-history.jsonl" \
+            --output-path "data/latest-depths.json"
 
           # 3. ダッシュボードまとめドキュメント（SUMMARY.md）の生成
-          Write-Host "`n=== Running generate-summary.ps1 ==="
-          ./scripts/generate-summary.ps1 -OutputPath "SUMMARY.md"
+          echo "=== Running generate-summary CLI ==="
+          bun run src/cli/generate-summary.ts --output-path "SUMMARY.md"
 
       - name: Save updated metrics to Dropbox
         env:
