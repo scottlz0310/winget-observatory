@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
+import { describeGuidance, describeOvertake } from "../domain/benchmark";
 import {
   buildHealthyQueryParts,
   calculateProgressStats,
@@ -21,6 +22,7 @@ import type {
   ProgressQueueInfo,
   ProgressRivalPr,
   ProgressSnapshot,
+  ReferenceGuidance,
 } from "../models/progress";
 import {
   DEFAULT_REPOSITORY,
@@ -244,6 +246,7 @@ export async function runProgressCli(
       number: item.number,
       title: item.title,
       createdAt: item.created_at,
+      updatedAt: item.updated_at,
       url: item.html_url,
     });
     if (rivals.length >= 5) break;
@@ -400,22 +403,6 @@ export async function runProgressCli(
 
   const stats = calculateProgressStats(samples, skipped);
 
-  if (stats) {
-    log("");
-    log("【過去実績との統計比較】");
-    log("1. 通算日数 (Total Lifetime: 作成→マージ)");
-    log(
-      `   中央値: ${formatHumanDays(stats.total.median)} | 75%点: ${formatHumanDays(stats.total.p75)} | 最大: ${formatHumanDays(stats.total.max)}`,
-    );
-    log(`   あなたの待機 : ${formatHumanDays(totalLifetimeDays)}`);
-    log("");
-    log("2. レビュー待ち (Turn Latency: 最新コミット→マージ)");
-    log(
-      `   中央値: ${formatHumanDays(stats.turn.median)} | 75%点: ${formatHumanDays(stats.turn.p75)} | 最大: ${formatHumanDays(stats.turn.max)}`,
-    );
-    log(`   あなたの待機 : ${formatHumanDays(turnLatencyDays)}`);
-  }
-
   const frontCreatedVal = formatDateTimeWithDay(front.createdAt);
 
   const snapshot = createProgressSnapshot({
@@ -435,7 +422,16 @@ export async function runProgressCli(
     waitDays,
     commitCount,
     stats,
+    lookbackDays: options.lookbackDays,
+    skippedCount: skipped,
+    rivals,
+    samples,
+    targetCreatedAt: created,
+    targetReadyAt: targetReady,
   });
+
+  logRivals(queueInfo.rivals, log);
+  logBenchmark(snapshot, options, { totalLifetimeDays, turnLatencyDays, waitDays }, log);
 
   if (options.asJson) {
     log(JSON.stringify(snapshot, null, 2));
@@ -494,6 +490,115 @@ export async function runProgressCli(
   }
 
   return { snapshot };
+}
+
+function logRivals(rivals: ProgressRivalPr[], log: (msg: string) => void): void {
+  if (rivals.length === 0) return;
+  log("");
+  log(`直前のライバルPR（あなたの直前に並んでいるPR TOP ${rivals.length}）:`);
+  for (const r of rivals) {
+    log(
+      `  #${r.number}  起票: ${formatDateTimeWithDay(r.createdAt)} / 更新: ${formatDateTimeWithDay(r.updatedAt)}  ${r.title}`,
+    );
+  }
+}
+
+/** 過去のマージ実績との比較（統計・位置づけ・追い越し・サンプル一覧）を出力する */
+function logBenchmark(
+  snapshot: ProgressSnapshot,
+  options: ProgressCliOptions,
+  current: { totalLifetimeDays: number; turnLatencyDays: number; waitDays: number },
+  log: (msg: string) => void,
+): void {
+  log("----------------------------------------");
+  log(`比較対象         : 過去 ${options.lookbackDays} 日間のマージ済みPR`);
+  log(`採用サンプル     : ${snapshot.SampleCount} 件`);
+  log(`条件不成立で除外 : ${snapshot.SkippedCount} 件`);
+
+  const { Guidance: guidance, Comparison: comparison } = snapshot;
+  if (snapshot.SampleCount === 0 || !guidance || !comparison) {
+    log("比較可能なサンプルがありませんでした。");
+    return;
+  }
+
+  const block = (
+    title: string,
+    median: number | null,
+    p75: number | null,
+    max: number | null,
+    currentDays: number,
+    note = "",
+  ): void => {
+    log(title);
+    log(
+      `   中央値: ${formatHumanDays(median ?? 0)} | 75%点: ${formatHumanDays(p75 ?? 0)} | 最大: ${formatHumanDays(max ?? 0)}`,
+    );
+    log(`   あなたの待機 : ${formatHumanDays(currentDays)}${note}`);
+  };
+
+  log("");
+  log("【過去実績との統計比較】");
+  block(
+    "1. 通算日数 (Total Lifetime: 作成→マージ)",
+    snapshot.TotalMedianDays,
+    snapshot.TotalP75Days,
+    snapshot.TotalMaxDays,
+    current.totalLifetimeDays,
+  );
+  log("");
+  block(
+    "2. レビュー待ち (Turn Latency: 最新コミット→マージ)",
+    snapshot.TurnMedianDays,
+    snapshot.TurnP75Days,
+    snapshot.TurnMaxDays,
+    current.turnLatencyDays,
+    snapshot.CommitCount <= 1 ? " [初手から手直しなし]" : "",
+  );
+  log("");
+  block(
+    "3. （参考）条件成立後 (ReadyAt→マージ)",
+    snapshot.ReadyMedianDays,
+    snapshot.ReadyP75Days,
+    snapshot.ReadyMaxDays,
+    current.waitDays,
+  );
+
+  if (snapshot.SampleCount < 10) {
+    log("※ サンプルが少ないため、数値は変動しやすくなっています。");
+  }
+
+  log("----------------------------------------");
+  log("参考目安:");
+  const guide = (label: string, g: ReferenceGuidance): void =>
+    log(
+      `  [${label}] ${describeGuidance(g, formatHumanDays)} （サンプルの ${g.ShorterSharePct}% はこれより短い期間でマージ済み）`,
+    );
+  guide("レビュー待ち", guidance.Turn);
+  guide("通算日数    ", guidance.Total);
+  guide("条件成立後  ", guidance.Ready);
+
+  log("");
+  log("【条件成立日時の比較（ReadyAt）】");
+  log(`  採用サンプル内で、自分より後に条件が整いマージ済み : ${comparison.LaterReady} 件`);
+  log("");
+  log("【作成日・PR番号の比較（CreatedAt / PR番号）】");
+  log(`  自分より後に作成されマージ済み   : ${comparison.LaterCreated} 件`);
+  log(`  自分より前に作成されマージ済み   : ${comparison.EarlierCreated} 件`);
+  log(`  自分より新しいPR番号 (>${options.targetPr}) : ${comparison.NewerNumber} 件`);
+  log(`  自分より古いPR番号   (<${options.targetPr}) : ${comparison.OlderNumber} 件`);
+  log(`  ※ ${describeOvertake(comparison)}`);
+
+  log("");
+  log("参考サンプル（マージ日時順）:");
+  for (const s of snapshot.Samples) {
+    const relation = s.Relation === "older" ? "古い  " : "新しい";
+    log(
+      `  #${s.Number} ${relation} ${s.CommitCount}コミット  レビュー待ち ${s.TurnDays.toFixed(1)}日 / 通算 ${s.TotalDays.toFixed(1)}日 / 成立後 ${s.ReadyDays.toFixed(1)}日  最新コミット ${formatDateTimeWithDay(s.LatestCommittedDate)}  マージ ${formatDateTimeWithDay(s.MergedAt)}`,
+    );
+  }
+  log("※ 待機はラベルとDraftの履歴に基づきます。レビュー本文・チェック履歴は解析しません。");
+  log("※ 候補検索は現在の必須ラベルを使うため、マージ後にそれらが外れたPRは含まれません。");
+  log("※ 日数差は実績との比較であり、残り待ち時間の予測ではありません。");
 }
 
 /**

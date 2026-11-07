@@ -763,3 +763,153 @@ describe("CLI: progress の保全とスキップ通知", () => {
     },
   );
 });
+
+describe("CLI: 過去実績との比較・ライバル PR", () => {
+  const labels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"].map((name) => ({
+    name,
+  }));
+  const created: Record<number, string> = {
+    500: "2026-11-01T00:00:00Z",
+    400: "2026-10-20T00:00:00Z",
+    450: "2026-10-25T00:00:00Z",
+    600: "2026-11-02T00:00:00Z",
+  };
+  const merged: Record<number, string> = {
+    400: "2026-11-04T00:00:00Z",
+    450: "2026-11-03T00:00:00Z",
+    600: "2026-11-02T12:00:00Z",
+  };
+
+  const buildClient = (): GitHubApiClient =>
+    ({
+      getPullRequestDetails: async (_repo: string, num: number) => ({
+        number: num,
+        title: `PR ${num}`,
+        url: `https://github.com/test/repo/pull/${num}`,
+        state: "OPEN" as const,
+        isDraft: false,
+        createdAt: created[num],
+        updatedAt: created[num],
+        mergedAt: null,
+        closedAt: null,
+        labels: labels.map((l) => l.name),
+        commits: [{ oid: "abcdef0123", messageHeadline: "fix", committedDate: created[num] }],
+      }),
+      getIssueTimeline: async (_repo: string, num: number) =>
+        labels.map((l) => ({
+          event: "labeled",
+          created_at: new Date(Date.parse(created[num]) + 3_600_000).toISOString(),
+          label: { name: l.name },
+        })),
+      searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+        if (query.includes("is:merged")) {
+          return {
+            totalCount: 3,
+            items: [400, 450, 600].map((n) => ({
+              number: n,
+              title: `Merged ${n}`,
+              html_url: `https://github.com/test/repo/pull/${n}`,
+              created_at: created[n],
+              updated_at: merged[n],
+              labels,
+              is_draft: false,
+              pull_request: { merged_at: merged[n] },
+            })),
+          };
+        }
+        return {
+          totalCount: 4,
+          items: [
+            // 基準 PR より新しい番号・阻害ラベル付きはライバルから除く
+            {
+              number: 700,
+              title: "Newer",
+              html_url: "u",
+              created_at: "2026-11-03T00:00:00Z",
+              updated_at: "2026-11-03T00:00:00Z",
+              labels: [],
+            },
+            {
+              number: 480,
+              title: "Blocked rival",
+              html_url: "u",
+              created_at: "2026-10-30T00:00:00Z",
+              updated_at: "2026-10-30T00:00:00Z",
+              labels: [{ name: "Needs-Author-Feedback" }],
+            },
+            {
+              number: 470,
+              title: "Healthy rival",
+              html_url: "https://github.com/test/repo/pull/470",
+              created_at: "2026-10-28T00:00:00Z",
+              updated_at: "2026-10-29T00:00:00Z",
+              labels: [],
+            },
+          ],
+        };
+      },
+    }) as unknown as GitHubApiClient;
+
+  const options = {
+    targetPr: 500,
+    repository: "test/repo",
+    lookbackDays: 30,
+    sampleSize: 10,
+    fetchLimit: 100,
+    noLog: true,
+    asJson: false,
+  };
+
+  test("ライバル PR・統計・追い越し・サンプル一覧をスナップショットとログに出す", async () => {
+    const logs: string[] = [];
+    const { snapshot } = await runProgressCli(options, buildClient(), (m) => logs.push(m));
+    const text = logs.join("\n");
+
+    expect(snapshot?.Rivals.map((r) => r.Number)).toEqual([470]);
+    expect(snapshot?.Rivals[0].UpdatedAt).toBe("2026-10-29T00:00:00Z");
+    expect(snapshot?.SampleCount).toBe(3);
+    expect(snapshot?.SkippedCount).toBe(0);
+    expect(snapshot?.LookbackDays).toBe(30);
+    expect(snapshot?.Samples.map((s) => `${s.Number}:${s.Relation}`)).toEqual([
+      "400:older",
+      "450:older",
+      "600:newer",
+    ]);
+    expect(snapshot?.Comparison).toMatchObject({ LaterCreated: 1, NewerNumber: 1 });
+    expect(snapshot?.Comparison?.Verdict).toBe("mostly-older");
+    expect(snapshot?.TotalMaxDays).not.toBeNull();
+    expect(snapshot?.Guidance?.Ready.ShorterSharePct).toBeGreaterThanOrEqual(0);
+
+    expect(text).toContain("直前のライバルPR");
+    expect(text).toContain("#470");
+    expect(text).not.toContain("Blocked rival");
+    expect(text).toContain("3. （参考）条件成立後");
+    expect(text).toContain("参考目安:");
+    expect(text).toContain("【条件成立日時の比較（ReadyAt）】");
+    expect(text).toContain("自分より後に作成されマージ済み   : 1 件");
+    expect(text).toContain("参考サンプル（マージ日時順）:");
+    expect(text).toContain("採用サンプル     : 3 件");
+    expect(text).toContain("サンプルが少ないため");
+  });
+
+  test("サンプルが 1 件もないときは比較不能と明示し、比較系は空にする", async () => {
+    const client = buildClient();
+    const original = client.searchIssuesDetailed.bind(client);
+    client.searchIssuesDetailed = (async (query: string, ...rest: unknown[]) => {
+      if (query.includes("is:merged")) return { totalCount: 0, items: [] };
+      return (original as (q: string, ...r: unknown[]) => Promise<GitHubDetailedSearchResult>)(
+        query,
+        ...rest,
+      );
+    }) as typeof client.searchIssuesDetailed;
+
+    const logs: string[] = [];
+    const { snapshot } = await runProgressCli(options, client, (m) => logs.push(m));
+
+    expect(logs.join("\n")).toContain("比較可能なサンプルがありませんでした。");
+    expect(snapshot?.SampleCount).toBe(0);
+    expect(snapshot?.Samples).toEqual([]);
+    expect(snapshot?.Comparison).toBeNull();
+    expect(snapshot?.Guidance).toBeNull();
+  });
+});

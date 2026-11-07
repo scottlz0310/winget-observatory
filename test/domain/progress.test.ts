@@ -294,6 +294,20 @@ ${Object.values(oldRow).join(",")}
         turn: { median: 2.0, p75: 3.0, max: 4.5 },
         ready: { median: 1.8, p75: 2.5, max: 3.8 },
       },
+      lookbackDays: 30,
+      skippedCount: 1,
+      rivals: [
+        {
+          number: 460000,
+          title: "Rival",
+          createdAt: "2026-11-01T00:00:00Z",
+          updatedAt: "2026-11-02T00:00:00Z",
+          url: "https://github.com/microsoft/winget-pkgs/pull/460000",
+        },
+      ],
+      samples: [],
+      targetCreatedAt: new Date("2026-11-05T00:00:00Z"),
+      targetReadyAt: new Date("2026-11-05T01:00:00Z"),
     });
 
     expect(snapshot.TargetPr).toBe(464302);
@@ -301,5 +315,55 @@ ${Object.values(oldRow).join(",")}
     expect(snapshot.TurnLatencyDays).toBe(1.23);
     expect(snapshot.TotalMedianDays).toBe(3.5);
     expect(snapshot.TimestampJst).toContain("2026-11-07");
+    expect(snapshot.TotalMaxDays).toBe(7.2);
+    expect(snapshot.ReadyMaxDays).toBe(3.8);
+    expect(snapshot.LookbackDays).toBe(30);
+    expect(snapshot.SampleCount).toBe(10);
+    expect(snapshot.SkippedCount).toBe(1);
+    expect(snapshot.Rivals).toEqual([
+      {
+        Number: 460000,
+        Title: "Rival",
+        Url: "https://github.com/microsoft/winget-pkgs/pull/460000",
+        CreatedAt: "2026-11-01T00:00:00Z",
+        UpdatedAt: "2026-11-02T00:00:00Z",
+      },
+    ]);
+    expect(snapshot.Comparison?.Verdict).toBe("all-older");
+    expect(snapshot.Guidance?.Turn.Level).toBe("within-median");
+  });
+
+  test("サンプルがなくても除外件数と取得期間を記録し、比較系は空にする", () => {
+    const snapshot = createProgressSnapshot({
+      now: new Date("2026-11-07T11:30:00Z"),
+      repository: "microsoft/winget-pkgs",
+      targetPr: 464302,
+      prTitle: "Test PR",
+      prUrl: "https://github.com/microsoft/winget-pkgs/pull/464302",
+      prState: "OPEN",
+      frontNumber: 1,
+      frontCreatedAt: "2026-11-06 12:00",
+      activeAhead: 1,
+      totalAhead: 1,
+      behind: 0,
+      totalLifetimeDays: 1,
+      turnLatencyDays: 1,
+      waitDays: 1,
+      commitCount: 1,
+      stats: null,
+      lookbackDays: 14,
+      skippedCount: 4,
+      rivals: [],
+      samples: [],
+      targetCreatedAt: new Date("2026-11-05T00:00:00Z"),
+      targetReadyAt: new Date("2026-11-05T01:00:00Z"),
+    });
+    expect(snapshot.SampleCount).toBe(0);
+    expect(snapshot.SkippedCount).toBe(4);
+    expect(snapshot.LookbackDays).toBe(14);
+    expect(snapshot.Samples).toEqual([]);
+    expect(snapshot.Comparison).toBeNull();
+    expect(snapshot.Guidance).toBeNull();
+    expect(snapshot.TotalMaxDays).toBeNull();
   });
 });
