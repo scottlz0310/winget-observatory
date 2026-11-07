@@ -49,7 +49,7 @@ jobs:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
           DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
-        run: bun run scripts/sync-dropbox.ts --direction download --allow-skip
+        run: bun run scripts/sync-dropbox.ts --direction download
 
       - name: Run Winget Observatory Scripts
         shell: pwsh
@@ -86,7 +86,7 @@ jobs:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
           DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
-        run: bun run scripts/sync-dropbox.ts --direction upload --allow-skip
+        run: bun run scripts/sync-dropbox.ts --direction upload
 
       - name: Build Dashboard for GitHub Pages
         run: bun run scripts/build-pages.ts --data-dir data --output-dir site

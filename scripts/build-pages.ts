@@ -60,6 +60,7 @@ interface LatestDepths {
   HealthyBottom?: DepthsItem[];
   AbsoluteBottom?: DepthsItem[];
   ExpressLane?: DepthsItem[];
+  StaleBottom?: DepthsItem[];
   StrandedCandidates?: DepthsItem[];
 }
 
@@ -403,12 +404,12 @@ function generateHtml(
         `,
           )
           .join("")}
-        ${(depths?.StrandedCandidates ?? [])
+        ${(depths?.StaleBottom ?? depths?.StrandedCandidates ?? [])
           .slice(0, 3)
           .map(
             (item) => `
         <tr>
-          <td><span class="badge" style="background:#fee2e2;color:#b91c1c;">⚠️ 遭難候補</span></td>
+          <td><span class="badge" style="background:#fee2e2;color:#b91c1c;">⚠️ 遭難・放置の底</span></td>
           <td><a href="${escapeHtml(item.Url)}" target="_blank">#${escapeHtml(item.Number)}</a></td>
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
           <td>${escapeHtml(item.更新日時 || item.UpdatedAt)}</td>

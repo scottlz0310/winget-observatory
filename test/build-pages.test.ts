@@ -36,6 +36,15 @@ describe("buildDashboard", () => {
           Url: "https://github.com/microsoft/winget-pkgs/pull/110000",
         },
       ],
+      StaleBottom: [
+        {
+          Number: 449320,
+          Title: "Stale package",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/449320",
+          作成日時: "2026-10-09 13:39",
+          更新日時: "2026-10-09 14:54",
+        },
+      ],
     };
     writeFileSync(join(dataDir, "latest-depths.json"), JSON.stringify(dummyDepths), "utf-8");
 
@@ -54,6 +63,8 @@ describe("buildDashboard", () => {
       expect(html).toContain("120000");
       expect(html).toContain("110000");
       expect(html).toContain("Deepest PR");
+      expect(html).toContain("449320");
+      expect(html).toContain("Stale package");
       expect(html).toContain("Winget Observatory Dashboard");
 
       // site/data へのコピーも確認

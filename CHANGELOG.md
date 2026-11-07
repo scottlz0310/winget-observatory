@@ -12,7 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/lib/dropbox.ts`, `scripts/lib/redact.ts`: 外部依存なしで動作する Dropbox App Folder 連携クライアントおよび機密情報サニタイズ処理
 - `scripts/sync-dropbox.ts`: `data/` 配下の観測メトリクス（CSV, JSONL, JSON）と Dropbox App Folder の自動同期スクリプト
 - `scripts/build-pages.ts`: 観測データからレスポンシブな Web ダッシュボード（`site/index.html`）を生成する HTML ビルドスクリプト
-- ユニットテスト群（`test/dropbox.test.ts`, `test/redact.test.ts`, `test/build-pages.test.ts`）
+- ユニットテスト群（`test/dropbox.test.ts`, `test/redact.test.ts`, `test/build-pages.test.ts`, `test/sync-dropbox.test.ts`）
+
+### Fixed
+
+- `scripts/build-pages.ts`: キュー境界探索の遭難・放置の底の参照キーを `StrandedCandidates` から出力契約である `StaleBottom` へ修正し、ダッシュボード HTML への表示欠落を解消
+- `.github/workflows/observe.yml`: 定期観測時の Dropbox 同期ステップから `--allow-skip` を撤廃し、資格情報未設定時に永続化をスキップして Pages 公開へ進まないよう非ゼロ終了を保証
 
 ### Changed
 
