@@ -3,72 +3,25 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { DEFAULT_REPOSITORY, DEFAULT_TARGET_PR } from "../src/cli/args";
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
   parseTimestampToMs,
 } from "../src/domain/dashboard";
+import { parseCsvRows } from "../src/domain/progress";
 import type { HistoryRecord } from "../src/models/dashboard";
+import type { DepthsSnapshot } from "../src/models/depths";
+import type { ProgressHistoryRow, ProgressSnapshot } from "../src/models/progress";
 
 interface BuildOptions {
   dataDir: string;
   outputDir: string;
 }
 
-interface LatestProgress {
-  Timestamp?: string;
-  TimestampJst?: string;
-  Repository?: string;
-  TargetPr?: number;
-  PrTitle?: string;
-  PrUrl?: string;
-  PrState?: string;
-  FrontNumber?: number;
-  FrontCreatedAt?: string;
-  ActiveAhead?: number;
-  TotalAhead?: number;
-  Behind?: number;
-  TotalLifetimeDays?: number;
-  TurnLatencyDays?: number;
-  WaitDays?: number;
-  CommitCount?: number;
-  TotalMedianDays?: number | null;
-  TotalP75Days?: number | null;
-  TurnMedianDays?: number | null;
-  TurnP75Days?: number | null;
-  ReadyMedianDays?: number | null;
-  ReadyP75Days?: number | null;
-}
-
-interface DepthsItem {
-  PR?: string;
-  Number?: number;
-  作成日時?: string;
-  更新日時?: string;
-  CreatedAt?: string;
-  UpdatedAt?: string;
-  タイトル?: string;
-  Title?: string;
-  Url?: string;
-}
-
-interface LatestDepths {
-  Timestamp?: string;
-  TimestampJst?: string;
-  Repository?: string;
-  TargetPr?: {
-    Number?: number;
-    Title?: string;
-    Url?: string;
-    CreatedAt?: string;
-    CreatedAtJst?: string;
-  };
-  HealthyBottom?: DepthsItem[];
-  AbsoluteBottom?: DepthsItem[];
-  ExpressLane?: DepthsItem[];
-  StaleBottom?: DepthsItem[];
-  StrandedCandidates?: DepthsItem[];
-}
+/** スナップショットは部分的なファイルも許容して描画する（欠けた値は「-」表示） */
+type LatestProgress = Partial<ProgressSnapshot>;
+type LatestDepths = Partial<DepthsSnapshot>;
 
 function parseArgs(): BuildOptions {
   const args = process.argv.slice(2);
@@ -87,32 +40,10 @@ function parseArgs(): BuildOptions {
   return { dataDir, outputDir };
 }
 
-function parseCsv(csvText: string): Array<Record<string, string>> {
-  const lines = csvText
-    .trim()
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0);
-  if (lines.length < 2) return [];
-
-  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
-  const rows: Array<Record<string, string>> = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
-    const row: Record<string, string> = {};
-    for (let j = 0; j < headers.length; j++) {
-      row[headers[j]] = values[j] ?? "";
-    }
-    rows.push(row);
-  }
-
-  return rows;
-}
-
-function csvRowsToHistoryRecords(csvRows: Array<Record<string, string>>): HistoryRecord[] {
+function csvRowsToHistoryRecords(csvRows: ProgressHistoryRow[]): HistoryRecord[] {
   return csvRows
     .map((row) => {
-      const timestamp = row.Timestamp ?? "";
+      const timestamp = row.Timestamp;
       const timestampMs = parseTimestampToMs(timestamp);
       const targetPr = Number(row.TargetPr) || 0;
       const frontNumber = Number(row.FrontNumber) || 0;
@@ -147,17 +78,9 @@ function escapeHtml(str: string | number | undefined | null): string {
     .replace(/'/g, "&#039;");
 }
 
-function formatNumber(num: number | undefined | null): string {
-  if (num === undefined || num === null || Number.isNaN(num)) return "-";
-  return num.toLocaleString();
-}
-
-function parseOptionalNumber(primary: unknown, fallback: unknown): number | null | undefined {
-  const val = primary !== undefined ? primary : fallback;
-  if (val === undefined) return undefined;
-  if (val === null || val === "") return null;
-  const num = Number(val);
-  return Number.isNaN(num) ? null : num;
+function formatNumber(num: number | string | undefined | null): string {
+  if (num === undefined || num === null || num === "" || Number.isNaN(Number(num))) return "-";
+  return Number(num).toLocaleString();
 }
 
 function renderBadgeHtml(badge: { text: string; className: string; label: string }): string {
@@ -174,11 +97,11 @@ function formatDaysStat(val: number | null | undefined): string {
 function generateHtml(
   progress: LatestProgress | null,
   depths: LatestDepths | null,
-  csvRows: Array<Record<string, string>>,
+  csvRows: ProgressHistoryRow[],
 ): string {
   const updatedJst = progress?.TimestampJst || depths?.TimestampJst || "未観測";
-  const repo = progress?.Repository || depths?.Repository || "microsoft/winget-pkgs";
-  const targetPrNum = progress?.TargetPr || depths?.TargetPr?.Number || 464302;
+  const repo = progress?.Repository || depths?.Repository || DEFAULT_REPOSITORY;
+  const targetPrNum = progress?.TargetPr || depths?.TargetPr?.Number || DEFAULT_TARGET_PR;
   const targetTitle = progress?.PrTitle || depths?.TargetPr?.Title || "";
   const targetUrl =
     progress?.PrUrl || depths?.TargetPr?.Url || `https://github.com/${repo}/pull/${targetPrNum}`;
@@ -186,7 +109,7 @@ function generateHtml(
   const targetCreatedAt =
     depths?.TargetPr?.CreatedAtJst || depths?.TargetPr?.CreatedAt || undefined;
   const frontCreatedAt = progress?.FrontCreatedAt || undefined;
-  const currentActiveAhead = progress?.ActiveAhead ?? 0;
+  const currentActiveAhead = Number(progress?.ActiveAhead) || 0;
 
   const historyRecords = csvRowsToHistoryRecords(csvRows);
   const metrics = calculateDashboardMetrics(
@@ -591,7 +514,7 @@ function generateHtml(
         `,
           )
           .join("")}
-        ${(depths?.StaleBottom ?? depths?.StrandedCandidates ?? [])
+        ${(depths?.StaleBottom ?? [])
           .slice(0, 3)
           .map(
             (item) => `
@@ -675,96 +598,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   let progress: LatestProgress | null = null;
   if (existsSync(progressPath)) {
     try {
-      const raw = JSON.parse(readFileSync(progressPath, "utf-8")) as Record<string, unknown>;
-      progress = {
-        Timestamp: String(raw.Timestamp ?? raw.timestamp ?? ""),
-        TimestampJst: String(raw.TimestampJst ?? raw.timestampJst ?? ""),
-        Repository: String(raw.Repository ?? raw.repository ?? ""),
-        TargetPr:
-          raw.TargetPr !== undefined
-            ? Number(raw.TargetPr)
-            : raw.targetPr !== undefined
-              ? Number(raw.targetPr)
-              : undefined,
-        PrTitle:
-          raw.PrTitle !== undefined
-            ? String(raw.PrTitle)
-            : raw.prTitle !== undefined
-              ? String(raw.prTitle)
-              : undefined,
-        PrUrl:
-          raw.PrUrl !== undefined
-            ? String(raw.PrUrl)
-            : raw.prUrl !== undefined
-              ? String(raw.prUrl)
-              : undefined,
-        PrState:
-          raw.PrState !== undefined
-            ? String(raw.PrState)
-            : raw.prState !== undefined
-              ? String(raw.prState)
-              : undefined,
-        FrontNumber:
-          raw.FrontNumber !== undefined
-            ? Number(raw.FrontNumber)
-            : raw.frontNumber !== undefined
-              ? Number(raw.frontNumber)
-              : undefined,
-        FrontCreatedAt:
-          raw.FrontCreatedAt !== undefined
-            ? String(raw.FrontCreatedAt)
-            : raw.frontCreatedAt !== undefined
-              ? String(raw.frontCreatedAt)
-              : undefined,
-        ActiveAhead:
-          raw.ActiveAhead !== undefined
-            ? Number(raw.ActiveAhead)
-            : raw.activeAhead !== undefined
-              ? Number(raw.activeAhead)
-              : undefined,
-        TotalAhead:
-          raw.TotalAhead !== undefined
-            ? Number(raw.TotalAhead)
-            : raw.totalAhead !== undefined
-              ? Number(raw.totalAhead)
-              : undefined,
-        Behind:
-          raw.Behind !== undefined
-            ? Number(raw.Behind)
-            : raw.behind !== undefined
-              ? Number(raw.behind)
-              : undefined,
-        TotalLifetimeDays:
-          raw.TotalLifetimeDays !== undefined
-            ? Number(raw.TotalLifetimeDays)
-            : raw.totalLifetimeDays !== undefined
-              ? Number(raw.totalLifetimeDays)
-              : undefined,
-        TurnLatencyDays:
-          raw.TurnLatencyDays !== undefined
-            ? Number(raw.TurnLatencyDays)
-            : raw.turnLatencyDays !== undefined
-              ? Number(raw.turnLatencyDays)
-              : undefined,
-        WaitDays:
-          raw.WaitDays !== undefined
-            ? Number(raw.WaitDays)
-            : raw.waitDays !== undefined
-              ? Number(raw.waitDays)
-              : undefined,
-        CommitCount:
-          raw.CommitCount !== undefined
-            ? Number(raw.CommitCount)
-            : raw.commitCount !== undefined
-              ? Number(raw.commitCount)
-              : undefined,
-        TotalMedianDays: parseOptionalNumber(raw.TotalMedianDays, raw.totalMedianDays),
-        TotalP75Days: parseOptionalNumber(raw.TotalP75Days, raw.totalP75Days),
-        TurnMedianDays: parseOptionalNumber(raw.TurnMedianDays, raw.turnMedianDays),
-        TurnP75Days: parseOptionalNumber(raw.TurnP75Days, raw.turnP75Days),
-        ReadyMedianDays: parseOptionalNumber(raw.ReadyMedianDays, raw.readyMedianDays),
-        ReadyP75Days: parseOptionalNumber(raw.ReadyP75Days, raw.readyP75Days),
-      };
+      progress = JSON.parse(readFileSync(progressPath, "utf-8")) as LatestProgress;
     } catch (e) {
       console.warn(`[Build Pages] ${progressPath} の読み込みに失敗しました:`, e);
     }
@@ -779,10 +613,10 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     }
   }
 
-  let csvRows: Array<Record<string, string>> = [];
+  let csvRows: ProgressHistoryRow[] = [];
   if (existsSync(csvPath)) {
     try {
-      csvRows = parseCsv(readFileSync(csvPath, "utf-8"));
+      csvRows = parseCsvRows(readFileSync(csvPath, "utf-8"));
     } catch (e) {
       console.warn(`[Build Pages] ${csvPath} の読み込みに失敗しました:`, e);
     }

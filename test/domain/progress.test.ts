@@ -10,7 +10,6 @@ import {
   INVESTIGATION_LABELS,
   isBlockedLabel,
   isEligibleLabels,
-  migrateCsvRecord,
   parseCsvRows,
   serializeCsvRows,
   simulateReadySince,
@@ -127,12 +126,7 @@ describe("Domain: simulateReadySince", () => {
       },
     ];
 
-    const readyAt = simulateReadySince(
-      events,
-      ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
-      false,
-      new Date("2026-11-02T00:00:00Z"),
-    );
+    const readyAt = simulateReadySince(events, false, new Date("2026-11-02T00:00:00Z"));
 
     expect(readyAt).not.toBeNull();
     expect(readyAt?.toISOString()).toBe("2026-11-01T12:00:00.000Z");
@@ -165,31 +159,10 @@ describe("Domain: simulateReadySince", () => {
       },
     ];
 
-    const readyAt = simulateReadySince(
-      events,
-      ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
-      false,
-      new Date("2026-11-04T00:00:00Z"),
-    );
+    const readyAt = simulateReadySince(events, false, new Date("2026-11-04T00:00:00Z"));
 
     expect(readyAt).not.toBeNull();
     expect(readyAt?.toISOString()).toBe("2026-11-03T10:00:00.000Z");
-  });
-
-  test("isFinalValidation = true の場合に現在状態と履歴が不一致なら例外を投げる", () => {
-    const events: ProgressTimelineEvent[] = [
-      { event: "labeled", created_at: "2026-11-01T10:00:00Z", label: { name: "New-Package" } },
-    ];
-
-    expect(() =>
-      simulateReadySince(
-        events,
-        ["New-Package", "Validation-Completed"],
-        false,
-        new Date("2026-11-02T00:00:00Z"),
-        true,
-      ),
-    ).toThrow("ラベル履歴と現在状態が一致しません。");
   });
 });
 
@@ -274,7 +247,10 @@ describe("Domain: CSV and Snapshot helpers", () => {
       WaitDays: "3.2",
     };
 
-    const migrated = migrateCsvRecord(oldRow);
+    const header = Object.keys(oldRow).join(",");
+    const [migrated] = parseCsvRows(`${header}
+${Object.values(oldRow).join(",")}
+`);
     expect(migrated.TotalLifetimeDays).toBe("");
     expect(migrated.TurnLatencyDays).toBe("");
     expect(migrated.WaitDays).toBe("3.2");

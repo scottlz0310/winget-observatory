@@ -46,15 +46,6 @@ export interface CalendarGapMetrics {
   targetCreatedAt: string | null;
 }
 
-export interface PercentileStats {
-  totalMedianDays?: number;
-  totalP75Days?: number;
-  turnMedianDays?: number;
-  turnP75Days?: number;
-  readyMedianDays?: number;
-  readyP75Days?: number;
-}
-
 export interface DashboardCalculatedMetrics {
   latestDelta: DeltaMetrics;
   velocity: VelocityMetrics;

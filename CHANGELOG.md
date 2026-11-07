@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/cli/args.ts`: 各 CLI に複製されていた引数検証（値の取得・後続フラグの誤消費防止・整数範囲・基準 PR の環境変数解決）と、既定の基準 PR・リポジトリの定数を共通化。`progress` / `explore-depths` / `build-pages` に散在していたハードコードを置換し、`test/cli/args.test.ts` を追加（Issue #18）
+- `scripts/build-pages.ts`: `models/` の型（`ProgressSnapshot` / `DepthsSnapshot` / `ProgressHistoryRow`）と `domain` の `parseCsvRows` を再利用するよう変更し、独自の型定義・CSV パーサ・数値整形の重複を削減。数値が空欄の項目を `0` ではなく `-` と表示（Issue #18）
 - `.github/workflows/observe.yml`: 定期メトリクス収集ステップを PowerShell (`pwsh`) から Bun / TypeScript スクリプト（`src/cli/progress.ts`, `src/cli/explore-depths.ts`, `src/cli/generate-summary.ts`）のネイティブ実行へ刷新し、外部プロセス依存を完全排除
 - `README.md`: PowerShell スクリプトから Bun / TypeScript CLI コマンド（`bun run progress`, `bun run explore:depths`, `bun run summary`）への案内へ更新
 - `scripts/lib/dropbox.ts`: Dropbox アプリフォルダー内の二重階層を解消するため、保存先プレフィックス `DROPBOX_ROOT` を `/winget-observatory/` から `/data/` へ変更。移行互換用として旧プレフィックス `LEGACY_DROPBOX_ROOT`（`/winget-observatory/`）の読み取りを許容
@@ -55,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- 未使用・互換目的のコードを削除（Issue #18）: `progress` の `--queue-limit`（パース・検証のみで未使用）、`simulateReadySince` の `isFinalValidation` / `currentLabels`、`migrateCsvRecord`（内部の `toHistoryRow` へ）、`PercentileStats`、`build-pages.ts` の camelCase キー互換正規化と `StrandedCandidates` 互換
 - レガシーな PowerShell 計測スクリプト群（`scripts/progress-winget.ps1`, `scripts/explore-winget-depths.ps1`, `scripts/generate-summary.ps1`, `scripts/check-syntax.ps1`）および PowerShell テスト群（`tests/*.ps1`）を TypeScript 化に伴い完全退役
 - `.github/workflows/ci.yml` および `lefthook.yml` から PowerShell 構文検査と PSScriptAnalyzer 検査ステップを退役（Biome & TypeScript Tests に一本化）
 
