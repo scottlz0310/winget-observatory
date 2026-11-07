@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/models/depths.ts`, `src/domain/depths.ts`, `src/api/github.ts`, `src/cli/explore-depths.ts`: キュー境界探索（`explore-winget-depths`）の TypeScript (Bun) 実装を追加（Issue #7 Phase 1）。I/O 非依存の純粋関数ドメイン、Bun 標準 fetch による GitHub API クライアント、および JSONL/JSON 永続化 CLI を配備
+- `test/domain/depths.test.ts`, `test/api/github.test.ts`, `test/cli/explore-depths.test.ts`: キュー境界探索のドメインロジック、API クライアント、CLI 動作の単体テストを追加
 - `test/architecture.test.ts`: `src/domain` および `src/models` の境界違反（外部 I/O 依存、暗黙の環境変数依存、レイヤー逆参照）をホワイトリスト方式で機械的に検知するアーキテクチャ境界テストを追加
 - `scripts/lib/dropbox.ts`, `scripts/lib/redact.ts`: 外部依存なしで動作する Dropbox App Folder 連携クライアントおよび機密情報サニタイズ処理
 - `scripts/sync-dropbox.ts`: `data/` 配下の観測メトリクス（CSV, JSONL, JSON）と Dropbox App Folder の自動同期スクリプト
