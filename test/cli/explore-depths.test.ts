@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient } from "../../src/api/github";
-import { parseArgs, runExploreDepths } from "../../src/cli/explore-depths";
+import { parseArgs, resolveDefaultDataDir, runExploreDepths } from "../../src/cli/explore-depths";
 import type { GitHubPrView, GitHubSearchItem } from "../../src/models/depths";
 
 describe("CLI: explore-depths", () => {
@@ -96,6 +96,60 @@ describe("CLI: explore-depths", () => {
       expect(savedLine.Repository).toBe("microsoft/winget-pkgs");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("parseArgs は不正な引数や欠落、フラグの誤消費を厳格に拒否する", () => {
+    // 1. --target-pr に数値以外を指定した場合
+    expect(() => parseArgs(["--target-pr", "abc"])).toThrow(
+      "--target-pr に無効な値が指定されました: abc",
+    );
+    expect(() => parseArgs(["--target-pr", "-1"])).toThrow();
+
+    // 2. 引数の値が欠落している場合
+    expect(() => parseArgs(["--target-pr"])).toThrow(
+      "--target-pr オプションには正の整数の値が必要です",
+    );
+    expect(() => parseArgs(["--repository"])).toThrow(
+      "--repository オプションにはリポジトリ名 (owner/repo) の値が必要です",
+    );
+    expect(() => parseArgs(["--output-path"])).toThrow(
+      "--output-path オプションにはファイルパスが必要です",
+    );
+
+    // 3. 値を取るフラグの直後に別のフラグが来て誤消費されるケース
+    expect(() => parseArgs(["--output-path", "--no-history"])).toThrow(
+      "--output-path オプションにはファイルパスが必要です",
+    );
+    expect(() => parseArgs(["--target-pr", "--no-target-pr"])).toThrow(
+      "--target-pr オプションには正の整数の値が必要です",
+    );
+
+    // 4. 未知のオプション
+    expect(() => parseArgs(["--unknown-flag"])).toThrow(
+      "未知の引数が指定されました: --unknown-flag",
+    );
+  });
+
+  test("既定の保存先は実行時の cwd ではなくリポジトリルートの data/ を起点に解決する", () => {
+    const tempWorkingDir = mkdtempSync(join(tmpdir(), "winget-depths-external-cwd-"));
+    const originalCwd = process.cwd();
+
+    const expectedRepoDataDir = join(__dirname, "../../data");
+
+    try {
+      // 1. 通常の cwd で解決されるパスの確認
+      const defaultDir1 = resolveDefaultDataDir();
+      expect(defaultDir1).toBe(expectedRepoDataDir);
+
+      // 2. repo 外の外部ディレクトリを cwd に変更した場合でも、常にリポジトリルートの data/ を指すこと
+      process.chdir(tempWorkingDir);
+      const defaultDir2 = resolveDefaultDataDir();
+      expect(defaultDir2).toBe(expectedRepoDataDir);
+      expect(defaultDir2).not.toBe(join(tempWorkingDir, "data"));
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(tempWorkingDir, { recursive: true, force: true });
     }
   });
 

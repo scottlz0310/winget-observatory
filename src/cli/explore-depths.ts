@@ -17,9 +17,18 @@ import type {
 } from "../models/depths";
 
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
-  let targetPr = process.env.WINGET_TARGET_PR
-    ? Number.parseInt(process.env.WINGET_TARGET_PR, 10)
-    : 464302;
+  let targetPr = 464302;
+  if (process.env.WINGET_TARGET_PR) {
+    const envVal = process.env.WINGET_TARGET_PR;
+    const parsed = Number.parseInt(envVal, 10);
+    if (Number.isNaN(parsed) || parsed <= 0 || !/^\d+$/.test(envVal)) {
+      throw new Error(
+        `無効な環境変数 WINGET_TARGET_PR です: ${envVal}（正の整数を指定してください）`,
+      );
+    }
+    targetPr = parsed;
+  }
+
   let repository = process.env.WINGET_REPOSITORY ?? "microsoft/winget-pkgs";
   let outputPath: string | undefined = process.env.WINGET_DEPTHS_OUTPUT_PATH;
   let historyPath: string | undefined = process.env.WINGET_DEPTHS_HISTORY_PATH;
@@ -29,13 +38,32 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--target-pr" && i + 1 < argv.length) {
-      targetPr = Number.parseInt(argv[++i], 10);
-    } else if (arg === "--repository" && i + 1 < argv.length) {
+    if (arg === "--target-pr") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("--target-pr オプションには正の整数の値が必要です");
+      }
+      const val = argv[++i];
+      const parsed = Number.parseInt(val, 10);
+      if (Number.isNaN(parsed) || parsed <= 0 || !/^\d+$/.test(val)) {
+        throw new Error(
+          `--target-pr に無効な値が指定されました: ${val}（正の整数を指定してください）`,
+        );
+      }
+      targetPr = parsed;
+    } else if (arg === "--repository") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("--repository オプションにはリポジトリ名 (owner/repo) の値が必要です");
+      }
       repository = argv[++i];
-    } else if (arg === "--output-path" && i + 1 < argv.length) {
+    } else if (arg === "--output-path") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("--output-path オプションにはファイルパスが必要です");
+      }
       outputPath = argv[++i];
-    } else if (arg === "--history-path" && i + 1 < argv.length) {
+    } else if (arg === "--history-path") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("--history-path オプションにはファイルパスが必要です");
+      }
       historyPath = argv[++i];
     } else if (arg === "--no-target-pr") {
       noTargetPr = true;
@@ -43,6 +71,8 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
       noHistory = true;
     } else if (arg === "--as-json") {
       asJson = true;
+    } else {
+      throw new Error(`未知の引数が指定されました: ${arg}`);
     }
   }
 
@@ -65,6 +95,14 @@ function printRowTable(rows: DepthsRow[]): void {
   for (const row of rows) {
     console.log(`  ${row.PR.padEnd(8)} | ${row.作成日時} | ${row.更新日時} | ${row.タイトル}`);
   }
+}
+
+/**
+ * 既定の data/ ディレクトリをエントリポイント位置からリポジトリルートを起点に解決する
+ */
+export function resolveDefaultDataDir(): string {
+  const repoRoot = resolve(import.meta.dirname, "../..");
+  return resolve(repoRoot, "data");
 }
 
 /**
@@ -169,7 +207,8 @@ export async function runExploreDepths(
     log(JSON.stringify(snapshot, null, 2));
   }
 
-  const defaultDataDir = resolve(process.cwd(), "data");
+  // 既定の data/ ディレクトリはエントリポイント位置（src/cli/explore-depths.ts）を起点にリポジトリルートから解決する
+  const defaultDataDir = resolveDefaultDataDir();
 
   // 1. JSONL 履歴ファイルへの追記（蓄積）
   if (!options.noHistory) {

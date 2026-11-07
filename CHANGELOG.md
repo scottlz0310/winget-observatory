@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `src/cli/explore-depths.ts`: 既定のデータ保存先が実行時 cwd 依存になっていた問題を解消し、エントリポイント位置からリポジトリルートの `data/` を起点に解決するよう修正
+- `src/cli/explore-depths.ts`: `--target-pr` の NaN や負数の許容、値の欠落、後続フラグの誤消費、および未知の引数を厳格に拒否するバリデーションを追加
 - `scripts/build-pages.ts`: キュー境界探索の遭難・放置の底の参照キーを `StrandedCandidates` から出力契約である `StaleBottom` へ修正し、ダッシュボード HTML への表示欠落を解消
 - `.github/workflows/observe.yml`: 定期観測時の Dropbox 同期ステップから `--allow-skip` を撤廃し、資格情報未設定時に永続化をスキップして Pages 公開へ進まないよう非ゼロ終了を保証
 
