@@ -22,13 +22,15 @@ import type {
   ProgressSnapshot,
 } from "../models/progress";
 
+/** 履歴 CSV の ActiveAhead の算出基準（更新順）。基準が変わったら値を変え、旧基準の行との前回比を避ける */
+const QUEUE_BASIS = "updated";
+
 export interface ProgressCliOptions {
   targetPr: number;
   repository: string;
   lookbackDays: number;
   sampleSize: number;
   fetchLimit: number;
-  staleDays: number;
   queueLimit: number;
   logPath?: string;
   snapshotPath?: string;
@@ -53,7 +55,6 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
   let lookbackDays = 30;
   let sampleSize = 30;
   let fetchLimit = 1000;
-  let staleDays = 14;
   let queueLimit = 500;
   let logPath: string | undefined = process.env.WINGET_LOG_PATH;
   let snapshotPath: string | undefined = process.env.WINGET_SNAPSHOT_PATH;
@@ -104,11 +105,6 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
         throw new Error("--fetch-limit オプションには値が必要です");
       }
       fetchLimit = parseBoundedInt(argv[++i], "fetch-limit", 1, 1000);
-    } else if (arg === "--stale-days") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--stale-days オプションには値が必要です");
-      }
-      staleDays = parseBoundedInt(argv[++i], "stale-days", 1, 365);
     } else if (arg === "--queue-limit") {
       if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
         throw new Error("--queue-limit オプションには値が必要です");
@@ -139,7 +135,6 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
     lookbackDays,
     sampleSize,
     fetchLimit,
-    staleDays,
     queueLimit,
     logPath,
     snapshotPath,
@@ -268,11 +263,8 @@ export async function runProgressCli(
 
   const baseParts = buildHealthyQueryParts(options.repository);
 
-  // 1. 前線（健康な最古の未マージ PR）と、自 PR より前に並ぶ健康な PR の内訳（実質待ち / 放置）
+  // 1. 前線（健康な最古の未マージ PR）と、自 PR より前に並ぶ健康な PR 数
   const createdIso = created.toISOString();
-  const staleCutoffIso = new Date(
-    now.getTime() - options.staleDays * 24 * 60 * 60 * 1000,
-  ).toISOString();
   const eligibleQuery = baseParts.join(" ");
 
   const frontRes = await client.searchIssuesDetailed(eligibleQuery, "created", "asc", 1);
@@ -282,18 +274,19 @@ export async function runProgressCli(
   }
   const allTotal = frontRes.totalCount;
 
+  // 作成順での累積待ち
   const aheadQuery = `${eligibleQuery} created:<${createdIso}`;
   const aheadRes = await client.searchIssuesDetailed(aheadQuery, "created", "desc", 15);
   const aheadTotal = aheadRes.totalCount;
 
-  const staleRes = await client.searchIssuesDetailed(
-    `${aheadQuery} updated:<${staleCutoffIso}`,
+  // 実質待ち: 指摘なく順番待ちをしている PR は更新が止まっているため、更新順が実際の待ち順位になる
+  const updatedAheadRes = await client.searchIssuesDetailed(
+    `${eligibleQuery} updated:<${new Date(pr.updatedAt).toISOString()}`,
     "updated",
     "asc",
     1,
   );
-  const staleAheadCount = staleRes.totalCount;
-  const activeAheadCount = Math.max(0, aheadTotal - staleAheadCount);
+  const activeAheadCount = updatedAheadRes.totalCount;
 
   // 2. 直前ライバル PR 抽出
   const rivals: ProgressRivalPr[] = [];
@@ -419,7 +412,6 @@ export async function runProgressCli(
   const queueInfo: ProgressQueueInfo = {
     front: { number: frontItem.number, createdAt: frontItem.created_at },
     activeAheadCount,
-    staleAheadCount,
     aheadCount: aheadTotal,
     totalCount: allTotal,
     behindCount,
@@ -430,8 +422,8 @@ export async function runProgressCli(
   log("----------------------------------------");
   log("【現在のレビュー待ち行列（実質的な待ち人数）】");
 
-  // 前回行が旧定義（StaleAhead 列なし）の場合、定義が異なるため前回比は出さない
-  const prev = prevRecord && prevRecord.StaleAhead !== "" ? prevRecord : null;
+  // 前回行が旧定義（QueueBasis 列なし）の場合、ActiveAhead の定義が異なるため前回比は出さない
+  const prev = prevRecord && prevRecord.QueueBasis === QUEUE_BASIS ? prevRecord : null;
   const front = queueInfo.front;
   let frontDeltaText = "";
   if (prev && prev.FrontNumber !== "") {
@@ -454,15 +446,11 @@ export async function runProgressCli(
     `消化前線（最古の健康なPR）  : #${front.number} (作成: ${formatDateTimeWithDay(front.createdAt)})${frontDeltaText}`,
   );
   log(
-    `実質待ちPR（放置を除く）   : 約 ${queueInfo.activeAheadCount} 件${deltaOf(queueInfo.activeAheadCount, prev?.ActiveAhead)} （あなたのPRより前で、直近 ${options.staleDays} 日以内に更新あり）`,
+    `実質待ちPR（更新順の順位）  : 約 ${queueInfo.activeAheadCount} 件${deltaOf(queueInfo.activeAheadCount, prev?.ActiveAhead)} （あなたのPRより更新が古い健康なPR。指摘なく順番待ちしているPR）`,
   );
   log(
-    `放置滞留PR（遭難）         : 約 ${queueInfo.staleAheadCount} 件${deltaOf(queueInfo.staleAheadCount, prev?.StaleAhead)} （あなたのPRより前で、${options.staleDays} 日以上更新なし）`,
+    `全期間の累積待ちPR (参考) : 約 ${queueInfo.aheadCount} 件${deltaOf(queueInfo.aheadCount, prev?.TotalAhead)} （作成順であなたより前の健康なPR）`,
   );
-  log(
-    `全期間の累積待ちPR (参考) : 約 ${queueInfo.aheadCount} 件${deltaOf(queueInfo.aheadCount, prev?.TotalAhead)} （実質待ち + 放置滞留）`,
-  );
-
   log(
     `あなたの後ろに並ぶ準備完了PR: 約 ${queueInfo.behindCount} 件${deltaOf(queueInfo.behindCount, prev?.Behind)}`,
   );
@@ -499,8 +487,6 @@ export async function runProgressCli(
     frontCreatedAt: frontCreatedVal,
     activeAhead: queueInfo.activeAheadCount,
     totalAhead: queueInfo.aheadCount,
-    staleAhead: queueInfo.staleAheadCount,
-    staleDays: options.staleDays,
     behind: queueInfo.behindCount,
     totalLifetimeDays,
     turnLatencyDays,
@@ -522,7 +508,7 @@ export async function runProgressCli(
       FrontCreatedAt: frontCreatedVal,
       ActiveAhead: queueInfo.activeAheadCount,
       TotalAhead: queueInfo.aheadCount,
-      StaleAhead: queueInfo.staleAheadCount,
+      QueueBasis: QUEUE_BASIS,
       Behind: queueInfo.behindCount,
       TotalLifetimeDays: Number(totalLifetimeDays.toFixed(2)),
       TurnLatencyDays: Number(turnLatencyDays.toFixed(2)),

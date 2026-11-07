@@ -37,12 +37,15 @@ bun run progress --target-pr 464302
 bun run progress --target-pr 464302 --log-path "data/progress-history.csv" --snapshot-path "data/latest-progress.json"
 ```
 
+**主なオプション:** `--target-pr` / `--repository`（別名 `--repo`）/ `--lookback-days`（既定 30）/ `--sample-size`（既定 30）/ `--fetch-limit`（既定 1000）/ `--log-path` / `--snapshot-path` / `--as-json`（スナップショットを標準出力へ）/ `--no-log`（履歴 CSV **と** スナップショットの保存を行わない）
+
+基準 PR が観測対象外（クローズ済み・Draft・必須ラベル不足・阻害ラベルあり）の場合は、履歴もスナップショットも記録せずに終了します（GitHub Actions 上では warning を出力）。
+
 **計測項目:**
 
 - **消化前線**: 健康的な未マージ PR の中で最も古い PR 番号と起票日
-- **実質待ち件数**: 対象 PR より前に起票された健康的な未マージ PR のうち、直近 N 日（既定 14、`--stale-days`）以内に更新があるもの
-- **放置滞留件数**: 同じく対象 PR より前の健康的な未マージ PR のうち、N 日以上更新が止まっているもの（遭難・放置）
-- **累積待ち件数**: 実質待ち + 放置滞留（対象 PR より前に起票された健康的な未マージ PR の総数）
+- **実質待ち件数**: 更新順で対象 PR より前に並ぶ健康的な未マージ PR の件数（指摘なく順番待ちを続ける PR の待ち順位。更新があった PR は順位が後ろへ動く）
+- **累積待ち件数**: 作成順で対象 PR より前に起票された、条件を満たす未マージ PR の総数（過去の滞留分を含む全期間。検索 API のヒット件数）
 - **通算待機日数 (Total)** / **レビュー待ち時間 (Turn)** / **条件成立後待機 (Ready)**
 - **マージ実績との比較**: 過去サンプルの中央値（Median）および 75%点（P75）との比較
 
@@ -58,11 +61,15 @@ bun run explore:depths
 bun run explore:depths --output-path "data/latest-depths.json"
 ```
 
+**主なオプション:** `--target-pr` / `--repository` / `--output-path` / `--history-path` / `--as-json` / `--no-history`（JSONL 追記なし）/ `--no-target-pr`（基準 PR なしの全体観測）
+
+基準 PR の取得に失敗した場合は、基準 PR 無しのデータを履歴へ残さないよう中断します。基準 PR なしで実行したいときは `--no-target-pr` を明示してください。
+
 **スキャン境界:**
 
 1. **健康的な大底 (Healthy Bottom)**: CI 通過・エラーなしの健康体で、現在最も古いオープン PR（FIFO の正当な先頭）
 2. **真の大底 (Absolute Bottom)**: 状態やエラーを問わず、未クローズの New-Package で最も古い PR
-3. **遭難・放置の底 (Stale Bottom)**: 健康体の中で更新日時（updated）が最も古く、完全に止まっている PR
+3. **遭難の底 (Stale Bottom)**: 健康体の中で更新日時（updated）が最も古い PR。指摘が一度も付かず、すぐ健康になって順番を待つだけの PR（基準 PR と同じ種類）で、このキューの実質的な先頭。上位 10 件を記録し、推移から進み具合を見る
 4. **特急レーン・追い越し (Express Lane)**: 基準 PR 起票日以降に起票され、すでにマージされた PR
 
 ---
@@ -78,6 +85,7 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 - **Dropbox App Folder による生データ永続化**:
   - 収集された CSV / JSONL / JSON は、`scripts/sync-dropbox.ts` を通じて Dropbox の専用 App Folder（`/data/`）へ自動同期・蓄積されます。
   - Git リポジトリ（`main` ブランチ）への直接 push を全廃し、厳格なブランチ保護ルールを維持します。
+  - リポジトリ内の `data/` は旧運用（main への自動コミット）時点のスナップショットで、現在は更新されません。定期実行はワークフロー開始時に Dropbox から最新の履歴を取得して `data/` を上書きします（ローカル実行時の初期データとして残しています）。
 
 ### 自動化・連携スクリプト
 
@@ -113,7 +121,7 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 
 ### 前提ツール
 
-- [Bun](https://bun.sh/)（v1.2+、スクリプト実行・テスト・Biome / Lefthook 実行用）
+- [Bun](https://bun.sh/)（バージョンは `.bun-version` に従う。スクリプト実行・テスト・Biome / Lefthook 実行用）
 - [GitHub CLI (gh)](https://cli.github.com/)（必要に応じて PR / Issue 操作用）
 
 ```bash

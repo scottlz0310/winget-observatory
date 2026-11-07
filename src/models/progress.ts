@@ -16,6 +16,7 @@ export interface ProgressPrDetail {
   state: "OPEN" | "CLOSED" | "MERGED";
   isDraft: boolean;
   createdAt: string;
+  updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
   labels: string[];
@@ -40,11 +41,12 @@ export interface ProgressRivalPr {
 export interface ProgressQueueInfo {
   /** 前線: 条件を満たす未マージ PR のうち最も古いもの */
   front: { number: number; createdAt: string };
-  /** 自 PR より前の健康な PR のうち、放置扱いではないもの（実質待ち） */
+  /**
+   * 実質待ち: 更新順で自 PR より前に並ぶ健康な PR の数。
+   * 指摘なく健康になり順番を待つだけの PR の待ち順位で、更新があった PR は順位が後ろへ動く。
+   */
   activeAheadCount: number;
-  /** 自 PR より前の健康な PR のうち、更新が staleDays 日以上止まっているもの */
-  staleAheadCount: number;
-  /** 自 PR より前の健康な PR の総数（= 実質待ち + 放置） */
+  /** 作成順で自 PR より前の健康な PR の総数 */
   aheadCount: number;
   totalCount: number;
   behindCount: number;
@@ -86,8 +88,8 @@ export interface ProgressHistoryRow {
   FrontCreatedAt: string;
   ActiveAhead: number | string;
   TotalAhead: number | string;
-  /** 旧スキーマの行では空文字 */
-  StaleAhead: number | string;
+  /** ActiveAhead の算出基準。"updated"（更新順）。旧スキーマの行では空文字 */
+  QueueBasis: string;
   Behind: number | string;
   TotalLifetimeDays: number | string;
   TurnLatencyDays: number | string;
@@ -107,9 +109,6 @@ export interface ProgressSnapshot {
   FrontCreatedAt: string;
   ActiveAhead: number;
   TotalAhead: number;
-  StaleAhead: number;
-  /** 放置と判定する未更新日数のしきい値 */
-  StaleDays: number;
   Behind: number;
   TotalLifetimeDays: number;
   TurnLatencyDays: number;

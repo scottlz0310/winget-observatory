@@ -306,8 +306,6 @@ describe("Domain: CSV and Snapshot helpers", () => {
       frontCreatedAt: "2026-11-06 12:00",
       activeAhead: 15,
       totalAhead: 100,
-      staleAhead: 85,
-      staleDays: 14,
       behind: 10,
       totalLifetimeDays: 2.3456,
       turnLatencyDays: 1.2345,

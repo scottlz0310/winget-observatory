@@ -122,7 +122,7 @@ export class DropboxClient {
   }
 
   /**
-   * アプリフォルダー内の path（/winget-observatory/...）へテキストをアップロード（上書き）
+   * アプリフォルダー内の path（/data/...）へテキストをアップロード（上書き）
    */
   async upload(path: string, content: string | Uint8Array): Promise<UploadResult> {
     assertSafePath(path);
@@ -169,7 +169,7 @@ export class DropboxClient {
   }
 
   /**
-   * アプリフォルダー内の path（/winget-observatory/...）からテキストをダウンロード。
+   * アプリフォルダー内の path（/data/...）からテキストをダウンロード。
    * ファイルが存在しない場合は undefined を返す。
    */
   async download(path: string): Promise<string | undefined> {

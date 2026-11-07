@@ -124,6 +124,7 @@ describe("CLI: runProgressCli with mock client", () => {
         state: "CLOSED" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: "2026-11-02T00:00:00Z",
         labels: [],
@@ -139,7 +140,6 @@ describe("CLI: runProgressCli with mock client", () => {
         lookbackDays: 30,
         sampleSize: 30,
         fetchLimit: 1000,
-        staleDays: 14,
         queueLimit: 500,
         noLog: true,
         asJson: false,
@@ -162,6 +162,7 @@ describe("CLI: runProgressCli with mock client", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels: ["New-Package"], // 2つ不足
@@ -177,7 +178,6 @@ describe("CLI: runProgressCli with mock client", () => {
         lookbackDays: 30,
         sampleSize: 30,
         fetchLimit: 1000,
-        staleDays: 14,
         queueLimit: 500,
         noLog: true,
         asJson: false,
@@ -204,6 +204,7 @@ describe("CLI: runProgressCli with mock client", () => {
           state: "OPEN" as const,
           isDraft: false,
           createdAt: "2026-11-01T00:00:00Z",
+          updatedAt: "2026-11-01T00:00:00Z",
           mergedAt: null,
           closedAt: null,
           labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
@@ -255,7 +256,6 @@ describe("CLI: runProgressCli with mock client", () => {
           lookbackDays: 30,
           sampleSize: 30,
           fetchLimit: 1000,
-          staleDays: 14,
           queueLimit: 500,
           logPath,
           snapshotPath,
@@ -304,6 +304,7 @@ describe("CLI: runProgressCli with mock client", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
@@ -402,7 +403,6 @@ describe("CLI: runProgressCli with mock client", () => {
         lookbackDays: 30,
         sampleSize: 10,
         fetchLimit: 200,
-        staleDays: 14,
         queueLimit: 500,
         noLog: true,
         asJson: false,
@@ -421,7 +421,7 @@ describe("CLI: runProgressCli with mock client", () => {
   });
 });
 
-describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
+describe("CLI: 前線・実質待ち（更新順）の算出", () => {
   const labels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
   const frontItem = {
     number: 100,
@@ -441,6 +441,7 @@ describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels,
@@ -455,7 +456,7 @@ describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
       searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
         queries.push(query);
         if (query.includes("is:merged")) return { totalCount: 0, items: [] };
-        if (query.includes("updated:<")) return { totalCount: 40, items: [] };
+        if (query.includes("updated:<")) return { totalCount: 60, items: [] };
         if (query.includes("created:<")) return { totalCount: 100, items: [] };
         return { totalCount: 150, items: [frontItem] };
       },
@@ -467,12 +468,11 @@ describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
     lookbackDays: 30,
     sampleSize: 30,
     fetchLimit: 1000,
-    staleDays: 14,
     queueLimit: 500,
     asJson: false,
   };
 
-  test("前線は最古の健康な未マージ PR とし、実質待ちを放置滞留と分離する", async () => {
+  test("前線は最古の健康な未マージ PR、実質待ちは更新順で自 PR より前の健康な PR 数とする", async () => {
     const queries: string[] = [];
     const res = await runProgressCli(
       { ...baseOptions, noLog: true },
@@ -483,17 +483,16 @@ describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
     expect(res.snapshot).toMatchObject({
       FrontNumber: 100,
       TotalAhead: 100,
-      StaleAhead: 40,
       ActiveAhead: 60,
       Behind: 49,
-      StaleDays: 14,
     });
-    // 放置は「自 PR より前」かつ「更新が staleDays 日以上前」の健康な PR で数える
-    const staleQuery = queries.find((q) => q.includes("updated:<")) ?? "";
-    expect(staleQuery).toContain("created:<2026-11-01T00:00:00.000Z");
+    // 指摘なく順番待ちしている PR は更新が止まっているため、基準 PR の更新時刻より前に更新された健康な PR を数える
+    const updatedQuery = queries.find((q) => q.includes("updated:<")) ?? "";
+    expect(updatedQuery).toContain("updated:<2026-11-01T00:00:00.000Z");
+    expect(updatedQuery).not.toContain("created:<");
   });
 
-  test("前回行が旧定義（StaleAhead 列なし）の場合は定義が異なるため前回比を出さない", async () => {
+  test("前回行が旧定義（QueueBasis 列なし）の場合は定義が異なるため前回比を出さない", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-"));
     try {
       const logPath = join(tmpDir, "progress-history.csv");
@@ -515,9 +514,9 @@ describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
       );
 
       expect(logs.some((l) => l.includes("前回比"))).toBeFalse();
-      // 新しい行は StaleAhead 列を含み、旧行は空欄のまま温存される
+      // 新しい行は QueueBasis 列を含み、旧行は空欄のまま温存される
       const csv = readFileSync(logPath, "utf-8");
-      expect(csv.split("\n")[0]).toContain('"StaleAhead"');
+      expect(csv.split("\n")[0]).toContain('"QueueBasis"');
       expect(csv).toContain('"447466"');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -531,8 +530,8 @@ describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
       writeFileSync(
         logPath,
         [
-          '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","StaleAhead"',
-          '"2026-11-06 23:22:44","200","90","2026-08-01 10:00","70","115","50","9","9","9","1","45"',
+          '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"',
+          '"2026-11-06 23:22:44","200","90","2026-08-01 10:00","70","115","50","9","9","9","1","updated"',
           "",
         ].join("\n"),
         "utf-8",
@@ -546,7 +545,6 @@ describe("CLI: 前線・実質待ち・放置滞留の算出", () => {
       );
 
       expect(logs.find((l) => l.startsWith("実質待ちPR"))).toContain("[前回比 -10 件]");
-      expect(logs.find((l) => l.startsWith("放置滞留PR"))).toContain("[前回比 -5 件]");
       expect(logs.find((l) => l.startsWith("消化前線"))).toContain("[前回 #90 から +10 件前進]");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -576,6 +574,7 @@ describe("CLI: progress のコミット表示", () => {
         state: "OPEN" as const,
         isDraft: false,
         createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
         mergedAt: null,
         closedAt: null,
         labels,
@@ -621,7 +620,6 @@ describe("CLI: progress のコミット表示", () => {
         lookbackDays: 30,
         sampleSize: 30,
         fetchLimit: 1000,
-        staleDays: 14,
         queueLimit: 500,
         noLog: true,
         asJson: false,

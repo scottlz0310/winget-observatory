@@ -16,7 +16,7 @@ import type {
   TargetPrInfo,
 } from "../models/depths";
 
-/** 放置の底として取得・表示する件数 */
+/** 遭難の底（更新が最も古い健康な PR）として取得・表示する件数 */
 const STALE_BOTTOM_LIMIT = 10;
 
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
@@ -156,7 +156,7 @@ export async function runExploreDepths(
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
-  // 3. 遭難・放置の底（Stale Bottom）
+  // 3. 遭難の底（Stale Bottom）: 指摘なく健康になり、そのまま順番を待っている PR の先頭
   const staleItems = await client.searchIssues(healthyBase, "updated", "asc", STALE_BOTTOM_LIMIT);
   const staleBottom = staleItems.map(formatDepthsRow);
 
@@ -179,8 +179,8 @@ export async function runExploreDepths(
     printRowTable(absoluteBottom);
     log("");
 
-    log("【3. 遭難・放置の底 (Stale Bottom)】");
-    log("説明: 健康体の中で更新日時(updated)が最も古く、完全に止まっているPR");
+    log("【3. 遭難の底 (Stale Bottom)】");
+    log("説明: 健康体の中で更新日時(updated)が最も古い、指摘なく順番待ちを続けているPR");
     printRowTable(staleBottom);
     log("");
 

@@ -128,7 +128,7 @@ export function isEligibleLabels(labels: Iterable<string>): boolean {
 }
 
 /**
- * パーセンタイル値を線形補間（R-6 / Excel PERCENTILE.INC 相当）で算出する。
+ * パーセンタイル値を線形補間（R-7 / Excel PERCENTILE.INC 相当）で算出する。
  */
 export function getPercentile(values: number[], percentile: number): number {
   if (values.length === 0) {
@@ -364,7 +364,7 @@ export function migrateCsvRecord(raw: Record<string, string>): ProgressHistoryRo
     FrontCreatedAt: raw.FrontCreatedAt ?? "",
     ActiveAhead: raw.ActiveAhead ?? "",
     TotalAhead: raw.TotalAhead ?? "",
-    StaleAhead: raw.StaleAhead ?? "",
+    QueueBasis: raw.QueueBasis ?? "",
     Behind: raw.Behind ?? "",
     TotalLifetimeDays: raw.TotalLifetimeDays ?? "",
     TurnLatencyDays: raw.TurnLatencyDays ?? "",
@@ -389,7 +389,7 @@ export function serializeCsvRows(rows: ProgressHistoryRow[]): string {
     "TurnLatencyDays",
     "WaitDays",
     "CommitCount",
-    "StaleAhead",
+    "QueueBasis",
   ];
 
   const headerLine = headers.map((h) => `"${h}"`).join(",");
@@ -416,8 +416,6 @@ export function createProgressSnapshot(params: {
   frontCreatedAt: string;
   activeAhead: number;
   totalAhead: number;
-  staleAhead: number;
-  staleDays: number;
   behind: number;
   totalLifetimeDays: number;
   turnLatencyDays: number;
@@ -436,8 +434,6 @@ export function createProgressSnapshot(params: {
     frontCreatedAt,
     activeAhead,
     totalAhead,
-    staleAhead,
-    staleDays,
     behind,
     totalLifetimeDays,
     turnLatencyDays,
@@ -458,8 +454,6 @@ export function createProgressSnapshot(params: {
     FrontCreatedAt: frontCreatedAt,
     ActiveAhead: activeAhead,
     TotalAhead: totalAhead,
-    StaleAhead: staleAhead,
-    StaleDays: staleDays,
     Behind: behind,
     TotalLifetimeDays: Number(totalLifetimeDays.toFixed(2)),
     TurnLatencyDays: Number(turnLatencyDays.toFixed(2)),
