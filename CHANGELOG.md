@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `test/architecture.test.ts`: `src/domain` および `src/models` の境界違反（外部 I/O 依存、暗黙の環境変数依存、レイヤー逆参照）をホワイトリスト方式で機械的に検知するアーキテクチャ境界テストを追加
 - `scripts/lib/dropbox.ts`, `scripts/lib/redact.ts`: 外部依存なしで動作する Dropbox App Folder 連携クライアントおよび機密情報サニタイズ処理
 - `scripts/sync-dropbox.ts`: `data/` 配下の観測メトリクス（CSV, JSONL, JSON）と Dropbox App Folder の自動同期スクリプト
 - `scripts/build-pages.ts`: 観測データからレスポンシブな Web ダッシュボード（`site/index.html`）を生成する HTML ビルドスクリプト
