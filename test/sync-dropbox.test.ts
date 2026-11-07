@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { downloadMetricsFiles } from "../scripts/sync-dropbox";
 
 describe("sync-dropbox CLI credentials validation", () => {
   const scriptPath = resolve(__dirname, "../scripts/sync-dropbox.ts");
@@ -42,5 +45,61 @@ describe("sync-dropbox CLI credentials validation", () => {
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain("同期をスキップします");
+  });
+});
+
+describe("downloadMetricsFiles with legacy fallback", () => {
+  test("新パス優先および旧パスへのフォールバック取得が正常に動作する", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-sync-test-"));
+    const requestedPaths: string[] = [];
+
+    const mockClient = {
+      download: async (path: string): Promise<string | undefined> => {
+        requestedPaths.push(path);
+        // 新パス /data/ に存在するファイル
+        if (path === "/data/progress-history.csv") {
+          return "timestamp,pr\n2026-11-07,123\n";
+        }
+        // 新パスにはなく、旧パス /winget-observatory/ にのみ存在するファイル
+        if (path === "/winget-observatory/depths-history.jsonl") {
+          return '{"time":"2026-11-07","pr":456}\n';
+        }
+        // どちらにも存在しないファイル
+        return undefined;
+      },
+    };
+
+    try {
+      const summary = await downloadMetricsFiles(
+        mockClient,
+        tempDir,
+        ["progress-history.csv", "depths-history.jsonl", "latest-progress.json"],
+        () => {},
+      );
+
+      // progress-history.csv は新パスから取得
+      expect(summary.downloaded).toEqual(["progress-history.csv"]);
+      expect(readFileSync(join(tempDir, "progress-history.csv"), "utf-8")).toBe(
+        "timestamp,pr\n2026-11-07,123\n",
+      );
+
+      // depths-history.jsonl は新パスが undefined で旧パスからフォールバック取得
+      expect(summary.fallback).toEqual(["depths-history.jsonl"]);
+      expect(readFileSync(join(tempDir, "depths-history.jsonl"), "utf-8")).toBe(
+        '{"time":"2026-11-07","pr":456}\n',
+      );
+
+      // latest-progress.json は両方存在せずスキップ
+      expect(summary.skipped).toEqual(["latest-progress.json"]);
+
+      // 要求されたパス順序の確認
+      expect(requestedPaths).toContain("/data/progress-history.csv");
+      expect(requestedPaths).toContain("/data/depths-history.jsonl");
+      expect(requestedPaths).toContain("/winget-observatory/depths-history.jsonl");
+      expect(requestedPaths).toContain("/data/latest-progress.json");
+      expect(requestedPaths).toContain("/winget-observatory/latest-progress.json");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

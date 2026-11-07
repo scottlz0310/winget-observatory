@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `scripts/lib/dropbox.ts`: Dropbox アプリフォルダー内の二重階層を解消するため、保存先プレフィックス `DROPBOX_ROOT` を `/winget-observatory/` から `/data/` へ変更。移行互換用として旧プレフィックス `LEGACY_DROPBOX_ROOT`（`/winget-observatory/`）の読み取りを許容
+- `scripts/sync-dropbox.ts`: 新パス `/data/` にファイルが存在しない場合に旧パス `/winget-observatory/` から履歴データを自動取得・引き継ぐフォールバック機能（`downloadMetricsFiles`）を追加し、手動移行作業不要のシームレスな移行を保証
 - `.github/workflows/observe.yml`: `main` 直 push を全廃し、Dropbox への生データ保存および `actions/deploy-pages` による GitHub Pages 直接デプロイへ刷新（ブランチ保護ルールを完全遵守）
 - `.github/workflows/ci.yml`: `bun test` による TypeScript ユニットテストステップを追加
 - `package.json`: `test`, `build:pages`, `sync:dropbox` スクリプトを追加

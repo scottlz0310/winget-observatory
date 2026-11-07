@@ -2,15 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { assertSafePath, DropboxClient, describeSecretShape } from "../scripts/lib/dropbox";
 
 describe("assertSafePath", () => {
-  test("正しいプレフィックス配下の安全なパスを受け入れる", () => {
+  test("正しいプレフィックス（/data/ および移行互換 /winget-observatory/）配下の安全なパスを受け入れる", () => {
+    expect(() => assertSafePath("/data/progress-history.csv")).not.toThrow();
+    expect(() => assertSafePath("/data/sub/data.json")).not.toThrow();
     expect(() => assertSafePath("/winget-observatory/progress-history.csv")).not.toThrow();
-    expect(() => assertSafePath("/winget-observatory/sub/data.json")).not.toThrow();
   });
 
   test("プレフィックス外やドットセグメントを含むパスを拒否する", () => {
     expect(() => assertSafePath("/other/path.csv")).toThrow();
+    expect(() => assertSafePath("/unknown/test.csv")).toThrow();
+    expect(() => assertSafePath("/data/../hack.csv")).toThrow();
+    expect(() => assertSafePath("/data/./hack.csv")).toThrow();
     expect(() => assertSafePath("/winget-observatory/../hack.csv")).toThrow();
-    expect(() => assertSafePath("/winget-observatory/./hack.csv")).toThrow();
   });
 });
 
@@ -52,7 +55,7 @@ describe("DropboxClient with mock fetch", () => {
         expect(auth).toBe("Bearer mock-access-token");
         return new Response(
           JSON.stringify({
-            path_display: "/winget-observatory/test.txt",
+            path_display: "/data/test.txt",
             size: 12,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -66,10 +69,10 @@ describe("DropboxClient with mock fetch", () => {
       fetch: mockFetch,
     });
 
-    const result = await client.upload("/winget-observatory/test.txt", "Hello World!");
+    const result = await client.upload("/data/test.txt", "Hello World!");
     expect(tokenFetched).toBe(true);
     expect(fileUploaded).toBe(true);
-    expect(result.path).toBe("/winget-observatory/test.txt");
+    expect(result.path).toBe("/data/test.txt");
     expect(result.size).toBe(12);
   });
 
@@ -98,7 +101,7 @@ describe("DropboxClient with mock fetch", () => {
       fetch: mockFetch,
     });
 
-    const content = await client.download("/winget-observatory/not-found.txt");
+    const content = await client.download("/data/not-found.txt");
     expect(content).toBeUndefined();
   });
 });

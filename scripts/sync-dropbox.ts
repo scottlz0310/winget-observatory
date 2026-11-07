@@ -3,7 +3,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DROPBOX_ROOT, DropboxClient } from "./lib/dropbox";
+import { DROPBOX_ROOT, DropboxClient, LEGACY_DROPBOX_ROOT } from "./lib/dropbox";
 
 interface SyncOptions {
   direction: "upload" | "download";
@@ -45,6 +45,70 @@ function parseArgs(): SyncOptions {
   }
 
   return { direction, dataDir, dryRun, allowSkip };
+}
+
+export interface DownloadSummary {
+  downloaded: string[];
+  fallback: string[];
+  skipped: string[];
+}
+
+/**
+ * Dropbox からメトリクスファイルをダウンロードする。
+ * 新プレフィックス (/data/) に存在しない場合は旧プレフィックス (/winget-observatory/) からのフォールバック引き継ぎを行う。
+ */
+export async function downloadMetricsFiles(
+  client: Pick<DropboxClient, "download">,
+  dataDir: string,
+  targetFiles: string[] = TARGET_FILES,
+  log: (msg: string) => void = console.log,
+): Promise<DownloadSummary> {
+  if (!existsSync(dataDir)) {
+    mkdirSync(dataDir, { recursive: true });
+  }
+
+  const summary: DownloadSummary = {
+    downloaded: [],
+    fallback: [],
+    skipped: [],
+  };
+
+  for (const filename of targetFiles) {
+    const remotePath = `${DROPBOX_ROOT}${filename}`;
+    const localPath = join(dataDir, filename);
+
+    log(`[Dropbox Sync] ダウンロード確認中: ${remotePath}...`);
+    let content = await client.download(remotePath);
+    let fromFallback = false;
+
+    if (content === undefined) {
+      // 移行用フォールバック: 新パスにない場合、旧パス (/winget-observatory/) からの引き継ぎを試みる
+      const legacyRemotePath = `${LEGACY_DROPBOX_ROOT}${filename}`;
+      log(
+        `[Dropbox Sync] 新パスにファイルが存在しないため、旧パスを確認中: ${legacyRemotePath}...`,
+      );
+      content = await client.download(legacyRemotePath);
+      if (content !== undefined) {
+        fromFallback = true;
+        log(`[Dropbox Sync] 旧パスから履歴データを正常に取得・引き継ぎました: ${legacyRemotePath}`);
+      }
+    }
+
+    if (content !== undefined) {
+      writeFileSync(localPath, content, "utf-8");
+      log(`[Dropbox Sync] 保存完了: ${localPath} (${content.length} bytes)`);
+      if (fromFallback) {
+        summary.fallback.push(filename);
+      } else {
+        summary.downloaded.push(filename);
+      }
+    } else {
+      log(`[Dropbox Sync] リモートにファイルが存在しません（スキップ）: ${remotePath}`);
+      summary.skipped.push(filename);
+    }
+  }
+
+  return summary;
 }
 
 async function main(): Promise<void> {
@@ -107,33 +171,25 @@ async function main(): Promise<void> {
     }
   } else {
     // download
-    if (!existsSync(options.dataDir)) {
-      mkdirSync(options.dataDir, { recursive: true });
-    }
-
-    for (const filename of TARGET_FILES) {
-      const remotePath = `${DROPBOX_ROOT}${filename}`;
-      const localPath = join(options.dataDir, filename);
-
-      if (options.dryRun) {
-        console.log(`[DryRun] ダウンロード予定: ${remotePath} -> ${localPath}`);
-      } else {
-        console.log(`[Dropbox Sync] ダウンロード確認中: ${remotePath}...`);
-        const content = await client.download(remotePath);
-        if (content !== undefined) {
-          writeFileSync(localPath, content, "utf-8");
-          console.log(`[Dropbox Sync] 保存完了: ${localPath} (${content.length} bytes)`);
-        } else {
-          console.log(`[Dropbox Sync] リモートにファイルが存在しません（スキップ）: ${remotePath}`);
-        }
+    if (options.dryRun) {
+      for (const filename of TARGET_FILES) {
+        console.log(
+          `[DryRun] ダウンロード予定: ${DROPBOX_ROOT}${filename} -> ${join(options.dataDir, filename)}`,
+        );
       }
+    } else {
+      await downloadMetricsFiles(client, options.dataDir, TARGET_FILES, console.log);
     }
   }
 
   console.log("[Dropbox Sync] すべての処理が完了しました。");
 }
 
-main().catch((err) => {
-  console.error(`[Dropbox Sync 致命的エラー]: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(
+      `[Dropbox Sync 致命的エラー]: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(1);
+  });
+}
