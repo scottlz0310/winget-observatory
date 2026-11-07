@@ -69,6 +69,7 @@ export function formatTargetPrInfo(view: GitHubPrView): TargetPrInfo {
     Url: view.url,
     CreatedAt: view.createdAt,
     CreatedAtJst: formatJstDateTime(view.createdAt, false),
+    UpdatedAt: view.updatedAt,
   };
 }
 

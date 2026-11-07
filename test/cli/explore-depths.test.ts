@@ -52,6 +52,7 @@ describe("CLI: explore-depths", () => {
         title: "Target PR title",
         url: `https://github.com/microsoft/winget-pkgs/pull/${prNumber}`,
         createdAt: "2026-10-15T00:00:00Z",
+        updatedAt: "2026-10-16T00:00:00Z",
       }),
       searchIssues: async (query: string): Promise<GitHubSearchItem[]> => {
         searchQueries.push(query);

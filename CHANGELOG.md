@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `scripts/build-pages.ts`: 遭難の底（更新が古い順の健康な PR 上位 10 件と更新からの経過）を専用の表として追加し、「指摘なく順番待ちする PR の先頭」として説明（Issue #18）
+- `src/domain/forecast.ts`, `src/models/forecast.ts`: 遭難の底（更新が最も古い健康な PR。指摘なく順番待ちをする基準 PR と同種の PR）の推移から基準 PR のマージ時期を予想するモデルを追加（Issue #18）。先頭の遅れが一定とする「定常待ち時間モデル」と、履歴から先頭の進み（日/日）を実測する「観測速度モデル」を並列に算出し、進みが観測できない場合は理由付きで算出不能とする。`depths-history.jsonl` のパースと観測列の抽出も純粋関数として提供
+- `src/api/github.ts`, `src/domain/depths.ts`, `src/models/depths.ts`: キュー境界スナップショットの基準 PR 情報に最終更新時刻（`UpdatedAt`）を追加（予想モデルの入力）
 - `tsconfig.json`, `package.json`, `.github/workflows/ci.yml`, `lefthook.yml`: strict な型チェック（`tsc --noEmit`、`bun run typecheck`）を導入し、CI と pre-commit に組み込み（Issue #18）
 - `src/models/dashboard.ts`, `src/domain/dashboard.ts`: ダッシュボード算出メトリクス（直近24時間の消化速度 Velocity・到着予測 ETA、前回観測比の増減差分 Δ、前線と自 PR の起票日カレンダー距離、実績所要日数パーセンタイル集計）を算出するドメイン純粋関数および型定義を追加（Issue #12）
 - `test/domain/dashboard.test.ts`: ダッシュボード算出メトリクスの単体テストを追加
