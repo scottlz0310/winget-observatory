@@ -73,15 +73,21 @@
 
 ---
 
-## データ蓄積と GitHub Actions
+## データ蓄積と自動化（GitHub Actions / Dropbox / GitHub Pages）
 
-GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/workflows/observe.yml)）により、4時間おきに自動でメトリクスを収集し、リポジトリにコミットします。
+GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/workflows/observe.yml)）により、4時間おきに自動でメトリクスを収集・公開します。
 
-- **`SUMMARY.md`**: 最新のキュー状況・Mermaid フローチャート・統計比較・直近推移をまとめた人間向けダッシュボード
-- **`data/progress-history.csv`**: 時系列の進捗推移ログ（前線PR、実質待ち、累積待ち、待機日数推移）
-- **`data/depths-history.jsonl`**: キュー境界（各底のPRスキャン結果）の時系列追記ログ（1行1JSON）
-- **`data/latest-progress.json`**: 最新実行時の進捗構造化スナップショット
-- **`data/latest-depths.json`**: 最新実行時の境界探索スナップショット
+- **GitHub Pages によるダッシュボード公開**:
+  - `scripts/build-pages.ts` により生成された HTML ダッシュボードが GitHub Pages へ直接デプロイされます。
+  - `actions/deploy-pages` を使用するため、Git コミットや `gh-pages` ブランチの作成を行わずクリーンに公開されます。
+- **Dropbox App Folder による生データ永続化**:
+  - 収集された CSV / JSONL / JSON は、`scripts/sync-dropbox.ts` を通じて Dropbox の専用 App Folder（`/winget-observatory/`）へ自動同期・蓄積されます。
+  - Git リポジトリ（`main` ブランチ）への直接 push を全廃し、厳格なブランチ保護ルールを維持します。
+
+### 自動化・連携スクリプト
+
+- **`scripts/build-pages.ts`**: 観測データからレスポンシブな Web ダッシュボード（`site/index.html`）を生成
+- **`scripts/sync-dropbox.ts`**: `data/` 配下のメトリクスと Dropbox App Folder の安全なアップロード／ダウンロード同期
 
 ---
 

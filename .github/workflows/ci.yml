@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   biome:
-    name: Biome (Docs & Configs)
+    name: Biome & TypeScript Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -29,6 +29,9 @@ jobs:
 
       - name: Lint と Formatting を検査
         run: bun run check
+
+      - name: ユニットテストを実行
+        run: bun test
 
   powershell:
     name: PowerShell Validation

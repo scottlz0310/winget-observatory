@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/lib/dropbox.ts`, `scripts/lib/redact.ts`: 外部依存なしで動作する Dropbox App Folder 連携クライアントおよび機密情報サニタイズ処理
+- `scripts/sync-dropbox.ts`: `data/` 配下の観測メトリクス（CSV, JSONL, JSON）と Dropbox App Folder の自動同期スクリプト
+- `scripts/build-pages.ts`: 観測データからレスポンシブな Web ダッシュボード（`site/index.html`）を生成する HTML ビルドスクリプト
+- ユニットテスト群（`test/dropbox.test.ts`, `test/redact.test.ts`, `test/build-pages.test.ts`）
+
+### Changed
+
+- `.github/workflows/observe.yml`: `main` 直 push を全廃し、Dropbox への生データ保存および `actions/deploy-pages` による GitHub Pages 直接デプロイへ刷新（ブランチ保護ルールを完全遵守）
+- `.github/workflows/ci.yml`: `bun test` による TypeScript ユニットテストステップを追加
+- `package.json`: `test`, `build:pages`, `sync:dropbox` スクリプトを追加
+- `README.md`: Dropbox 連携および GitHub Pages による自動化運用に関するドキュメントを更新
+
 ## [0.1.0] - 2026-11-06
 
 ### Changed
