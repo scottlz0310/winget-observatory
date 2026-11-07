@@ -2,6 +2,7 @@
 node_modules/
 bun.lockb
 site/
+coverage/
 
 # Temporary & backup files
 *.tmp
