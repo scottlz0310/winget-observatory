@@ -32,6 +32,7 @@ jobs:
   observe:
     name: Collect Metrics, Save to Dropbox & Deploy Dashboard
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -78,10 +79,6 @@ jobs:
             --repository "$WINGET_REPOSITORY" \
             --history-path "data/depths-history.jsonl" \
             --output-path "data/latest-depths.json"
-
-          # 3. ダッシュボードまとめドキュメント（SUMMARY.md）の生成
-          echo "=== Running generate-summary CLI ==="
-          bun run src/cli/generate-summary.ts --output-path "SUMMARY.md"
 
       - name: Save updated metrics to Dropbox
         env:

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join, resolve } from "node:path";
 import { DROPBOX_ROOT, DropboxClient, LEGACY_DROPBOX_ROOT } from "./lib/dropbox";
 
-interface SyncOptions {
+export interface SyncOptions {
   direction: "upload" | "download";
   dataDir: string;
   dryRun: boolean;
@@ -19,29 +19,42 @@ const TARGET_FILES = [
   "latest-depths.json",
 ];
 
-function parseArgs(): SyncOptions {
-  const args = process.argv.slice(2);
-  let direction: "upload" | "download" = "upload";
-  let dataDir = resolve(process.cwd(), "data");
+export function parseArgs(args: string[], cwd: string = process.cwd()): SyncOptions {
+  let direction: "upload" | "download" | undefined;
+  let dataDir = resolve(cwd, "data");
   let dryRun = false;
   let allowSkip = false;
 
+  const requireValue = (i: number, name: string): string => {
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("-")) {
+      throw new Error(`${name} オプションには値が必要です`);
+    }
+    return value;
+  };
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--direction" && i + 1 < args.length) {
-      const val = args[++i];
-      if (val === "upload" || val === "download") {
-        direction = val;
-      } else {
+    if (arg === "--direction") {
+      const val = requireValue(i++, arg);
+      if (val !== "upload" && val !== "download") {
         throw new Error(`無効な direction: ${val}（upload または download を指定）`);
       }
-    } else if (arg === "--data-dir" && i + 1 < args.length) {
-      dataDir = resolve(process.cwd(), args[++i]);
+      direction = val;
+    } else if (arg === "--data-dir") {
+      dataDir = resolve(cwd, requireValue(i++, arg));
     } else if (arg === "--dry-run") {
       dryRun = true;
     } else if (arg === "--allow-skip") {
       allowSkip = true;
+    } else {
+      throw new Error(`未知のオプションです: ${arg}`);
     }
+  }
+
+  // リモートを上書きし得る upload を暗黙の既定にしない
+  if (direction === undefined) {
+    throw new Error("--direction オプション（upload または download）が必要です");
   }
 
   return { direction, dataDir, dryRun, allowSkip };
@@ -112,7 +125,7 @@ export async function downloadMetricsFiles(
 }
 
 async function main(): Promise<void> {
-  const options = parseArgs();
+  const options = parseArgs(process.argv.slice(2));
   console.log(`[Dropbox Sync] モード: ${options.direction}, 対象ディレクトリ: ${options.dataDir}`);
 
   const appKey = process.env.DROPBOX_APP_KEY;

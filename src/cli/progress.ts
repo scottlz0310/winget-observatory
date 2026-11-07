@@ -2,13 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
 import {
-  BLOCKED_LABELS,
+  buildHealthyQueryParts,
   calculateProgressStats,
   createProgressSnapshot,
   formatDateTimeWithDay,
   formatDelta,
   formatHumanDays,
-  INVESTIGATION_LABELS,
   isBlockedLabel,
   parseCsvRows,
   REQUIRED_LABELS,
@@ -29,6 +28,9 @@ import {
   readOptionValue,
   resolveDefaultTargetPr,
 } from "./args";
+
+/** 履歴 CSV の ActiveAhead の算出基準（更新順）。基準が変わったら値を変え、旧基準の行との前回比を避ける */
+const QUEUE_BASIS = "updated";
 
 export interface ProgressCliOptions {
   targetPr: number;
@@ -132,12 +134,8 @@ export async function runProgressCli(
     const commitMsg = latestCommit?.messageHeadline ? ` - ${latestCommit.messageHeadline}` : "";
     const shortOid = latestCommit?.oid ? latestCommit.oid.substring(0, 7) : "";
     log(
-      `レビュー待ち時間 (Turn)    : ${formatHumanDays(turnLatencyDays)} [最新コミット: ${formatDateTimeWithDay(latestCommittedDate)} (${commitCount} コミット目: ${shortOid}${commitDetail(commitMsg)})]`,
+      `レビュー待ち時間 (Turn)    : ${formatHumanDays(turnLatencyDays)} [最新コミット: ${formatDateTimeWithDay(latestCommittedDate)} (${commitCount} コミット目: ${shortOid}${commitMsg})]`,
     );
-  }
-
-  function commitDetail(msg: string): string {
-    return msg ? ` - ${msg}` : "";
   }
 
   if (pr.state !== "OPEN") {
@@ -198,8 +196,11 @@ export async function runProgressCli(
       if (pastHistory.length > 0) {
         prevRecord = pastHistory[pastHistory.length - 1];
       }
-    } catch {
-      // 読み込み失敗時は新規作成として継続
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`履歴ファイルの読み込みに失敗しました (${historyCsvPath}): ${msg}`, {
+        cause: err,
+      });
     }
   }
 
@@ -207,21 +208,32 @@ export async function runProgressCli(
   const sinceDate = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
   const sinceIso = sinceDate.toISOString();
 
-  const baseParts = [
-    `repo:${options.repository}`,
-    "is:pr",
-    "is:open",
-    "draft:false",
-    ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
-    ...BLOCKED_LABELS.map((b) => `-label:"${b}"`),
-    ...INVESTIGATION_LABELS.map((inv) => `-label:"${inv}"`),
-  ];
+  const baseParts = buildHealthyQueryParts(options.repository);
 
-  // 1. 全期間の累積待ちPR検索
+  // 1. 前線（健康な最古の未マージ PR）と、自 PR より前に並ぶ健康な PR 数
   const createdIso = created.toISOString();
-  const aheadQuery = `${baseParts.join(" ")} created:<${createdIso}`;
+  const eligibleQuery = baseParts.join(" ");
+
+  const frontRes = await client.searchIssuesDetailed(eligibleQuery, "created", "asc", 1);
+  const frontItem = frontRes.items[0];
+  if (!frontItem) {
+    throw new Error("前線（条件を満たす最古の未マージ PR）を検索結果から特定できませんでした。");
+  }
+  const allTotal = frontRes.totalCount;
+
+  // 作成順での累積待ち
+  const aheadQuery = `${eligibleQuery} created:<${createdIso}`;
   const aheadRes = await client.searchIssuesDetailed(aheadQuery, "created", "desc", 15);
   const aheadTotal = aheadRes.totalCount;
+
+  // 実質待ち: 指摘なく順番待ちをしている PR は更新が止まっているため、更新順が実際の待ち順位になる
+  const updatedAheadRes = await client.searchIssuesDetailed(
+    `${eligibleQuery} updated:<${new Date(pr.updatedAt).toISOString()}`,
+    "updated",
+    "asc",
+    1,
+  );
+  const activeAheadCount = updatedAheadRes.totalCount;
 
   // 2. 直前ライバル PR 抽出
   const rivals: ProgressRivalPr[] = [];
@@ -286,7 +298,6 @@ export async function runProgressCli(
 
   const samples: MergedCandidateSample[] = [];
   let skipped = 0;
-  let failed = 0;
 
   for (const cand of candidates) {
     if (samples.length >= options.sampleSize) break;
@@ -331,35 +342,19 @@ export async function runProgressCli(
         turnDays: Number(turnDays.toFixed(2)),
         days: Number(readyDays.toFixed(2)),
       });
-    } catch {
-      failed++;
+    } catch (err: unknown) {
+      // 一部だけ欠けた統計は誤った比較値になるため、握りつぶさず中断する
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`マージ済み PR #${cand.number} のサンプル計測に失敗しました: ${msg}`, {
+        cause: err,
+      });
     }
   }
 
-  // 消化前線（直近マージ PR）
-  const frontPr =
-    samples.length > 0
-      ? [...samples].sort(
-          (a, b) => new Date(b.mergedAt).getTime() - new Date(a.mergedAt).getTime(),
-        )[0]
-      : null;
-
-  let activeAheadCount: number | null = null;
-  if (frontPr) {
-    const frontCreated = new Date(frontPr.createdAt);
-    if (frontCreated.getTime() < created.getTime()) {
-      const frontIso = frontCreated.toISOString();
-      const rangeQuery = `${baseParts.join(" ")} created:${frontIso}..${createdIso}`;
-      const rangeRes = await client.searchIssuesDetailed(rangeQuery, "created", "asc", 1);
-      activeAheadCount = rangeRes.totalCount;
-    }
-  }
-
-  const totalRes = await client.searchIssuesDetailed(baseParts.join(" "), "created", "asc", 1);
-  const allTotal = totalRes.totalCount;
   const behindCount = Math.max(0, allTotal - aheadTotal - 1);
 
   const queueInfo: ProgressQueueInfo = {
+    front: { number: frontItem.number, createdAt: frontItem.created_at },
     activeAheadCount,
     aheadCount: aheadTotal,
     totalCount: allTotal,
@@ -371,10 +366,13 @@ export async function runProgressCli(
   log("----------------------------------------");
   log("【現在のレビュー待ち行列（実質的な待ち人数）】");
 
+  // 前回行が旧定義（QueueBasis 列なし）の場合、ActiveAhead の定義が異なるため前回比は出さない
+  const prev = prevRecord && prevRecord.QueueBasis === QUEUE_BASIS ? prevRecord : null;
+  const front = queueInfo.front;
   let frontDeltaText = "";
-  if (frontPr && prevRecord?.FrontNumber) {
-    const prevFrontNum = Number(prevRecord.FrontNumber);
-    const frontDiff = frontPr.number - prevFrontNum;
+  if (prev && prev.FrontNumber !== "") {
+    const prevFrontNum = Number(prev.FrontNumber);
+    const frontDiff = front.number - prevFrontNum;
     if (frontDiff > 0) {
       frontDeltaText = ` [前回 #${prevFrontNum} から +${frontDiff} 件前進]`;
     } else if (frontDiff === 0) {
@@ -383,38 +381,26 @@ export async function runProgressCli(
       frontDeltaText = ` [前回 #${prevFrontNum}]`;
     }
   }
-
-  if (frontPr) {
-    log(
-      `消化前線（直近マージPR）   : #${frontPr.number} (作成: ${formatDateTimeWithDay(frontPr.createdAt)} / マージ: ${formatDateTimeWithDay(frontPr.mergedAt)})${frontDeltaText}`,
-    );
-    if (queueInfo.activeAheadCount !== null) {
-      const deltaActive =
-        prevRecord && prevRecord.ActiveAhead !== ""
-          ? ` ${formatDelta(queueInfo.activeAheadCount, Number(prevRecord.ActiveAhead))}`
-          : "";
-      log(
-        `前線からの実質的な待ちPR   : 約 ${queueInfo.activeAheadCount} 件${deltaActive} （前線〜あなたのPR作成日までに提出され健康に待機中）`,
-      );
-    }
-  }
-
-  const deltaAhead =
-    prevRecord && prevRecord.TotalAhead !== ""
-      ? ` ${formatDelta(queueInfo.aheadCount, Number(prevRecord.TotalAhead))}`
+  const deltaOf = (current: number, previous: number | string | undefined): string =>
+    prev && previous !== undefined && previous !== ""
+      ? ` ${formatDelta(current, Number(previous))}`
       : "";
+
   log(
-    `全期間の累積待ちPR (参考) : 約 ${queueInfo.aheadCount} 件${deltaAhead} （過去の未消化滞留分を含む累積）`,
+    `消化前線（最古の健康なPR）  : #${front.number} (作成: ${formatDateTimeWithDay(front.createdAt)})${frontDeltaText}`,
   );
-
-  const deltaBehind =
-    prevRecord && prevRecord.Behind !== ""
-      ? ` ${formatDelta(queueInfo.behindCount, Number(prevRecord.Behind))}`
-      : "";
-  log(`あなたの後ろに並ぶ準備完了PR: 約 ${queueInfo.behindCount} 件${deltaBehind}`);
+  log(
+    `実質待ちPR（更新順の順位）  : 約 ${queueInfo.activeAheadCount} 件${deltaOf(queueInfo.activeAheadCount, prev?.ActiveAhead)} （あなたのPRより更新が古い健康なPR。指摘なく順番待ちしているPR）`,
+  );
+  log(
+    `全期間の累積待ちPR (参考) : 約 ${queueInfo.aheadCount} 件${deltaOf(queueInfo.aheadCount, prev?.TotalAhead)} （作成順であなたより前の健康なPR）`,
+  );
+  log(
+    `あなたの後ろに並ぶ準備完了PR: 約 ${queueInfo.behindCount} 件${deltaOf(queueInfo.behindCount, prev?.Behind)}`,
+  );
   log("----------------------------------------");
 
-  const stats = calculateProgressStats(samples, skipped, failed);
+  const stats = calculateProgressStats(samples, skipped);
 
   if (stats) {
     log("");
@@ -432,9 +418,7 @@ export async function runProgressCli(
     log(`   あなたの待機 : ${formatHumanDays(turnLatencyDays)}`);
   }
 
-  const frontNumVal = frontPr ? frontPr.number : "";
-  const frontCreatedVal = frontPr ? formatDateTimeWithDay(frontPr.createdAt) : "";
-  const activeVal = queueInfo.activeAheadCount !== null ? queueInfo.activeAheadCount : "";
+  const frontCreatedVal = formatDateTimeWithDay(front.createdAt);
 
   const snapshot = createProgressSnapshot({
     now,
@@ -443,9 +427,9 @@ export async function runProgressCli(
     prTitle: pr.title,
     prUrl: pr.url,
     prState: pr.state,
-    frontNumber: frontNumVal,
+    frontNumber: front.number,
     frontCreatedAt: frontCreatedVal,
-    activeAhead: activeVal,
+    activeAhead: queueInfo.activeAheadCount,
     totalAhead: queueInfo.aheadCount,
     behind: queueInfo.behindCount,
     totalLifetimeDays,
@@ -464,10 +448,11 @@ export async function runProgressCli(
     const logRow: ProgressHistoryRow = {
       Timestamp: formatDateTimeWithDay(now),
       TargetPr: options.targetPr,
-      FrontNumber: frontNumVal,
+      FrontNumber: front.number,
       FrontCreatedAt: frontCreatedVal,
-      ActiveAhead: activeVal,
+      ActiveAhead: queueInfo.activeAheadCount,
       TotalAhead: queueInfo.aheadCount,
+      QueueBasis: QUEUE_BASIS,
       Behind: queueInfo.behindCount,
       TotalLifetimeDays: Number(totalLifetimeDays.toFixed(2)),
       TurnLatencyDays: Number(turnLatencyDays.toFixed(2)),
@@ -513,11 +498,27 @@ export async function runProgressCli(
   return { snapshot };
 }
 
+/**
+ * 基準 PR が観測対象外で記録をスキップしたことを、Actions 上で見落とさないよう warning として出力する。
+ */
+export function reportSkippedObservation(
+  snapshot: ProgressSnapshot | null,
+  env: NodeJS.ProcessEnv,
+  log: (msg: string) => void = console.log,
+): void {
+  if (snapshot === null && env.GITHUB_ACTIONS) {
+    log(
+      "::warning::基準 PR が観測対象外（クローズ済み・Draft・比較条件未達）のため、今回は履歴とスナップショットを記録していません",
+    );
+  }
+}
+
 // 直接実行時のエントリポイント
 if (import.meta.main) {
   try {
     const options = parseArgs(process.argv.slice(2));
-    await runProgressCli(options);
+    const { snapshot } = await runProgressCli(options);
+    reportSkippedObservation(snapshot, process.env);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`エラー: ${message}`);

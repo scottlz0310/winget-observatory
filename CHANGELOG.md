@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tsconfig.json`, `package.json`, `.github/workflows/ci.yml`, `lefthook.yml`: strict な型チェック（`tsc --noEmit`、`bun run typecheck`）を導入し、CI と pre-commit に組み込み（Issue #18）
 - `src/models/dashboard.ts`, `src/domain/dashboard.ts`: ダッシュボード算出メトリクス（直近24時間の消化速度 Velocity・到着予測 ETA、前回観測比の増減差分 Δ、前線と自 PR の起票日カレンダー距離、実績所要日数パーセンタイル集計）を算出するドメイン純粋関数および型定義を追加（Issue #12）
 - `test/domain/dashboard.test.ts`: ダッシュボード算出メトリクスの単体テストを追加
 - `scripts/build-pages.ts`: 到着予測 (ETA) & 消化速度カード、前線カレンダー距離カード、マージ実績所要日数（手番・Ready・通算）統計セクション、および直近ログテーブルへの Δ 差分バッジ表示を追加
@@ -27,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `scripts/build-pages.ts`: 進捗・境界スナップショットおよび履歴 CSV の読み込み失敗を `console.warn` で握りつぶして空のダッシュボードを公開していた問題を修正し、ファイルパス付きで中断（exit 1）するよう変更（Issue #18）
+- `src/cli/explore-depths.ts`: 基準 PR の取得失敗時に基準 PR 無しのスナップショットを履歴 JSONL へ追記して続行していた問題を修正し、中断するよう変更。エントリポイントの引数エラーも他 CLI と同じ書式で報告（Issue #18）
+- `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`: 履歴 CSV の読み込み失敗とマージ済みサンプル計測の失敗（`failed++` で黙殺していた）を PR 番号・パス付きで中断するよう変更し、常に誤解を招いていた `failedCount` を廃止。基準 PR が観測対象外で記録がスキップされた場合は Actions の warning を出力（Issue #18）
+- `scripts/sync-dropbox.ts`: `--direction` の値欠落・未指定が暗黙の upload になる問題と、未知引数が無視される問題を修正し、厳格に拒否するよう変更（Issue #18）
+- `src/cli/progress.ts`: 複数コミットの PR で最新コミット表示の区切り文字のハイフンが二重になる問題を修正し、回帰テストを追加（Issue #18）
+- `src/domain/progress.ts`: `formatDateTimeWithDay` が `getTimezoneOffset` とローカル時刻の getter を併用しており実行環境のタイムゾーンに依存していたため、`getUTC*` ベースに統一し、日跨ぎ・別タイムゾーンのテストを追加（Issue #18）
+- `test/cli/progress.test.ts`: `process.env` オブジェクト自体を置換していた復元処理を、変更したキーのみの復元に修正（Issue #18）
+- `src/api/github.ts`: `GitHubApiClientOptions.fetch` を `typeof fetch` から呼び出しシグネチャのみの `FetchLike` へ変更し、モック注入時の型エラー（`preconnect` 欠落）を解消。タイムライン取得ループの暗黙 any を明示的な型注釈で解消（Issue #18）
+- `bun.lock`: `package.json` と食い違っていた `@biomejs/biome` の specifier を再生成で整合（Issue #18）
+- `package.json`: `lint` スクリプトが `--write` でファイルを書き換えていたため検査のみに変更（修正は `check:fix`）（Issue #18）
+- `.github/workflows/ci.yml`, `observe.yml`, `prepare-release.yml`: ジョブに `timeout-minutes` を設定し、API 待ちなどによる無制限のハングを防止（Issue #18）
 - `README.md`: Dropbox 保存先パス（`/data/`）、前提ツール（PowerShell 依存削除）、ロードマップ（Pages ダッシュボード完了）、および定期観測ダッシュボードの閲覧案内を最新実装に合わせて更新し、Codecov バッジを追加（Issue #16）
 - `.github/workflows/observe.yml`: 定期観測ワークフローに防御的な `bun install --frozen-lockfile` ステップを追加し、将来の依存追加時の潜在リスクを排除（Issue #16）
 - `.github/workflows/ci.yml`: `id-token: write` パーミッションおよび `codecov/codecov-action` ステップを追加し、GitHub Actions の OIDC 認証（トークンレス）を用いた Codecov へのカバレッジ自動送信を有効化（Issue #14）
@@ -46,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `src/cli/args.ts`: 各 CLI に複製されていた引数検証（値の取得・後続フラグの誤消費防止・整数範囲・基準 PR の環境変数解決）と、既定の基準 PR・リポジトリの定数を共通化。`progress` / `explore-depths` / `build-pages` に散在していたハードコードを置換し、`test/cli/args.test.ts` を追加（Issue #18）
 - `scripts/build-pages.ts`: `models/` の型（`ProgressSnapshot` / `DepthsSnapshot` / `ProgressHistoryRow`）と `domain` の `parseCsvRows` を再利用するよう変更し、独自の型定義・CSV パーサ・数値整形の重複を削減。数値が空欄の項目を `0` ではなく `-` と表示（Issue #18）
+- `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`, `src/api/github.ts`: 待ち行列の指標を再設計（Issue #18）。消化前線を「直近マージ PR」から「条件を満たす最古の未マージ PR」に変更して単調に進むようにし、実質待ちを「更新順で自 PR より前に並ぶ健康な PR の数」（指摘なく順番待ちをしている PR の待ち順位）に変更。履歴 CSV に算出基準を示す `QueueBasis` 列を追加し、旧定義の行（空欄）との前回比は出力しない
+- `src/domain/progress.ts`, `src/domain/depths.ts`: 「健康な PR」の検索条件を `buildHealthyQueryParts` に一本化し、`progress` と `explore-depths` で除外ラベルの定義がずれていた問題を解消
+- `src/cli/explore-depths.ts`: 遭難の底（更新が最も古い健康な PR）の取得件数を 3 件から 10 件に拡張
+- `README.md`: 累積待ち件数の定義を実装（検索ヒット件数）に合わせて修正し、`progress` / `explore-depths` の主なオプション、基準 PR が観測対象外のときの挙動、前提 Bun のバージョン指針（`.bun-version`）、`data/` ディレクトリの位置づけを追記（Issue #18）
+- `scripts/build-pages.ts`: 「手番所要日数」の説明を実装（最新コミット→マージ）に合わせて修正（Issue #18）
+- `src/domain/progress.ts`, `scripts/lib/dropbox.ts`: パーセンタイル算出方式の注記（R-7）と Dropbox 保存先パスのコメントを実装に合わせて修正（Issue #18）
+- `renovate.json`, `.gitattributes`: PowerShell 退役後も残っていた PowerShell 用のプリセットと `*.ps1` の改行設定を削除（Issue #18）
 - `.github/workflows/observe.yml`: 定期メトリクス収集ステップを PowerShell (`pwsh`) から Bun / TypeScript スクリプト（`src/cli/progress.ts`, `src/cli/explore-depths.ts`, `src/cli/generate-summary.ts`）のネイティブ実行へ刷新し、外部プロセス依存を完全排除
 - `README.md`: PowerShell スクリプトから Bun / TypeScript CLI コマンド（`bun run progress`, `bun run explore:depths`, `bun run summary`）への案内へ更新
 - `scripts/lib/dropbox.ts`: Dropbox アプリフォルダー内の二重階層を解消するため、保存先プレフィックス `DROPBOX_ROOT` を `/winget-observatory/` から `/data/` へ変更。移行互換用として旧プレフィックス `LEGACY_DROPBOX_ROOT`（`/winget-observatory/`）の読み取りを許容
@@ -58,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - 未使用・互換目的のコードを削除（Issue #18）: `progress` の `--queue-limit`（パース・検証のみで未使用）、`simulateReadySince` の `isFinalValidation` / `currentLabels`、`migrateCsvRecord`（内部の `toHistoryRow` へ）、`PercentileStats`、`build-pages.ts` の camelCase キー互換正規化と `StrandedCandidates` 互換
+- `src/cli/generate-summary.ts`, `src/domain/summary.ts`, `src/models/summary.ts`, 対応するテスト、`SUMMARY.md`、`package.json` の `summary` スクリプト、`observe.yml` の生成ステップ、README の該当節: サマリー（`SUMMARY.md`）生成機能を廃止。cron では生成物がコミットも公開もされず捨てられており、フッターの「定期更新」も事実と異なっていたため、Issue #7 の合意どおり人間向けの閲覧先を GitHub Pages に一本化（Issue #18）
 - レガシーな PowerShell 計測スクリプト群（`scripts/progress-winget.ps1`, `scripts/explore-winget-depths.ps1`, `scripts/generate-summary.ps1`, `scripts/check-syntax.ps1`）および PowerShell テスト群（`tests/*.ps1`）を TypeScript 化に伴い完全退役
 - `.github/workflows/ci.yml` および `lefthook.yml` から PowerShell 構文検査と PSScriptAnalyzer 検査ステップを退役（Biome & TypeScript Tests に一本化）
 

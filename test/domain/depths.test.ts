@@ -79,11 +79,11 @@ describe("Domain: depths logic", () => {
     const healthyQuery = buildHealthyBaseQuery(repo);
     expect(healthyQuery).toContain("repo:microsoft/winget-pkgs");
     expect(healthyQuery).toContain("is:pr is:open draft:false");
-    expect(healthyQuery).toContain("label:New-Package");
-    expect(healthyQuery).toContain("label:Azure-Pipeline-Passed");
-    expect(healthyQuery).toContain("label:Validation-Completed");
-    expect(healthyQuery).toContain("-label:Needs-CLA");
-    expect(healthyQuery).toContain("-label:Changes-Requested");
+    expect(healthyQuery).toContain('label:"New-Package"');
+    expect(healthyQuery).toContain('label:"Azure-Pipeline-Passed"');
+    expect(healthyQuery).toContain('label:"Validation-Completed"');
+    expect(healthyQuery).toContain('-label:"Needs-CLA"');
+    expect(healthyQuery).toContain('-label:"Changes-Requested"');
 
     const absoluteQuery = buildAbsoluteBaseQuery(repo);
     expect(absoluteQuery).toBe(

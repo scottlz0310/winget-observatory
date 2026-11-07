@@ -74,6 +74,23 @@ export const BLOCKED_PATTERNS: readonly RegExp[] = [
   /^Validation-Submission-(Expired|Failed|Mismatch|Missing|Unsupported)$/,
 ] as const;
 
+/**
+ * 「健康な未マージ PR」（比較条件を満たす PR）を検索する GitHub Search クエリの条件部分。
+ * progress（前線・待ち件数）と explore-depths（各底）で同じ定義を使い、判定のずれを防ぐ。
+ * 名前パターンで判定する阻害ラベル（BLOCKED_PATTERNS）は検索クエリで表現できないため含まない。
+ */
+export function buildHealthyQueryParts(repository: string): string[] {
+  return [
+    `repo:${repository}`,
+    "is:pr",
+    "is:open",
+    "draft:false",
+    ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
+    ...BLOCKED_LABELS.map((b) => `-label:"${b}"`),
+    ...INVESTIGATION_LABELS.map((inv) => `-label:"${inv}"`),
+  ];
+}
+
 const BLOCKED_LABEL_SET = new Set<string>(BLOCKED_LABELS);
 const INVESTIGATION_LABEL_SET = new Set<string>(INVESTIGATION_LABELS);
 
@@ -111,7 +128,7 @@ export function isEligibleLabels(labels: Iterable<string>): boolean {
 }
 
 /**
- * パーセンタイル値を線形補間（R-6 / Excel PERCENTILE.INC 相当）で算出する。
+ * パーセンタイル値を線形補間（R-7 / Excel PERCENTILE.INC 相当）で算出する。
  */
 export function getPercentile(values: number[], percentile: number): number {
   if (values.length === 0) {
@@ -167,16 +184,16 @@ export function formatDelta(current: number, previous: number, unit = "件"): st
  */
 export function formatDateTimeWithDay(input: Date | string, offsetHours = 9): string {
   const date = typeof input === "string" ? new Date(input) : input;
-  const utc = date.getTime() + date.getTimezoneOffset() * 60000;
-  const target = new Date(utc + offsetHours * 3600000);
+  // 実行環境のタイムゾーンに依存しないよう、オフセット加算後の値を UTC として読む
+  const target = new Date(date.getTime() + offsetHours * 3600000);
 
   const daysJa = ["日", "月", "火", "水", "木", "金", "土"];
-  const yyyy = target.getFullYear();
-  const mm = String(target.getMonth() + 1).padStart(2, "0");
-  const dd = String(target.getDate()).padStart(2, "0");
-  const day = daysJa[target.getDay()];
-  const hh = String(target.getHours()).padStart(2, "0");
-  const min = String(target.getMinutes()).padStart(2, "0");
+  const yyyy = target.getUTCFullYear();
+  const mm = String(target.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(target.getUTCDate()).padStart(2, "0");
+  const day = daysJa[target.getUTCDay()];
+  const hh = String(target.getUTCHours()).padStart(2, "0");
+  const min = String(target.getUTCMinutes()).padStart(2, "0");
 
   return `${yyyy}-${mm}-${dd}(${day}) ${hh}:${min}`;
 }
@@ -262,7 +279,6 @@ export function simulateReadySince(
 export function calculateProgressStats(
   samples: MergedCandidateSample[],
   skippedCount = 0,
-  failedCount = 0,
 ): ProgressStatsSummary | null {
   if (samples.length === 0) {
     return null;
@@ -283,7 +299,6 @@ export function calculateProgressStats(
   return {
     sampleCount: samples.length,
     skippedCount,
-    failedCount,
     total: calcMetrics(totalValues),
     turn: calcMetrics(turnValues),
     ready: calcMetrics(readyValues),
@@ -329,6 +344,7 @@ function toHistoryRow(raw: Record<string, string>): ProgressHistoryRow {
     FrontCreatedAt: raw.FrontCreatedAt ?? "",
     ActiveAhead: raw.ActiveAhead ?? "",
     TotalAhead: raw.TotalAhead ?? "",
+    QueueBasis: raw.QueueBasis ?? "",
     Behind: raw.Behind ?? "",
     TotalLifetimeDays: raw.TotalLifetimeDays ?? "",
     TurnLatencyDays: raw.TurnLatencyDays ?? "",
@@ -353,6 +369,7 @@ export function serializeCsvRows(rows: ProgressHistoryRow[]): string {
     "TurnLatencyDays",
     "WaitDays",
     "CommitCount",
+    "QueueBasis",
   ];
 
   const headerLine = headers.map((h) => `"${h}"`).join(",");
@@ -375,9 +392,9 @@ export function createProgressSnapshot(params: {
   prTitle: string;
   prUrl: string;
   prState: string;
-  frontNumber: number | string;
+  frontNumber: number;
   frontCreatedAt: string;
-  activeAhead: number | string;
+  activeAhead: number;
   totalAhead: number;
   behind: number;
   totalLifetimeDays: number;

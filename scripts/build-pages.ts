@@ -23,6 +23,12 @@ interface BuildOptions {
 type LatestProgress = Partial<ProgressSnapshot>;
 type LatestDepths = Partial<DepthsSnapshot>;
 
+function buildError(label: string, path: string, cause: unknown): Error {
+  // 破損データのまま空のダッシュボードを公開しないよう、読み込み失敗は中断する
+  const msg = cause instanceof Error ? cause.message : String(cause);
+  return new Error(`${label} (${path}) の読み込み・パースに失敗しました: ${msg}`, { cause });
+}
+
 function parseArgs(): BuildOptions {
   const args = process.argv.slice(2);
   let dataDir = resolve(process.cwd(), "data");
@@ -423,7 +429,7 @@ function generateHtml(
           <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
           P75: ${formatDaysStat(progress?.TurnP75Days)}
         </div>
-        <div class="card-subtext">メンテナがレビュー・トリアージを開始してからマージされるまでの日数</div>
+        <div class="card-subtext">最新コミットからマージされるまでの日数（修正後の再レビュー待ち）</div>
       </div>
 
       <div class="card stat-card">
@@ -600,7 +606,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     try {
       progress = JSON.parse(readFileSync(progressPath, "utf-8")) as LatestProgress;
     } catch (e) {
-      console.warn(`[Build Pages] ${progressPath} の読み込みに失敗しました:`, e);
+      throw buildError("進捗スナップショット", progressPath, e);
     }
   }
 
@@ -609,7 +615,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     try {
       depths = JSON.parse(readFileSync(depthsPath, "utf-8")) as LatestDepths;
     } catch (e) {
-      console.warn(`[Build Pages] ${depthsPath} の読み込みに失敗しました:`, e);
+      throw buildError("キュー境界スナップショット", depthsPath, e);
     }
   }
 
@@ -618,7 +624,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     try {
       csvRows = parseCsvRows(readFileSync(csvPath, "utf-8"));
     } catch (e) {
-      console.warn(`[Build Pages] ${csvPath} の読み込みに失敗しました:`, e);
+      throw buildError("履歴 CSV", csvPath, e);
     }
   }
 
@@ -653,6 +659,11 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
 }
 
 if (import.meta.main) {
-  const options = parseArgs();
-  buildDashboard(options);
+  try {
+    buildDashboard(parseArgs());
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[Build Pages] エラー: ${message}`);
+    process.exit(1);
+  }
 }

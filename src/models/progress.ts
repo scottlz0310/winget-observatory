@@ -16,6 +16,7 @@ export interface ProgressPrDetail {
   state: "OPEN" | "CLOSED" | "MERGED";
   isDraft: boolean;
   createdAt: string;
+  updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
   labels: string[];
@@ -38,7 +39,14 @@ export interface ProgressRivalPr {
 }
 
 export interface ProgressQueueInfo {
-  activeAheadCount: number | null;
+  /** 前線: 条件を満たす未マージ PR のうち最も古いもの */
+  front: { number: number; createdAt: string };
+  /**
+   * 実質待ち: 更新順で自 PR より前に並ぶ健康な PR の数。
+   * 指摘なく健康になり順番を待つだけの PR の待ち順位で、更新があった PR は順位が後ろへ動く。
+   */
+  activeAheadCount: number;
+  /** 作成順で自 PR より前の健康な PR の総数 */
   aheadCount: number;
   totalCount: number;
   behindCount: number;
@@ -67,7 +75,6 @@ export interface ProgressPercentileMetrics {
 export interface ProgressStatsSummary {
   sampleCount: number;
   skippedCount: number;
-  failedCount: number;
   total: ProgressPercentileMetrics;
   turn: ProgressPercentileMetrics;
   ready: ProgressPercentileMetrics;
@@ -80,6 +87,8 @@ export interface ProgressHistoryRow {
   FrontCreatedAt: string;
   ActiveAhead: number | string;
   TotalAhead: number | string;
+  /** ActiveAhead の算出基準。"updated"（更新順）。旧スキーマの行では空文字 */
+  QueueBasis: string;
   Behind: number | string;
   TotalLifetimeDays: number | string;
   TurnLatencyDays: number | string;
@@ -95,9 +104,9 @@ export interface ProgressSnapshot {
   PrTitle: string;
   PrUrl: string;
   PrState: string;
-  FrontNumber: number | string;
+  FrontNumber: number;
   FrontCreatedAt: string;
-  ActiveAhead: number | string;
+  ActiveAhead: number;
   TotalAhead: number;
   Behind: number;
   TotalLifetimeDays: number;

@@ -103,10 +103,23 @@ describe("Domain: formatting utilities", () => {
     expect(formatDelta(5, 3, "日")).toBe("[前回比 +2 日]");
   });
 
-  test("formatDateTimeWithDay は JST 変換して曜日付きで出力する", () => {
-    // 2026-11-07T11:30:00Z は JST で 2026-11-07 20:30 (土)
-    const formatted = formatDateTimeWithDay("2026-11-07T11:30:00Z");
-    expect(formatted).toBe("2026-11-07(土) 20:30");
+  test.each([
+    ["2026-11-07T11:30:00Z", "2026-11-07(土) 20:30"],
+    ["2026-12-31T15:00:00Z", "2027-01-01(金) 00:00"],
+    ["2026-03-08T14:59:00Z", "2026-03-08(日) 23:59"],
+  ])("formatDateTimeWithDay(%s) は JST 変換して曜日付きで %s を出力する", (input, expected) => {
+    expect(formatDateTimeWithDay(input)).toBe(expected);
+  });
+
+  test("formatDateTimeWithDay は実行環境のタイムゾーンに依存しない", () => {
+    const originalTz = process.env.TZ;
+    try {
+      process.env.TZ = "America/New_York";
+      expect(formatDateTimeWithDay("2026-03-08T07:30:00Z")).toBe("2026-03-08(日) 16:30");
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
   });
 });
 
@@ -277,7 +290,6 @@ ${Object.values(oldRow).join(",")}
       stats: {
         sampleCount: 10,
         skippedCount: 1,
-        failedCount: 0,
         total: { median: 3.5, p75: 5.0, max: 7.2 },
         turn: { median: 2.0, p75: 3.0, max: 4.5 },
         ready: { median: 1.8, p75: 2.5, max: 3.8 },

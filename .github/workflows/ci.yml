@@ -19,6 +19,7 @@ jobs:
   biome:
     name: Biome & TypeScript Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -31,6 +32,9 @@ jobs:
 
       - name: Lint と Formatting を検査
         run: bun run check
+
+      - name: 型チェック
+        run: bun run typecheck
 
       - name: ユニットテストを実行 (カバレッジ計測)
         run: bun run test:coverage

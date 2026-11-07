@@ -22,6 +22,9 @@ import {
   resolveDefaultTargetPr,
 } from "./args";
 
+/** 遭難の底（更新が最も古い健康な PR）として取得・表示する件数 */
+const STALE_BOTTOM_LIMIT = 10;
+
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
   let targetPr = resolveDefaultTargetPr();
   let repository = process.env.WINGET_REPOSITORY ?? DEFAULT_REPOSITORY;
@@ -89,29 +92,22 @@ export async function runExploreDepths(
   client = new GitHubApiClient(),
   log = console.log,
 ): Promise<DepthsSnapshot> {
-  let hasTarget = options.targetPr > 0 && !options.noTargetPr;
+  const hasTarget = options.targetPr > 0 && !options.noTargetPr;
   let targetInfo: TargetPrInfo | null = null;
   let targetCreatedAtIso: string | null = null;
 
   if (hasTarget) {
-    try {
-      const prView = await client.getPullRequest(options.repository, options.targetPr);
-      targetInfo = formatTargetPrInfo(prView);
-      targetCreatedAtIso = prView.createdAt;
+    // 基準 PR 無しのスナップショットを履歴へ追記すると時系列が汚れるため、取得失敗は中断する
+    // （基準 PR 無しで実行したい場合は --no-target-pr を明示する）
+    const prView = await client.getPullRequest(options.repository, options.targetPr);
+    targetInfo = formatTargetPrInfo(prView);
+    targetCreatedAtIso = prView.createdAt;
 
-      if (!options.asJson) {
-        log("=== winget-pkgs キュー境界探索 ===");
-        log(`基準PR : #${targetInfo.Number} (${targetInfo.Title})`);
-        log(`作成日 : ${targetInfo.CreatedAtJst}`);
-        log("");
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `基準PR #${options.targetPr} の取得に失敗しました。キュー境界探索のみ続行します: ${message}`,
-      );
-      hasTarget = false;
-      targetInfo = null;
+    if (!options.asJson) {
+      log("=== winget-pkgs キュー境界探索 ===");
+      log(`基準PR : #${targetInfo.Number} (${targetInfo.Title})`);
+      log(`作成日 : ${targetInfo.CreatedAtJst}`);
+      log("");
     }
   } else if (!options.asJson) {
     log("=== winget-pkgs キュー境界探索 (全体観測モード) ===");
@@ -129,8 +125,8 @@ export async function runExploreDepths(
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
-  // 3. 遭難・放置の底（Stale Bottom）
-  const staleItems = await client.searchIssues(healthyBase, "updated", "asc", 3);
+  // 3. 遭難の底（Stale Bottom）: 指摘なく健康になり、そのまま順番を待っている PR の先頭
+  const staleItems = await client.searchIssues(healthyBase, "updated", "asc", STALE_BOTTOM_LIMIT);
   const staleBottom = staleItems.map(formatDepthsRow);
 
   // 4. 特急レーン（Express Lane）
@@ -152,8 +148,8 @@ export async function runExploreDepths(
     printRowTable(absoluteBottom);
     log("");
 
-    log("【3. 遭難・放置の底 (Stale Bottom)】");
-    log("説明: 健康体の中で更新日時(updated)が最も古く、完全に止まっているPR");
+    log("【3. 遭難の底 (Stale Bottom)】");
+    log("説明: 健康体の中で更新日時(updated)が最も古い、指摘なく順番待ちを続けているPR");
     printRowTable(staleBottom);
     log("");
 
@@ -227,10 +223,12 @@ export async function runExploreDepths(
 }
 
 if (import.meta.main) {
-  const options = parseArgs(process.argv.slice(2));
-  runExploreDepths(options).catch((err: unknown) => {
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    await runExploreDepths(options);
+  } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[explore-depths 致命的エラー]: ${message}`);
+    console.error(`エラー: ${message}`);
     process.exit(1);
-  });
+  }
 }

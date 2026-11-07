@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient } from "../../src/api/github";
 import { parseArgs, resolveDefaultDataDir, runExploreDepths } from "../../src/cli/explore-depths";
+import { buildHealthyBaseQuery } from "../../src/domain/depths";
 import type { GitHubPrView, GitHubSearchItem } from "../../src/models/depths";
 
 describe("CLI: explore-depths", () => {
@@ -188,5 +189,77 @@ describe("CLI: explore-depths", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("基準 PR の取得に失敗した場合は履歴を汚さず中断する", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-depths-target-fail-"));
+    const historyPath = join(tempDir, "depths-history.jsonl");
+    const outputPath = join(tempDir, "latest-depths.json");
+
+    const mockClient = {
+      getPullRequest: async () => {
+        throw new Error("GitHub Pull Request 取得に失敗しました (status 502)");
+      },
+      searchIssues: async (): Promise<GitHubSearchItem[]> => [],
+    } as unknown as GitHubApiClient;
+
+    try {
+      await expect(
+        runExploreDepths(
+          {
+            targetPr: 464302,
+            repository: "microsoft/winget-pkgs",
+            historyPath,
+            outputPath,
+            noTargetPr: false,
+            noHistory: false,
+            asJson: true,
+          },
+          mockClient,
+          () => {},
+        ),
+      ).rejects.toThrow("status 502");
+      expect(existsSync(historyPath)).toBeFalse();
+      expect(existsSync(outputPath)).toBeFalse();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("CLI: explore-depths の放置の底", () => {
+  test("放置の底は更新が最も古い健康な PR を上位 10 件取得し、progress と同じ健康条件で検索する", async () => {
+    const calls: { query: string; sort: string; order: string; perPage: number }[] = [];
+    const mockClient = {
+      searchIssues: async (
+        query: string,
+        sort: string,
+        order: string,
+        perPage: number,
+      ): Promise<GitHubSearchItem[]> => {
+        calls.push({ query, sort, order, perPage });
+        return [];
+      },
+    } as unknown as GitHubApiClient;
+
+    await runExploreDepths(
+      {
+        targetPr: 1,
+        repository: "microsoft/winget-pkgs",
+        noTargetPr: true,
+        noHistory: true,
+        outputPath: join(tmpdir(), `winget-depths-stale-${Date.now()}.json`),
+        asJson: true,
+      },
+      mockClient,
+      () => {},
+    );
+
+    const stale = calls.find((c) => c.sort === "updated" && c.order === "asc");
+    expect(stale?.perPage).toBe(10);
+    expect(stale?.query).toBe(buildHealthyBaseQuery("microsoft/winget-pkgs"));
+    // 健康条件は progress 側と同じ定義（阻害・調査中ラベルをすべて除外）を使う
+    expect(stale?.query).toContain('-label:"Validation-SmartScreen"');
+    expect(stale?.query).toContain('-label:"Testing"');
   });
 });
