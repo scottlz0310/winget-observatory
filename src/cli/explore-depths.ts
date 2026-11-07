@@ -116,29 +116,22 @@ export async function runExploreDepths(
   client = new GitHubApiClient(),
   log = console.log,
 ): Promise<DepthsSnapshot> {
-  let hasTarget = options.targetPr > 0 && !options.noTargetPr;
+  const hasTarget = options.targetPr > 0 && !options.noTargetPr;
   let targetInfo: TargetPrInfo | null = null;
   let targetCreatedAtIso: string | null = null;
 
   if (hasTarget) {
-    try {
-      const prView = await client.getPullRequest(options.repository, options.targetPr);
-      targetInfo = formatTargetPrInfo(prView);
-      targetCreatedAtIso = prView.createdAt;
+    // 基準 PR 無しのスナップショットを履歴へ追記すると時系列が汚れるため、取得失敗は中断する
+    // （基準 PR 無しで実行したい場合は --no-target-pr を明示する）
+    const prView = await client.getPullRequest(options.repository, options.targetPr);
+    targetInfo = formatTargetPrInfo(prView);
+    targetCreatedAtIso = prView.createdAt;
 
-      if (!options.asJson) {
-        log("=== winget-pkgs キュー境界探索 ===");
-        log(`基準PR : #${targetInfo.Number} (${targetInfo.Title})`);
-        log(`作成日 : ${targetInfo.CreatedAtJst}`);
-        log("");
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `基準PR #${options.targetPr} の取得に失敗しました。キュー境界探索のみ続行します: ${message}`,
-      );
-      hasTarget = false;
-      targetInfo = null;
+    if (!options.asJson) {
+      log("=== winget-pkgs キュー境界探索 ===");
+      log(`基準PR : #${targetInfo.Number} (${targetInfo.Title})`);
+      log(`作成日 : ${targetInfo.CreatedAtJst}`);
+      log("");
     }
   } else if (!options.asJson) {
     log("=== winget-pkgs キュー境界探索 (全体観測モード) ===");
@@ -254,10 +247,12 @@ export async function runExploreDepths(
 }
 
 if (import.meta.main) {
-  const options = parseArgs(process.argv.slice(2));
-  runExploreDepths(options).catch((err: unknown) => {
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    await runExploreDepths(options);
+  } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[explore-depths 致命的エラー]: ${message}`);
+    console.error(`エラー: ${message}`);
     process.exit(1);
-  });
+  }
 }

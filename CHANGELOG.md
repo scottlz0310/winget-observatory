@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `scripts/build-pages.ts`: 進捗・境界スナップショットおよび履歴 CSV の読み込み失敗を `console.warn` で握りつぶして空のダッシュボードを公開していた問題を修正し、ファイルパス付きで中断（exit 1）するよう変更（Issue #18）
+- `src/cli/explore-depths.ts`: 基準 PR の取得失敗時に基準 PR 無しのスナップショットを履歴 JSONL へ追記して続行していた問題を修正し、中断するよう変更。エントリポイントの引数エラーも他 CLI と同じ書式で報告（Issue #18）
+- `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`: 履歴 CSV の読み込み失敗とマージ済みサンプル計測の失敗（`failed++` で黙殺していた）を PR 番号・パス付きで中断するよう変更し、常に誤解を招いていた `failedCount` を廃止。基準 PR が観測対象外で記録がスキップされた場合は Actions の warning を出力（Issue #18）
+- `scripts/sync-dropbox.ts`: `--direction` の値欠落・未指定が暗黙の upload になる問題と、未知引数が無視される問題を修正し、厳格に拒否するよう変更（Issue #18）
 - `src/cli/progress.ts`: 複数コミットの PR で最新コミット表示の区切り文字のハイフンが二重になる問題を修正し、回帰テストを追加（Issue #18）
 - `src/domain/progress.ts`: `formatDateTimeWithDay` が `getTimezoneOffset` とローカル時刻の getter を併用しており実行環境のタイムゾーンに依存していたため、`getUTC*` ベースに統一し、日跨ぎ・別タイムゾーンのテストを追加（Issue #18）
 - `test/cli/progress.test.ts`: `process.env` オブジェクト自体を置換していた復元処理を、変更したキーのみの復元に修正（Issue #18）

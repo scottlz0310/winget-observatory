@@ -252,8 +252,11 @@ export async function runProgressCli(
       if (pastHistory.length > 0) {
         prevRecord = pastHistory[pastHistory.length - 1];
       }
-    } catch {
-      // 読み込み失敗時は新規作成として継続
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`履歴ファイルの読み込みに失敗しました (${historyCsvPath}): ${msg}`, {
+        cause: err,
+      });
     }
   }
 
@@ -351,7 +354,6 @@ export async function runProgressCli(
 
   const samples: MergedCandidateSample[] = [];
   let skipped = 0;
-  let failed = 0;
 
   for (const cand of candidates) {
     if (samples.length >= options.sampleSize) break;
@@ -402,8 +404,12 @@ export async function runProgressCli(
         turnDays: Number(turnDays.toFixed(2)),
         days: Number(readyDays.toFixed(2)),
       });
-    } catch {
-      failed++;
+    } catch (err: unknown) {
+      // 一部だけ欠けた統計は誤った比較値になるため、握りつぶさず中断する
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`マージ済み PR #${cand.number} のサンプル計測に失敗しました: ${msg}`, {
+        cause: err,
+      });
     }
   }
 
@@ -456,7 +462,7 @@ export async function runProgressCli(
   );
   log("----------------------------------------");
 
-  const stats = calculateProgressStats(samples, skipped, failed);
+  const stats = calculateProgressStats(samples, skipped);
 
   if (stats) {
     log("");
@@ -554,11 +560,27 @@ export async function runProgressCli(
   return { snapshot };
 }
 
+/**
+ * 基準 PR が観測対象外で記録をスキップしたことを、Actions 上で見落とさないよう warning として出力する。
+ */
+export function reportSkippedObservation(
+  snapshot: ProgressSnapshot | null,
+  env: NodeJS.ProcessEnv,
+  log: (msg: string) => void = console.log,
+): void {
+  if (snapshot === null && env.GITHUB_ACTIONS) {
+    log(
+      "::warning::基準 PR が観測対象外（クローズ済み・Draft・比較条件未達）のため、今回は履歴とスナップショットを記録していません",
+    );
+  }
+}
+
 // 直接実行時のエントリポイント
 if (import.meta.main) {
   try {
     const options = parseArgs(process.argv.slice(2));
-    await runProgressCli(options);
+    const { snapshot } = await runProgressCli(options);
+    reportSkippedObservation(snapshot, process.env);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`エラー: ${message}`);

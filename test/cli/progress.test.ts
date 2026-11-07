@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDashboard } from "../../scripts/build-pages";
 import type { GitHubApiClient, GitHubDetailedSearchResult } from "../../src/api/github";
-import { parseArgs, resolveDefaultDataDir, runProgressCli } from "../../src/cli/progress";
+import {
+  parseArgs,
+  reportSkippedObservation,
+  resolveDefaultDataDir,
+  runProgressCli,
+} from "../../src/cli/progress";
 
 describe("CLI: progress parseArgs", () => {
   test("デフォルト値が正しく設定される", () => {
@@ -632,4 +637,141 @@ describe("CLI: progress のコミット表示", () => {
     expect(turnLine).toContain("2 コミット目: abcdef1 - fix: typo)");
     expect(turnLine).not.toContain(" -  - ");
   });
+});
+
+describe("CLI: runProgressCli のエラー伝播", () => {
+  test("マージ済みサンプルの計測に失敗した場合は握りつぶさず PR 番号付きで中断する", async () => {
+    const readyLabels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
+    let timelineCalls = 0;
+    const mockClient = {
+      getPullRequestDetails: async () => ({
+        number: 200,
+        title: "Valid PR",
+        url: "https://github.com/test/repo/pull/200",
+        state: "OPEN" as const,
+        isDraft: false,
+        createdAt: "2026-11-01T00:00:00Z",
+        updatedAt: "2026-11-01T00:00:00Z",
+        mergedAt: null,
+        closedAt: null,
+        labels: readyLabels,
+        commits: [{ oid: "abc", messageHeadline: "fix", committedDate: "2026-11-01T00:00:00Z" }],
+      }),
+      getIssueTimeline: async () => {
+        timelineCalls++;
+        if (timelineCalls > 1) {
+          throw new Error("rate limited");
+        }
+        return readyLabels.map((name) => ({
+          event: "labeled",
+          created_at: "2026-11-01T01:00:00Z",
+          label: { name },
+        }));
+      },
+      searchIssuesDetailed: async () => ({
+        totalCount: 1,
+        items: [
+          {
+            number: 100,
+            title: "Merged PR",
+            html_url: "https://github.com/test/repo/pull/100",
+            created_at: "2026-10-01T00:00:00Z",
+            updated_at: "2026-11-02T00:00:00Z",
+            labels: readyLabels.map((name) => ({ name })),
+            pull_request: { merged_at: "2026-11-02T00:00:00Z" },
+          },
+        ],
+      }),
+    } as unknown as GitHubApiClient;
+
+    await expect(
+      runProgressCli(
+        {
+          targetPr: 200,
+          repository: "test/repo",
+          lookbackDays: 30,
+          sampleSize: 30,
+          fetchLimit: 1000,
+          queueLimit: 500,
+          noLog: true,
+          asJson: false,
+        },
+        mockClient,
+        () => {},
+      ),
+    ).rejects.toThrow(/#100 のサンプル計測に失敗しました: rate limited/);
+  });
+});
+
+describe("CLI: progress の保全とスキップ通知", () => {
+  test("履歴 CSV を読めない場合は検索へ進まず、パス付きで中断する", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-badlog-"));
+    try {
+      // ディレクトリを履歴パスに置き、存在するが読めない状態を作る
+      const logPath = join(tmpDir, "progress-history.csv");
+      mkdirSync(logPath);
+      const labels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
+      let searched = false;
+      const mockClient = {
+        getPullRequestDetails: async () => ({
+          number: 200,
+          title: "Valid PR",
+          url: "https://github.com/test/repo/pull/200",
+          state: "OPEN" as const,
+          isDraft: false,
+          createdAt: "2026-11-01T00:00:00Z",
+          updatedAt: "2026-11-01T00:00:00Z",
+          mergedAt: null,
+          closedAt: null,
+          labels,
+          commits: [],
+        }),
+        getIssueTimeline: async () =>
+          labels.map((name) => ({
+            event: "labeled",
+            created_at: "2026-11-01T01:00:00Z",
+            label: { name },
+          })),
+        searchIssuesDetailed: async () => {
+          searched = true;
+          return { totalCount: 0, items: [] };
+        },
+      } as unknown as GitHubApiClient;
+
+      await expect(
+        runProgressCli(
+          {
+            targetPr: 200,
+            repository: "test/repo",
+            lookbackDays: 30,
+            sampleSize: 30,
+            fetchLimit: 1000,
+            queueLimit: 500,
+            logPath,
+            noLog: false,
+            asJson: false,
+          },
+          mockClient,
+          () => {},
+        ),
+      ).rejects.toThrow(/履歴ファイルの読み込みに失敗しました/);
+      expect(searched).toBeFalse();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    [null, { GITHUB_ACTIONS: "true" }, true],
+    [null, {}, false],
+    [{ TargetPr: 1 } as never, { GITHUB_ACTIONS: "true" }, false],
+  ])(
+    "reportSkippedObservation(snapshot=%j, env=%j) の warning 出力は %p",
+    (snapshot, env, warned) => {
+      const logs: string[] = [];
+      reportSkippedObservation(snapshot, env, (m) => logs.push(m));
+      expect(logs.length > 0).toBe(warned);
+      if (warned) expect(logs[0]).toStartWith("::warning::");
+    },
+  );
 });

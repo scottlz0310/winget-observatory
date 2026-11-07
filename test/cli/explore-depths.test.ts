@@ -190,6 +190,41 @@ describe("CLI: explore-depths", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("基準 PR の取得に失敗した場合は履歴を汚さず中断する", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-depths-target-fail-"));
+    const historyPath = join(tempDir, "depths-history.jsonl");
+    const outputPath = join(tempDir, "latest-depths.json");
+
+    const mockClient = {
+      getPullRequest: async () => {
+        throw new Error("GitHub Pull Request 取得に失敗しました (status 502)");
+      },
+      searchIssues: async (): Promise<GitHubSearchItem[]> => [],
+    } as unknown as GitHubApiClient;
+
+    try {
+      await expect(
+        runExploreDepths(
+          {
+            targetPr: 464302,
+            repository: "microsoft/winget-pkgs",
+            historyPath,
+            outputPath,
+            noTargetPr: false,
+            noHistory: false,
+            asJson: true,
+          },
+          mockClient,
+          () => {},
+        ),
+      ).rejects.toThrow("status 502");
+      expect(existsSync(historyPath)).toBeFalse();
+      expect(existsSync(outputPath)).toBeFalse();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("CLI: explore-depths の放置の底", () => {

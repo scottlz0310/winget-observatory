@@ -169,3 +169,33 @@ describe("buildDashboard", () => {
     }
   });
 });
+
+describe("buildDashboard: 読み込み失敗時の中断", () => {
+  test.each([
+    ["latest-progress.json", "進捗スナップショット", "file"],
+    ["latest-depths.json", "キュー境界スナップショット", "file"],
+    ["progress-history.csv", "履歴 CSV", "dir"],
+  ])(
+    "%s が壊れている場合は空のダッシュボードを出力せず、パス付きで中断する",
+    (file, label, kind) => {
+      const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-broken-"));
+      try {
+        const dataDir = join(tempDir, "data");
+        mkdirSync(dataDir, { recursive: true });
+        if (kind === "dir") {
+          // ディレクトリを置いて「存在するが読めない」状態を作る
+          mkdirSync(join(dataDir, file));
+        } else {
+          writeFileSync(join(dataDir, file), "{ broken json", "utf-8");
+        }
+
+        const outputDir = join(tempDir, "site");
+        expect(() => buildDashboard({ dataDir, outputDir })).toThrow(label);
+        expect(() => buildDashboard({ dataDir, outputDir })).toThrow(file);
+        expect(existsSync(join(outputDir, "index.html"))).toBeFalse();
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+});

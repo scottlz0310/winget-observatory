@@ -75,7 +75,6 @@ export interface ProgressPercentileMetrics {
 export interface ProgressStatsSummary {
   sampleCount: number;
   skippedCount: number;
-  failedCount: number;
   total: ProgressPercentileMetrics;
   turn: ProgressPercentileMetrics;
   ready: ProgressPercentileMetrics;
