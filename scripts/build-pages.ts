@@ -7,10 +7,17 @@ import { DEFAULT_REPOSITORY, DEFAULT_TARGET_PR } from "../src/cli/args";
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
+  formatJstDate,
   selectComparableHistory,
 } from "../src/domain/dashboard";
+import {
+  calculateStaleFrontierForecast,
+  extractStaleFrontierSamples,
+  parseDepthsHistory,
+} from "../src/domain/forecast";
 import { parseCsvRows } from "../src/domain/progress";
 import type { DepthsSnapshot } from "../src/models/depths";
+import type { StaleFrontierForecast, StaleFrontierSample } from "../src/models/forecast";
 import type { ProgressHistoryRow, ProgressSnapshot } from "../src/models/progress";
 
 interface BuildOptions {
@@ -113,10 +120,93 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
     </table>`;
 }
 
+const DAY_MS = 86_400_000;
+
+const FORECAST_UNAVAILABLE_TEXT: Record<string, string> = {
+  "no-samples": "遭難の底の観測がありません",
+  "no-target": "基準 PR の更新時刻が未記録です（次回の観測から記録されます）",
+  "insufficient-window": "速度を測る観測期間が足りません（6 時間以上の間隔が必要）",
+  "no-progress": "観測期間内に先頭が進んでいないため算出できません",
+};
+
+function formatEta(forecast: StaleFrontierForecast, etaDays: number | null): string {
+  if (etaDays === null || forecast.frontier === null) {
+    return `<span style="font-size: 1.25rem; color: var(--text-muted);">-</span>`;
+  }
+  const date = formatJstDate(forecast.frontier.observedMs + etaDays * DAY_MS);
+  return etaDays === 0
+    ? `到達済み`
+    : `約 ${etaDays} <span style="font-size: 1rem; font-weight: normal;">日後</span> <span style="font-size: 0.875rem; font-weight: normal; color: var(--text-muted);">(${escapeHtml(date)} 頃)</span>`;
+}
+
+/** 遭難の底の推移から基準 PR のマージ時期を予想するセクション（既存の ETA と並列） */
+function renderForecastSection(
+  forecast: StaleFrontierForecast,
+  samples: StaleFrontierSample[],
+): string {
+  const recent = samples.slice(-10).reverse();
+  const rows = recent
+    .map((sample) => {
+      const lag = Math.round(((sample.timestampMs - sample.updatedMs) / DAY_MS) * 10) / 10;
+      return `
+        <tr>
+          <td>${escapeHtml(formatJstDate(sample.timestampMs))} ${escapeHtml(new Date(sample.timestampMs + 9 * 3_600_000).toISOString().slice(11, 16))}</td>
+          <td>#${escapeHtml(sample.pr)}</td>
+          <td>${escapeHtml(formatJstDate(sample.updatedMs))}</td>
+          <td>${lag} 日</td>
+        </tr>`;
+    })
+    .join("");
+
+  const observed = forecast.observedUnavailable
+    ? `<span>${escapeHtml(FORECAST_UNAVAILABLE_TEXT[forecast.observedUnavailable] ?? forecast.observedUnavailable)}</span>`
+    : `<span>先頭の進み: <strong>${forecast.observedSpeed}</strong> 日/日（直近 ${forecast.windowHours} 時間）</span>`;
+
+  return `
+    <h2 class="section-title">🔮 マージ時期の予想（遭難の底の推移）</h2>
+    <p class="section-note">
+      遭難の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します。更新の古い順に処理される、という仮説に基づく参考値です。
+    </p>
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">
+      <div class="card">
+        <div class="card-title">定常待ち時間モデル</div>
+        <div class="card-value">${formatEta(forecast, forecast.steadyEtaDays)}</div>
+        <div class="card-subtext">
+          <span>先頭の遅れ: <strong>${forecast.lagDays ?? "-"}</strong> 日</span>
+          <span>/ 基準 PR との更新差: <strong>${forecast.gapDays ?? "-"}</strong> 日</span>
+        </div>
+        <div class="card-subtext">先頭が実時間と同じ速度（1 日/日）で進むと仮定</div>
+      </div>
+      <div class="card">
+        <div class="card-title">観測速度モデル</div>
+        <div class="card-value">${formatEta(forecast, forecast.observedEtaDays)}</div>
+        <div class="card-subtext">${observed}</div>
+        <div class="card-subtext">履歴から先頭の進みを実測して予想</div>
+      </div>
+    </div>
+    ${
+      recent.length > 0
+        ? `<table>
+      <thead>
+        <tr>
+          <th>観測日時 (JST)</th>
+          <th>遭難の底の先頭</th>
+          <th>先頭の最終更新</th>
+          <th>先頭の遅れ</th>
+        </tr>
+      </thead>
+      <tbody>${rows}
+      </tbody>
+    </table>`
+        : ""
+    }`;
+}
+
 function generateHtml(
   progress: LatestProgress | null,
   depths: LatestDepths | null,
   csvRows: ProgressHistoryRow[],
+  frontierSamples: StaleFrontierSample[] = [],
 ): string {
   const updatedJst = progress?.TimestampJst || depths?.TimestampJst || "未観測";
   const repo = progress?.Repository || depths?.Repository || DEFAULT_REPOSITORY;
@@ -146,6 +236,11 @@ function generateHtml(
   const behindDeltaBadge = formatDeltaBadge(metrics.latestDelta.behindDelta);
 
   const healthyBottomFirst = depths?.HealthyBottom?.[0];
+
+  const targetUpdatedMs = depths?.TargetPr?.UpdatedAt
+    ? Date.parse(depths.TargetPr.UpdatedAt)
+    : null;
+  const forecast = calculateStaleFrontierForecast(frontierSamples, targetUpdatedMs);
 
   // 直近 10 件の推移（差分付き、新しい順）
   const recentHistoryWithDeltas = metrics.historyWithDeltas.slice(-10).reverse();
@@ -544,6 +639,8 @@ function generateHtml(
     </p>
     ${renderStaleBottomTable(depths)}
 
+    ${renderForecastSection(forecast, frontierSamples)}
+
     <h2 class="section-title">📈 直近の観測推移ログ (最新 10 件)</h2>
     ${
       recentHistoryWithDeltas.length > 0
@@ -607,6 +704,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   const progressPath = join(dataDir, "latest-progress.json");
   const depthsPath = join(dataDir, "latest-depths.json");
   const csvPath = join(dataDir, "progress-history.csv");
+  const depthsHistoryPath = join(dataDir, "depths-history.jsonl");
 
   let progress: LatestProgress | null = null;
   if (existsSync(progressPath)) {
@@ -635,7 +733,18 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     }
   }
 
-  const html = generateHtml(progress, depths, csvRows);
+  let frontierSamples: StaleFrontierSample[] = [];
+  if (existsSync(depthsHistoryPath)) {
+    try {
+      frontierSamples = extractStaleFrontierSamples(
+        parseDepthsHistory(readFileSync(depthsHistoryPath, "utf-8")),
+      );
+    } catch (e) {
+      throw buildError("キュー境界履歴", depthsHistoryPath, e);
+    }
+  }
+
+  const html = generateHtml(progress, depths, csvRows, frontierSamples);
   const htmlPath = join(outputDir, "index.html");
   writeFileSync(htmlPath, html, "utf-8");
   console.log(`[Build Pages] HTML 生成完了: ${htmlPath}`);
