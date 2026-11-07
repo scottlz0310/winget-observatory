@@ -12,6 +12,8 @@ concurrency:
 
 permissions:
   contents: read
+  # Codecov への OIDC 認証 (トークンレス) に必要
+  id-token: write
 
 jobs:
   biome:
@@ -30,5 +32,11 @@ jobs:
       - name: Lint と Formatting を検査
         run: bun run check
 
-      - name: ユニットテストを実行
-        run: bun test
+      - name: ユニットテストを実行 (カバレッジ計測)
+        run: bun run test:coverage
+
+      - name: Codecov へカバレッジをアップロード
+        uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: coverage/lcov.info

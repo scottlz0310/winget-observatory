@@ -11,6 +11,7 @@
     "lint": "biome lint --write .",
     "prepare": "lefthook install",
     "test": "bun test",
+    "test:coverage": "bun test --coverage --coverage-reporter=lcov",
     "build:pages": "bun run scripts/build-pages.ts",
     "sync:dropbox": "bun run scripts/sync-dropbox.ts",
     "explore:depths": "bun run src/cli/explore-depths.ts",
