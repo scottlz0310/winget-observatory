@@ -189,12 +189,8 @@ export async function runProgressCli(
     const commitMsg = latestCommit?.messageHeadline ? ` - ${latestCommit.messageHeadline}` : "";
     const shortOid = latestCommit?.oid ? latestCommit.oid.substring(0, 7) : "";
     log(
-      `レビュー待ち時間 (Turn)    : ${formatHumanDays(turnLatencyDays)} [最新コミット: ${formatDateTimeWithDay(latestCommittedDate)} (${commitCount} コミット目: ${shortOid}${commitDetail(commitMsg)})]`,
+      `レビュー待ち時間 (Turn)    : ${formatHumanDays(turnLatencyDays)} [最新コミット: ${formatDateTimeWithDay(latestCommittedDate)} (${commitCount} コミット目: ${shortOid}${commitMsg})]`,
     );
-  }
-
-  function commitDetail(msg: string): string {
-    return msg ? ` - ${msg}` : "";
   }
 
   if (pr.state !== "OPEN") {

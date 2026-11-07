@@ -184,16 +184,16 @@ export function formatDelta(current: number, previous: number, unit = "件"): st
  */
 export function formatDateTimeWithDay(input: Date | string, offsetHours = 9): string {
   const date = typeof input === "string" ? new Date(input) : input;
-  const utc = date.getTime() + date.getTimezoneOffset() * 60000;
-  const target = new Date(utc + offsetHours * 3600000);
+  // 実行環境のタイムゾーンに依存しないよう、オフセット加算後の値を UTC として読む
+  const target = new Date(date.getTime() + offsetHours * 3600000);
 
   const daysJa = ["日", "月", "火", "水", "木", "金", "土"];
-  const yyyy = target.getFullYear();
-  const mm = String(target.getMonth() + 1).padStart(2, "0");
-  const dd = String(target.getDate()).padStart(2, "0");
-  const day = daysJa[target.getDay()];
-  const hh = String(target.getHours()).padStart(2, "0");
-  const min = String(target.getMinutes()).padStart(2, "0");
+  const yyyy = target.getUTCFullYear();
+  const mm = String(target.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(target.getUTCDate()).padStart(2, "0");
+  const day = daysJa[target.getUTCDay()];
+  const hh = String(target.getUTCHours()).padStart(2, "0");
+  const min = String(target.getUTCMinutes()).padStart(2, "0");
 
   return `${yyyy}-${mm}-${dd}(${day}) ${hh}:${min}`;
 }
