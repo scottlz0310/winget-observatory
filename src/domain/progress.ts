@@ -7,10 +7,12 @@ import type {
   MergedCandidateSample,
   ProgressHistoryRow,
   ProgressPercentileMetrics,
+  ProgressRivalPr,
   ProgressSnapshot,
   ProgressStatsSummary,
   ProgressTimelineEvent,
 } from "../models/progress";
+import { buildGuidance, compareWithSamples, toSnapshotSamples } from "./benchmark";
 
 /**
  * 比較条件で必須とされるラベル一覧。
@@ -408,6 +410,15 @@ export function createProgressSnapshot(params: {
   waitDays: number;
   commitCount: number;
   stats: ProgressStatsSummary | null;
+  lookbackDays: number;
+  /** 条件不成立などで比較から除いた候補数（サンプルが 0 件でも記録する） */
+  skippedCount: number;
+  rivals: ProgressRivalPr[];
+  /** 統計に採用したサンプル（stats が null のときは空） */
+  samples: MergedCandidateSample[];
+  targetCreatedAt: Date;
+  /** 基準 PR の条件成立日時（ReadyAt） */
+  targetReadyAt: Date;
 }): ProgressSnapshot {
   const {
     now,
@@ -426,6 +437,12 @@ export function createProgressSnapshot(params: {
     waitDays,
     commitCount,
     stats,
+    lookbackDays,
+    skippedCount,
+    rivals,
+    samples,
+    targetCreatedAt,
+    targetReadyAt,
   } = params;
 
   return {
@@ -451,5 +468,33 @@ export function createProgressSnapshot(params: {
     TurnP75Days: stats ? stats.turn.p75 : null,
     ReadyMedianDays: stats ? stats.ready.median : null,
     ReadyP75Days: stats ? stats.ready.p75 : null,
+    TotalMaxDays: stats ? stats.total.max : null,
+    TurnMaxDays: stats ? stats.turn.max : null,
+    ReadyMaxDays: stats ? stats.ready.max : null,
+    LookbackDays: lookbackDays,
+    SampleCount: stats ? stats.sampleCount : 0,
+    SkippedCount: skippedCount,
+    Rivals: rivals.map((r) => ({
+      Number: r.number,
+      Title: r.title,
+      Url: r.url,
+      CreatedAt: r.createdAt,
+      UpdatedAt: r.updatedAt,
+    })),
+    Samples: stats ? toSnapshotSamples(samples, targetPr) : [],
+    Comparison: stats
+      ? compareWithSamples(samples, {
+          number: targetPr,
+          createdAt: targetCreatedAt,
+          readyAt: targetReadyAt,
+        })
+      : null,
+    Guidance: stats
+      ? buildGuidance(stats, samples, {
+          totalDays: totalLifetimeDays,
+          turnDays: turnLatencyDays,
+          readyDays: waitDays,
+        })
+      : null,
   };
 }

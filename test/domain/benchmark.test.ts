@@ -1,0 +1,197 @@
+import { describe, expect, test } from "bun:test";
+import {
+  buildGuidance,
+  buildReferenceGuidance,
+  compareWithSamples,
+  describeGuidance,
+  describeOvertake,
+  toSnapshotSamples,
+} from "../../src/domain/benchmark";
+import type { MergedCandidateSample, ProgressStatsSummary } from "../../src/models/progress";
+
+function sample(
+  number: number,
+  createdAt: string,
+  readyAt: string,
+  overrides: Partial<MergedCandidateSample> = {},
+): MergedCandidateSample {
+  return {
+    number,
+    title: `PR ${number}`,
+    createdAt,
+    latestCommittedDate: createdAt,
+    commitCount: 1,
+    readyAt,
+    mergedAt: "2026-11-05T00:00:00Z",
+    totalDays: 4,
+    turnDays: 4,
+    days: 3,
+    ...overrides,
+  };
+}
+
+const target = {
+  number: 500,
+  createdAt: new Date("2026-11-01T00:00:00Z"),
+  readyAt: new Date("2026-11-01T02:00:00Z"),
+};
+
+describe("Domain: compareWithSamples（追い越しの判定）", () => {
+  test.each([
+    {
+      name: "すべて基準 PR より前に作成されていれば all-older",
+      samples: [
+        sample(400, "2026-10-20T00:00:00Z", "2026-10-20T01:00:00Z"),
+        sample(450, "2026-10-25T00:00:00Z", "2026-10-25T01:00:00Z"),
+      ],
+      expected: {
+        LaterReady: 0,
+        LaterCreated: 0,
+        EarlierCreated: 2,
+        NewerNumber: 0,
+        OlderNumber: 2,
+        Verdict: "all-older",
+      },
+    },
+    {
+      name: "基準 PR より後に作成されたものが 2 件以下なら mostly-older",
+      samples: [
+        sample(400, "2026-10-20T00:00:00Z", "2026-10-20T01:00:00Z"),
+        sample(600, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z"),
+      ],
+      expected: {
+        LaterReady: 1,
+        LaterCreated: 1,
+        EarlierCreated: 1,
+        NewerNumber: 1,
+        OlderNumber: 1,
+        Verdict: "mostly-older",
+      },
+    },
+    {
+      name: "後から作成されたものが 3 件以上なら overtaken",
+      samples: [
+        sample(600, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z"),
+        sample(601, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z"),
+        sample(602, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z"),
+      ],
+      expected: {
+        LaterReady: 3,
+        LaterCreated: 3,
+        EarlierCreated: 0,
+        NewerNumber: 3,
+        OlderNumber: 0,
+        Verdict: "overtaken",
+      },
+    },
+    {
+      name: "作成時刻が同一なら後に作成された扱いにしない（以前に数える）",
+      samples: [sample(499, "2026-11-01T00:00:00Z", "2026-11-01T02:00:00Z")],
+      expected: {
+        LaterReady: 0,
+        LaterCreated: 0,
+        EarlierCreated: 1,
+        NewerNumber: 0,
+        OlderNumber: 1,
+        Verdict: "all-older",
+      },
+    },
+  ])("$name", ({ samples, expected }) => {
+    expect(compareWithSamples([...samples], target)).toEqual(expected);
+  });
+});
+
+describe("Domain: buildReferenceGuidance（実績との位置づけ）", () => {
+  const metrics = { median: 5, p75: 8 };
+  const values = [2, 4, 5, 6, 8, 10];
+
+  test.each([
+    {
+      name: "中央値以内",
+      current: 3,
+      expected: { Level: "within-median", ToMedianDays: 2, ToP75Days: 5, ShorterSharePct: 17 },
+    },
+    {
+      name: "中央値ちょうどは中央値を超えた扱い",
+      current: 5,
+      expected: { Level: "within-p75", ToMedianDays: null, ToP75Days: 3, ShorterSharePct: 33 },
+    },
+    {
+      name: "75%点超",
+      current: 9,
+      expected: { Level: "over-p75", ToMedianDays: null, ToP75Days: null, ShorterSharePct: 83 },
+    },
+  ])("$name", ({ current, expected }) => {
+    expect(buildReferenceGuidance(current, metrics, values)).toEqual(expected);
+  });
+
+  test("サンプルが空なら割合は 0 とする", () => {
+    expect(buildReferenceGuidance(1, metrics, []).ShorterSharePct).toBe(0);
+  });
+
+  test("3 指標それぞれの現在値で位置づけを求める", () => {
+    const samples = [sample(400, "2026-10-20T00:00:00Z", "2026-10-20T01:00:00Z")];
+    const stats: ProgressStatsSummary = {
+      sampleCount: 1,
+      skippedCount: 0,
+      total: { median: 4, p75: 4, max: 4 },
+      turn: { median: 4, p75: 4, max: 4 },
+      ready: { median: 3, p75: 3, max: 3 },
+    };
+    const g = buildGuidance(stats, samples, { totalDays: 1, turnDays: 5, readyDays: 3.5 });
+    expect(g.Total.Level).toBe("within-median");
+    expect(g.Turn.Level).toBe("over-p75");
+    expect(g.Ready.Level).toBe("over-p75");
+  });
+});
+
+describe("Domain: describe 系の説明文", () => {
+  const fmt = (d: number) => `${d}日`;
+
+  test.each([
+    {
+      g: { Level: "within-median", ToMedianDays: 2, ToP75Days: 5, ShorterSharePct: 0 },
+      text: "中央値以内です（中央値まであと約 2日）。",
+    },
+    {
+      g: { Level: "within-p75", ToMedianDays: null, ToP75Days: 3, ShorterSharePct: 0 },
+      text: "中央値を超えています（75%点まであと約 3日）。",
+    },
+    {
+      g: { Level: "over-p75", ToMedianDays: null, ToP75Days: null, ShorterSharePct: 0 },
+      text: "75%点を超えており、長めの滞留となっています。",
+    },
+  ] as const)("位置づけ $g.Level", ({ g, text }) => {
+    expect(describeGuidance(g, fmt)).toBe(text);
+  });
+
+  test.each([
+    { verdict: "all-older", includes: "追い越されてはいません" },
+    { verdict: "mostly-older", includes: "大きく追い越されているわけではありません" },
+    { verdict: "overtaken", includes: "追い越しあり" },
+  ] as const)("追い越し判定 $verdict", ({ verdict, includes }) => {
+    const c = {
+      LaterReady: 0,
+      LaterCreated: 4,
+      EarlierCreated: 0,
+      NewerNumber: 0,
+      OlderNumber: 0,
+      Verdict: verdict,
+    };
+    expect(describeOvertake(c)).toContain(includes);
+  });
+});
+
+describe("Domain: toSnapshotSamples", () => {
+  test("基準 PR 番号との大小で作成順の関係を付与する", () => {
+    const out = toSnapshotSamples(
+      [
+        sample(400, "2026-10-20T00:00:00Z", "2026-10-20T01:00:00Z"),
+        sample(600, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z"),
+      ],
+      500,
+    );
+    expect(out.map((s) => s.Relation)).toEqual(["older", "newer"]);
+    expect(out[0]).toMatchObject({ Number: 400, ReadyDays: 3, TotalDays: 4 });
+  });
+});

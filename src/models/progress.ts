@@ -35,6 +35,8 @@ export interface ProgressRivalPr {
   number: number;
   title: string;
   createdAt: string;
+  /** 更新が止まっているほど順番待ちに徹している PR と読める */
+  updatedAt: string;
   url: string;
 }
 
@@ -96,6 +98,80 @@ export interface ProgressHistoryRow {
   CommitCount: number | string;
 }
 
+/** 基準 PR との作成順の関係（番号は作成順に単調増加する） */
+export type SampleRelation = "older" | "newer";
+
+/** スナップショットに保存するマージ済み比較サンプル 1 件 */
+export interface ProgressSnapshotSample {
+  Number: number;
+  Title: string;
+  Relation: SampleRelation;
+  CommitCount: number;
+  CreatedAt: string;
+  LatestCommittedDate: string;
+  ReadyAt: string;
+  MergedAt: string;
+  TotalDays: number;
+  TurnDays: number;
+  ReadyDays: number;
+}
+
+/** スナップショットに保存する直前ライバル PR 1 件 */
+export interface ProgressSnapshotRival {
+  Number: number;
+  Title: string;
+  Url: string;
+  CreatedAt: string;
+  UpdatedAt: string;
+}
+
+/**
+ * 追い越しの判定。
+ * - all-older: マージ済みサンプルがすべて基準 PR より前に作成された（バックログの順次消化）
+ * - mostly-older: 基準 PR より後に作成されたマージ済みサンプルが 2 件以下
+ * - overtaken: それ以外（後から作成された PR が複数マージ済み）
+ */
+export type OvertakeVerdict = "all-older" | "mostly-older" | "overtaken";
+
+/** 採用サンプル内で、基準 PR と比べたマージ済み PR の件数 */
+export interface SampleComparison {
+  /** 基準 PR より後に条件が整い、マージ済み */
+  LaterReady: number;
+  /** 基準 PR より後に作成され、マージ済み（追い越し） */
+  LaterCreated: number;
+  /** 基準 PR 以前に作成され、マージ済み */
+  EarlierCreated: number;
+  /** 基準 PR より新しい PR 番号でマージ済み */
+  NewerNumber: number;
+  /** 基準 PR より古い PR 番号でマージ済み */
+  OlderNumber: number;
+  Verdict: OvertakeVerdict;
+}
+
+/**
+ * 基準 PR の現在値の位置づけ。
+ * - within-median: 中央値以内
+ * - within-p75: 中央値超〜75%点以内
+ * - over-p75: 75%点超
+ */
+export type GuidanceLevel = "within-median" | "within-p75" | "over-p75";
+
+export interface ReferenceGuidance {
+  Level: GuidanceLevel;
+  /** 中央値到達までの残り日数。すでに超えていれば null */
+  ToMedianDays: number | null;
+  /** 75%点到達までの残り日数。すでに超えていれば null */
+  ToP75Days: number | null;
+  /** サンプルのうち、基準 PR の現在値より短い期間でマージされた割合（%） */
+  ShorterSharePct: number;
+}
+
+export interface ProgressGuidance {
+  Total: ReferenceGuidance;
+  Turn: ReferenceGuidance;
+  Ready: ReferenceGuidance;
+}
+
 export interface ProgressSnapshot {
   Timestamp: string;
   TimestampJst: string;
@@ -119,4 +195,21 @@ export interface ProgressSnapshot {
   TurnP75Days: number | null;
   ReadyMedianDays: number | null;
   ReadyP75Days: number | null;
+  TotalMaxDays: number | null;
+  TurnMaxDays: number | null;
+  ReadyMaxDays: number | null;
+  /** 比較に使った期間（日） */
+  LookbackDays: number;
+  /** 統計に採用したサンプル数 */
+  SampleCount: number;
+  /** 条件不成立などで除外した候補数 */
+  SkippedCount: number;
+  /** 直前に並ぶ健康な PR（作成順で基準 PR の直前、最大 5 件） */
+  Rivals: ProgressSnapshotRival[];
+  /** 採用サンプル（マージ日時の新しい順）。空なら比較できていない */
+  Samples: ProgressSnapshotSample[];
+  /** サンプルがないときは null */
+  Comparison: SampleComparison | null;
+  /** サンプルがないときは null */
+  Guidance: ProgressGuidance | null;
 }
