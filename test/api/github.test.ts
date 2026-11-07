@@ -235,4 +235,40 @@ describe("API: GitHubApiClient", () => {
     expect(events[0].label?.name).toBe("New-Package");
     expect(events[1].label?.name).toBe("Validation-Completed");
   });
+
+  test("getPullRequestDetails はコミット一覧取得失敗時に例外をスローする", async () => {
+    const mockFetch = async (input: string | URL | Request): Promise<Response> => {
+      const url = String(input);
+      if (url.includes("/commits")) {
+        return new Response("Service Unavailable", { status: 503 });
+      }
+      return new Response(
+        JSON.stringify({
+          number: 301,
+          title: "PR 301",
+          html_url: "https://github.com/test/repo/pull/301",
+          state: "open",
+          draft: false,
+          created_at: "2026-11-01T10:00:00Z",
+          labels: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ fetch: mockFetch });
+    expect(client.getPullRequestDetails("test/repo", 301)).rejects.toThrow(GitHubApiError);
+  });
+
+  test("searchIssuesDetailed は page 引数を URL に付与する", async () => {
+    let capturedUrl = "";
+    const mockFetch = async (input: string | URL | Request): Promise<Response> => {
+      capturedUrl = String(input);
+      return new Response(JSON.stringify({ total_count: 0, items: [] }), { status: 200 });
+    };
+
+    const client = new GitHubApiClient({ fetch: mockFetch });
+    await client.searchIssuesDetailed("test", "created", "asc", 30, 3);
+    expect(capturedUrl).toContain("page=3");
+  });
 });

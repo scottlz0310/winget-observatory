@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GitHubApiClient } from "../../src/api/github";
+import { buildDashboard } from "../../scripts/build-pages";
+import type { GitHubApiClient, GitHubDetailedSearchResult } from "../../src/api/github";
 import { parseArgs, resolveDefaultDataDir, runProgressCli } from "../../src/cli/progress";
 
 describe("CLI: progress parseArgs", () => {
@@ -83,10 +84,23 @@ describe("CLI: progress parseArgs", () => {
 });
 
 describe("CLI: resolveDefaultDataDir", () => {
-  test("src/cli を基準にした場合、リポジトリルートの data/ を指す", () => {
-    const dummyCliDir = "C:/Users/dev/src/winget-observatory/src/cli";
-    const resolved = resolveDefaultDataDir(dummyCliDir).replace(/\\/g, "/");
-    expect(resolved).toBe("C:/Users/dev/src/winget-observatory/data");
+  test("既定の保存先は実行時の cwd ではなくリポジトリルートの data/ を起点に解決する", () => {
+    const tempWorkingDir = mkdtempSync(join(tmpdir(), "winget-progress-external-cwd-"));
+    const originalCwd = process.cwd();
+    const expectedRepoDataDir = join(__dirname, "../../data");
+
+    try {
+      const defaultDir1 = resolveDefaultDataDir();
+      expect(defaultDir1).toBe(expectedRepoDataDir);
+
+      process.chdir(tempWorkingDir);
+      const defaultDir2 = resolveDefaultDataDir();
+      expect(defaultDir2).toBe(expectedRepoDataDir);
+      expect(defaultDir2).not.toBe(join(tempWorkingDir, "data"));
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(tempWorkingDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -231,7 +245,7 @@ describe("CLI: runProgressCli with mock client", () => {
       );
 
       expect(res.snapshot).not.toBeNull();
-      expect(res.snapshot?.targetPr).toBe(200);
+      expect(res.snapshot?.TargetPr).toBe(200);
       expect(existsSync(logPath)).toBeTrue();
       expect(existsSync(snapshotPath)).toBeTrue();
 
@@ -240,10 +254,133 @@ describe("CLI: runProgressCli with mock client", () => {
       expect(csvContent).toContain('"TotalLifetimeDays"');
 
       const jsonContent = JSON.parse(readFileSync(snapshotPath, "utf-8"));
-      expect(jsonContent.targetPr).toBe(200);
-      expect(jsonContent.prTitle).toBe("Valid PR");
+      expect(jsonContent.TargetPr).toBe(200);
+      expect(jsonContent.PrTitle).toBe("Valid PR");
+
+      // CLI 出力スナップショットを buildDashboard に渡して HTML 生成を検証
+      const siteDir = join(tmpDir, "site");
+      const { htmlPath } = buildDashboard({
+        dataDir: tmpDir,
+        outputDir: siteDir,
+      });
+      expect(existsSync(htmlPath)).toBeTrue();
+      const htmlContent = readFileSync(htmlPath, "utf-8");
+      expect(htmlContent).toContain("Valid PR");
+      expect(htmlContent).toContain("200");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  test("マージ済み候補が複数ページ（101件以上）に渡る場合もページネーションして取得する", async () => {
+    const searchPageCalls: number[] = [];
+    const mockClient = {
+      getPullRequestDetails: async (_repo: string, num: number) => ({
+        number: num,
+        title: `PR ${num}`,
+        url: `https://github.com/test/repo/pull/${num}`,
+        state: "OPEN" as const,
+        isDraft: false,
+        createdAt: "2026-11-01T00:00:00Z",
+        mergedAt: null,
+        closedAt: null,
+        labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+        commits: [
+          {
+            oid: "abc",
+            messageHeadline: "fix",
+            committedDate: "2026-11-01T00:00:00Z",
+          },
+        ],
+      }),
+      getIssueTimeline: async () => [
+        {
+          event: "labeled",
+          created_at: "2026-11-01T01:00:00Z",
+          label: { name: "New-Package" },
+        },
+        {
+          event: "labeled",
+          created_at: "2026-11-01T01:00:00Z",
+          label: { name: "Azure-Pipeline-Passed" },
+        },
+        {
+          event: "labeled",
+          created_at: "2026-11-01T01:00:00Z",
+          label: { name: "Validation-Completed" },
+        },
+      ],
+      searchIssuesDetailed: async (
+        query: string,
+        _sort?: string,
+        _order?: string,
+        _perPage?: number,
+        page = 1,
+      ): Promise<GitHubDetailedSearchResult> => {
+        if (query.includes("is:merged")) {
+          searchPageCalls.push(page);
+          if (page === 1) {
+            // 1ページ目: 100件の候補（すべて条件不成立の無効アイテム）
+            const items = Array.from({ length: 100 }, (_, i) => ({
+              number: 1000 + i,
+              title: `Invalid Candidate ${i}`,
+              html_url: `https://github.com/test/repo/pull/${1000 + i}`,
+              created_at: "2026-11-01T00:00:00Z",
+              updated_at: "2026-11-02T00:00:00Z",
+              labels: [], // 必須ラベルなし
+              is_draft: false,
+              pull_request: { merged_at: "2026-11-02T10:00:00Z" },
+            }));
+            return { totalCount: 150, items };
+          }
+          if (page === 2) {
+            // 2ページ目: 1件の有効な候補
+            return {
+              totalCount: 150,
+              items: [
+                {
+                  number: 2000,
+                  title: "Valid Merged Candidate",
+                  html_url: "https://github.com/test/repo/pull/2000",
+                  created_at: "2026-11-01T00:00:00Z",
+                  updated_at: "2026-11-03T00:00:00Z",
+                  labels: [
+                    { name: "New-Package" },
+                    { name: "Azure-Pipeline-Passed" },
+                    { name: "Validation-Completed" },
+                  ],
+                  is_draft: false,
+                  pull_request: { merged_at: "2026-11-03T12:00:00Z" },
+                },
+              ],
+            };
+          }
+          return { totalCount: 150, items: [] };
+        }
+        return { totalCount: 0, items: [] };
+      },
+    } as unknown as GitHubApiClient;
+
+    const res = await runProgressCli(
+      {
+        targetPr: 500,
+        repository: "test/repo",
+        lookbackDays: 30,
+        sampleSize: 10,
+        fetchLimit: 200,
+        queueLimit: 500,
+        noLog: true,
+        asJson: false,
+      },
+      mockClient,
+      () => {},
+    );
+
+    // 2ページ目まで検索APIが呼ばれたこと
+    expect(searchPageCalls).toContain(1);
+    expect(searchPageCalls).toContain(2);
+    // 2ページ目の有効候補が集計され、前線PRとして採用されたこと
+    expect(res.snapshot).not.toBeNull();
+    expect(res.snapshot?.FrontNumber).toBe(2000);
   });
 });

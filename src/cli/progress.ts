@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { GitHubApiClient } from "../api/github";
+import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
 import {
   BLOCKED_LABELS,
   calculateProgressStats,
@@ -304,20 +304,41 @@ export async function runProgressCli(
     ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
   ].join(" ");
 
-  const mergedRes = await client.searchIssuesDetailed(
-    mergedQuery,
-    "updated",
-    "desc",
-    Math.min(options.fetchLimit, 100),
-  );
+  const candidates: GitHubDetailedSearchItem[] = [];
+  const perPage = 100;
+  let page = 1;
+  const maxPages = Math.ceil(options.fetchLimit / perPage);
 
-  const candidates = mergedRes.items
-    .filter((item) => item.number !== options.targetPr && item.pull_request?.merged_at)
-    .sort(
-      (a, b) =>
-        new Date(b.pull_request?.merged_at ?? b.updated_at).getTime() -
-        new Date(a.pull_request?.merged_at ?? a.updated_at).getTime(),
+  while (candidates.length < options.fetchLimit && page <= maxPages) {
+    const mergedRes = await client.searchIssuesDetailed(
+      mergedQuery,
+      "updated",
+      "desc",
+      perPage,
+      page,
     );
+    if (!mergedRes.items || mergedRes.items.length === 0) {
+      break;
+    }
+    for (const item of mergedRes.items) {
+      if (item.number !== options.targetPr && item.pull_request?.merged_at) {
+        candidates.push(item);
+        if (candidates.length >= options.fetchLimit) {
+          break;
+        }
+      }
+    }
+    if (mergedRes.items.length < perPage) {
+      break;
+    }
+    page++;
+  }
+
+  candidates.sort(
+    (a, b) =>
+      new Date(b.pull_request?.merged_at ?? b.updated_at).getTime() -
+      new Date(a.pull_request?.merged_at ?? a.updated_at).getTime(),
+  );
 
   const samples: MergedCandidateSample[] = [];
   let skipped = 0;

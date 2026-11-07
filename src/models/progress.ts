@@ -88,26 +88,26 @@ export interface ProgressHistoryRow {
 }
 
 export interface ProgressSnapshot {
-  timestamp: string;
-  timestampJst: string;
-  repository: string;
-  targetPr: number;
-  prTitle: string;
-  prUrl: string;
-  prState: string;
-  frontNumber: number | string;
-  frontCreatedAt: string;
-  activeAhead: number | string;
-  totalAhead: number;
-  behind: number;
-  totalLifetimeDays: number;
-  turnLatencyDays: number;
-  waitDays: number;
-  commitCount: number;
-  totalMedianDays: number | null;
-  totalP75Days: number | null;
-  turnMedianDays: number | null;
-  turnP75Days: number | null;
-  readyMedianDays: number | null;
-  readyP75Days: number | null;
+  Timestamp: string;
+  TimestampJst: string;
+  Repository: string;
+  TargetPr: number;
+  PrTitle: string;
+  PrUrl: string;
+  PrState: string;
+  FrontNumber: number | string;
+  FrontCreatedAt: string;
+  ActiveAhead: number | string;
+  TotalAhead: number;
+  Behind: number;
+  TotalLifetimeDays: number;
+  TurnLatencyDays: number;
+  WaitDays: number;
+  CommitCount: number;
+  TotalMedianDays: number | null;
+  TotalP75Days: number | null;
+  TurnMedianDays: number | null;
+  TurnP75Days: number | null;
+  ReadyMedianDays: number | null;
+  ReadyP75Days: number | null;
 }

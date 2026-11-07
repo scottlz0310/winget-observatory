@@ -143,9 +143,10 @@ export class GitHubApiClient {
     sort = "created",
     order = "asc",
     perPage = 30,
+    page = 1,
   ): Promise<GitHubDetailedSearchResult> {
     const encoded = encodeURIComponent(query);
-    const url = `${this.baseUrl}/search/issues?q=${encoded}&sort=${sort}&order=${order}&per_page=${perPage}`;
+    const url = `${this.baseUrl}/search/issues?q=${encoded}&sort=${sort}&order=${order}&per_page=${perPage}&page=${page}`;
 
     const res = await this.fetchFn(url, {
       method: "GET",
@@ -213,13 +214,19 @@ export class GitHubApiClient {
       );
     }
 
+    if (!commitsRes.ok) {
+      const errText = await commitsRes.text().catch(() => "");
+      throw new GitHubApiError(
+        `GitHub PR コミット一覧取得に失敗しました (#${prNumber}, status ${commitsRes.status}): ${errText}`,
+        commitsRes.status,
+      );
+    }
+
     const prData = (await prRes.json()) as Record<string, unknown>;
 
-    let commits: ProgressCommitSummary[] = [];
-    if (commitsRes.ok) {
-      const rawCommits = (await commitsRes.json()) as unknown[];
-      if (Array.isArray(rawCommits)) {
-        commits = rawCommits.map((c) => {
+    const rawCommits = (await commitsRes.json()) as unknown[];
+    const commits: ProgressCommitSummary[] = Array.isArray(rawCommits)
+      ? rawCommits.map((c) => {
           const commitObj = c as Record<string, unknown>;
           const commitDetails = commitObj.commit as Record<string, unknown> | undefined;
           const committer = commitDetails?.committer as Record<string, unknown> | undefined;
@@ -232,9 +239,8 @@ export class GitHubApiClient {
             messageHeadline: message.split("\n")[0],
             committedDate,
           };
-        });
-      }
-    }
+        })
+      : [];
 
     const stateRaw = String(prData.state ?? "open").toUpperCase();
     const isMerged = Boolean(prData.merged_at);

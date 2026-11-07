@@ -308,10 +308,10 @@ describe("Domain: CSV and Snapshot helpers", () => {
       },
     });
 
-    expect(snapshot.targetPr).toBe(464302);
-    expect(snapshot.totalLifetimeDays).toBe(2.35);
-    expect(snapshot.turnLatencyDays).toBe(1.23);
-    expect(snapshot.totalMedianDays).toBe(3.5);
-    expect(snapshot.timestampJst).toContain("2026-11-07");
+    expect(snapshot.TargetPr).toBe(464302);
+    expect(snapshot.TotalLifetimeDays).toBe(2.35);
+    expect(snapshot.TurnLatencyDays).toBe(1.23);
+    expect(snapshot.TotalMedianDays).toBe(3.5);
+    expect(snapshot.TimestampJst).toContain("2026-11-07");
   });
 });

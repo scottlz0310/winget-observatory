@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `test/cli/progress.test.ts`: 保存先解決テストで Windows 絶対パスを固定していた問題を解消し、OS 非依存のパス検証に修正
+- `src/domain/progress.ts`, `src/models/progress.ts`, `scripts/build-pages.ts`: 進捗スナップショット JSON のキーを既存仕様（PascalCase）に統一し、ダッシュボード側でも大文字・小文字双方に対応する正規化処理と結合テストを追加
+- `src/cli/progress.ts`, `src/api/github.ts`: マージ済み候補の検索を 100 件で打ち切らず、`fetchLimit`（既定 1000 件）まで複数ページを自動走査するページネーションを追加
+- `src/api/github.ts`: PR コミット一覧取得失敗時に例外を空配列へ握りつぶさず、`GitHubApiError` を正しくスローして誤った計測値の保存を防止するよう修正
 - `src/cli/explore-depths.ts`: 既定のデータ保存先が実行時 cwd 依存になっていた問題を解消し、エントリポイント位置からリポジトリルートの `data/` を起点に解決するよう修正
 - `src/cli/explore-depths.ts`: `--target-pr` の NaN や負数の許容、値の欠落、後続フラグの誤消費、および未知の引数を厳格に拒否するバリデーションを追加
 - `scripts/build-pages.ts`: キュー境界探索の遭難・放置の底の参照キーを `StrandedCandidates` から出力契約である `StaleBottom` へ修正し、ダッシュボード HTML への表示欠落を解消
