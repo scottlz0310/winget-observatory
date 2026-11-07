@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `README.md`: 累積待ち件数の定義を実装（検索ヒット件数）に合わせて修正し、`progress` / `explore-depths` の主なオプション、基準 PR が観測対象外のときの挙動、前提 Bun のバージョン指針（`.bun-version`）、`data/` ディレクトリの位置づけを追記（Issue #18）
+- `scripts/build-pages.ts`: 「手番所要日数」の説明を実装（最新コミット→マージ）に合わせて修正（Issue #18）
+- `src/domain/progress.ts`, `scripts/lib/dropbox.ts`: パーセンタイル算出方式の注記（R-7）と Dropbox 保存先パスのコメントを実装に合わせて修正（Issue #18）
+- `renovate.json`, `.gitattributes`: PowerShell 退役後も残っていた PowerShell 用のプリセットと `*.ps1` の改行設定を削除（Issue #18）
 - `.github/workflows/observe.yml`: 定期メトリクス収集ステップを PowerShell (`pwsh`) から Bun / TypeScript スクリプト（`src/cli/progress.ts`, `src/cli/explore-depths.ts`, `src/cli/generate-summary.ts`）のネイティブ実行へ刷新し、外部プロセス依存を完全排除
 - `README.md`: PowerShell スクリプトから Bun / TypeScript CLI コマンド（`bun run progress`, `bun run explore:depths`, `bun run summary`）への案内へ更新
 - `scripts/lib/dropbox.ts`: Dropbox アプリフォルダー内の二重階層を解消するため、保存先プレフィックス `DROPBOX_ROOT` を `/winget-observatory/` から `/data/` へ変更。移行互換用として旧プレフィックス `LEGACY_DROPBOX_ROOT`（`/winget-observatory/`）の読み取りを許容

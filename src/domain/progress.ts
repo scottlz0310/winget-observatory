@@ -111,7 +111,7 @@ export function isEligibleLabels(labels: Iterable<string>): boolean {
 }
 
 /**
- * パーセンタイル値を線形補間（R-6 / Excel PERCENTILE.INC 相当）で算出する。
+ * パーセンタイル値を線形補間（R-7 / Excel PERCENTILE.INC 相当）で算出する。
  */
 export function getPercentile(values: number[], percentile: number): number {
   if (values.length === 0) {
