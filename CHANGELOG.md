@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `src/cli/generate-summary.ts`: 観測データ（JSON / CSV）の読み込み・パース失敗時に例外を握りつぶさずファイルパス付きでエラーを伝播させて非ゼロ終了するよう修正
+- `src/domain/summary.ts`: PR タイトルに含まれる二重引用符を Mermaid 用にエスケープ（`#quot;`）し、特殊文字による構文破損を防止
 - `test/cli/progress.test.ts`: 保存先解決テストで Windows 絶対パスを固定していた問題を解消し、OS 非依存のパス検証に修正
 - `src/domain/progress.ts`, `src/models/progress.ts`, `scripts/build-pages.ts`: 進捗スナップショット JSON のキーを既存仕様（PascalCase）に統一し、ダッシュボード側でも大文字・小文字双方に対応する正規化処理と結合テストを追加
 - `src/cli/progress.ts`, `src/api/github.ts`: マージ済み候補の検索を 100 件で打ち切らず、`fetchLimit`（既定 1000 件）まで複数ページを自動走査するページネーションを追加

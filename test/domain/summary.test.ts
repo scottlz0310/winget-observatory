@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { generateSummaryMarkdown } from "../../src/domain/summary";
+import { escapeMermaidLabel, generateSummaryMarkdown } from "../../src/domain/summary";
 import type { DepthsSnapshot } from "../../src/models/depths";
 import type { ProgressHistoryRow, ProgressSnapshot } from "../../src/models/progress";
 
@@ -128,5 +128,48 @@ describe("Domain: generateSummaryMarkdown", () => {
     expect(md).not.toContain("## 3. 過去 30 日間マージ実績との統計比較");
     expect(md).not.toContain("## 4. キュー境界探索スナップショット");
     expect(md).not.toContain("## 5. 直近の消化推移履歴");
+  });
+
+  test("Mermaid ラベルのエスケープが正しく二重引用符を置換する", () => {
+    expect(escapeMermaidLabel('Sample "quoted" title')).toBe("Sample #quot;quoted#quot; title");
+  });
+
+  test("PR タイトルに二重引用符が含まれる場合も Mermaid 構文を壊さずエスケープする", () => {
+    const progress: ProgressSnapshot = {
+      Timestamp: "2026-11-07T11:30:00Z",
+      TimestampJst: "2026-11-07 20:30:00",
+      Repository: "microsoft/winget-pkgs",
+      TargetPr: 464302,
+      PrTitle: 'New "Example" package with "quotes"',
+      PrUrl: "https://github.com/microsoft/winget-pkgs/pull/464302",
+      PrState: "OPEN",
+      FrontNumber: 464100,
+      FrontCreatedAt: "2026-11-06 12:00",
+      ActiveAhead: 25,
+      TotalAhead: 150,
+      Behind: 10,
+      TotalLifetimeDays: 3.5,
+      TurnLatencyDays: 2.1,
+      WaitDays: 2.0,
+      CommitCount: 1,
+      TotalMedianDays: 4.0,
+      TotalP75Days: 6.0,
+      TurnMedianDays: 2.5,
+      TurnP75Days: 4.0,
+      ReadyMedianDays: 2.0,
+      ReadyP75Days: 3.5,
+    };
+
+    const md = generateSummaryMarkdown({
+      progress,
+      depths: null,
+      historyRecords: [],
+    });
+
+    // Mermaid ブロック内の Target ノードに生引用符が含まれず、#quot; に置換されていること
+    const targetMatch = md.match(/Target\["([^"]+)"\]/);
+    expect(targetMatch).not.toBeNull();
+    expect(targetMatch?.[1]).toContain("#quot;Example#quot;");
+    expect(targetMatch?.[1]).not.toContain('"Example"');
   });
 });

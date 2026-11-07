@@ -110,4 +110,28 @@ describe("CLI: runGenerateSummary", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("latest-progress.json の破損時に例外をスローして非ゼロ終了する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-summary-corrupted-progress-"));
+    try {
+      writeFileSync(join(tmpDir, "latest-progress.json"), "{ invalid json", "utf-8");
+      expect(() => runGenerateSummary({ dataDir: tmpDir })).toThrow(
+        "読み込み・パースに失敗しました",
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("latest-depths.json の破損時に例外をスローして非ゼロ終了する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-summary-corrupted-depths-"));
+    try {
+      writeFileSync(join(tmpDir, "latest-depths.json"), "{ invalid json", "utf-8");
+      expect(() => runGenerateSummary({ dataDir: tmpDir })).toThrow(
+        "読み込み・パースに失敗しました",
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

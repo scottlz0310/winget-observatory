@@ -79,7 +79,10 @@ export function runGenerateSummary(
     try {
       progress = JSON.parse(readFileSync(progressJsonPath, "utf-8")) as ProgressSnapshot;
     } catch (e) {
-      log(`progress JSON パース失敗: ${e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `進捗スナップショット (${progressJsonPath}) の読み込み・パースに失敗しました: ${msg}`,
+      );
     }
   }
 
@@ -88,7 +91,10 @@ export function runGenerateSummary(
     try {
       depths = JSON.parse(readFileSync(depthsJsonPath, "utf-8")) as DepthsSnapshot;
     } catch (e) {
-      log(`depths JSON パース失敗: ${e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `キュー境界スナップショット (${depthsJsonPath}) の読み込み・パースに失敗しました: ${msg}`,
+      );
     }
   }
 
@@ -97,7 +103,8 @@ export function runGenerateSummary(
     try {
       historyRecords = parseCsvRows(readFileSync(csvPath, "utf-8"));
     } catch (e) {
-      log(`CSV パース失敗: ${e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`履歴 CSV (${csvPath}) の読み込み・パースに失敗しました: ${msg}`);
     }
   }
 

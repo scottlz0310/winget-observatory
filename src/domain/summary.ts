@@ -5,6 +5,10 @@
 
 import type { SummaryDataInputs } from "../models/summary";
 
+export function escapeMermaidLabel(text: string): string {
+  return text.replace(/"/g, "#quot;");
+}
+
 function truncateText(text: string, maxLength = 50): string {
   if (text.length <= maxLength) {
     return text;
@@ -116,16 +120,22 @@ export function generateSummaryMarkdown(inputs: SummaryDataInputs): string {
       : "なし";
 
   lines.push(
-    `        HB["健康的な大底<br/>${hBottomPr}"] --> Front["消化前線<br/>${frontPrNumVal}"]`,
+    `        HB["健康的な大底<br/>${escapeMermaidLabel(hBottomPr)}"] --> Front["消化前線<br/>${escapeMermaidLabel(frontPrNumVal)}"]`,
   );
-  lines.push(`        Front --> Ahead["実質待ち PR 群<br/>約 ${aheadCountVal}"]`);
   lines.push(
-    `        Ahead --> Target["★ 基準 PR #${targetPrNum}<br/>${truncateText(targetTitle, 30)}"]`,
+    `        Front --> Ahead["実質待ち PR 群<br/>約 ${escapeMermaidLabel(aheadCountVal)}"]`,
   );
-  lines.push(`        Target --> Behind["後続の準備完了 PR<br/>約 ${behindCountVal}"]`);
+  lines.push(
+    `        Ahead --> Target["★ 基準 PR #${targetPrNum}<br/>${escapeMermaidLabel(truncateText(targetTitle, 30))}"]`,
+  );
+  lines.push(
+    `        Target --> Behind["後続の準備完了 PR<br/>約 ${escapeMermaidLabel(behindCountVal)}"]`,
+  );
   lines.push("    end");
   lines.push('    Front --> Merged["マージ完了 (Merged)"]');
-  lines.push(`    Express["特急レーン / 追い越し<br/>${expressCountVal}"] -.->|優先処理| Merged`);
+  lines.push(
+    `    Express["特急レーン / 追い越し<br/>${escapeMermaidLabel(expressCountVal)}"] -.->|優先処理| Merged`,
+  );
   lines.push("```");
   lines.push("");
 
