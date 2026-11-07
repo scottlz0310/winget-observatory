@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/models/progress.ts`, `src/domain/progress.ts`, `src/cli/progress.ts`: 進捗メトリクス計測（`progress-winget`）の TypeScript (Bun) 実装を追加（Issue #7 Phase 2）。ラベル判定（必須・阻害・調査中・パターン除外）、線形補間パーセンタイル計算、タイムラインシミュレーションによる条件成立日時（ReadyAt）特定、および CSV 履歴・JSON スナップショット出力 CLI を配備
+- `test/domain/progress.test.ts`, `test/cli/progress.test.ts`: 進捗メトリクス計測のドメイン純粋関数および CLI 引数・cwd 独立性・モック API 実行の単体テストを追加
+- `src/api/github.ts`: REST API による PR 詳細取得（`getPullRequestDetails`）、タイムライン取得（`getIssueTimeline`）、および検索詳細取得（`searchIssuesDetailed`）メソッドを追加
 - `src/models/depths.ts`, `src/domain/depths.ts`, `src/api/github.ts`, `src/cli/explore-depths.ts`: キュー境界探索（`explore-winget-depths`）の TypeScript (Bun) 実装を追加（Issue #7 Phase 1）。I/O 非依存の純粋関数ドメイン、Bun 標準 fetch による GitHub API クライアント、および JSONL/JSON 永続化 CLI を配備
 - `test/domain/depths.test.ts`, `test/api/github.test.ts`, `test/cli/explore-depths.test.ts`: キュー境界探索のドメインロジック、API クライアント、CLI 動作の単体テストを追加
 - `test/architecture.test.ts`: `src/domain` および `src/models` の境界違反（外部 I/O 依存、暗黙の環境変数依存、レイヤー逆参照）をホワイトリスト方式で機械的に検知するアーキテクチャ境界テストを追加
