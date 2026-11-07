@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tsconfig.json`, `package.json`, `.github/workflows/ci.yml`, `lefthook.yml`: strict な型チェック（`tsc --noEmit`、`bun run typecheck`）を導入し、CI と pre-commit に組み込み（Issue #18）
 - `src/models/dashboard.ts`, `src/domain/dashboard.ts`: ダッシュボード算出メトリクス（直近24時間の消化速度 Velocity・到着予測 ETA、前回観測比の増減差分 Δ、前線と自 PR の起票日カレンダー距離、実績所要日数パーセンタイル集計）を算出するドメイン純粋関数および型定義を追加（Issue #12）
 - `test/domain/dashboard.test.ts`: ダッシュボード算出メトリクスの単体テストを追加
 - `scripts/build-pages.ts`: 到着予測 (ETA) & 消化速度カード、前線カレンダー距離カード、マージ実績所要日数（手番・Ready・通算）統計セクション、および直近ログテーブルへの Δ 差分バッジ表示を追加
@@ -27,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `src/api/github.ts`: `GitHubApiClientOptions.fetch` を `typeof fetch` から呼び出しシグネチャのみの `FetchLike` へ変更し、モック注入時の型エラー（`preconnect` 欠落）を解消。タイムライン取得ループの暗黙 any を明示的な型注釈で解消（Issue #18）
+- `bun.lock`: `package.json` と食い違っていた `@biomejs/biome` の specifier を再生成で整合（Issue #18）
+- `package.json`: `lint` スクリプトが `--write` でファイルを書き換えていたため検査のみに変更（修正は `check:fix`）（Issue #18）
+- `.github/workflows/ci.yml`, `observe.yml`, `prepare-release.yml`: ジョブに `timeout-minutes` を設定し、API 待ちなどによる無制限のハングを防止（Issue #18）
 - `README.md`: Dropbox 保存先パス（`/data/`）、前提ツール（PowerShell 依存削除）、ロードマップ（Pages ダッシュボード完了）、および定期観測ダッシュボードの閲覧案内を最新実装に合わせて更新し、Codecov バッジを追加（Issue #16）
 - `.github/workflows/observe.yml`: 定期観測ワークフローに防御的な `bun install --frozen-lockfile` ステップを追加し、将来の依存追加時の潜在リスクを排除（Issue #16）
 - `.github/workflows/ci.yml`: `id-token: write` パーミッションおよび `codecov/codecov-action` ステップを追加し、GitHub Actions の OIDC 認証（トークンレス）を用いた Codecov へのカバレッジ自動送信を有効化（Issue #14）
@@ -66,12 +71,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `src/api/github.ts`: `GitHubApiClientOptions.fetch` を `typeof fetch` から呼び出しシグネチャのみの `FetchLike` へ変更し、モック注入時の型エラー（`preconnect` 欠落）を解消。タイムライン取得ループの暗黙 any を明示的な型注釈で解消（Issue #18）
+- `bun.lock`: `package.json` と食い違っていた `@biomejs/biome` の specifier を再生成で整合（Issue #18）
+- `package.json`: `lint` スクリプトが `--write` でファイルを書き換えていたため検査のみに変更（修正は `check:fix`）（Issue #18）
+- `.github/workflows/ci.yml`, `observe.yml`, `prepare-release.yml`: ジョブに `timeout-minutes` を設定し、API 待ちなどによる無制限のハングを防止（Issue #18）
 - `scripts/explore-winget-depths.ps1`, `scripts/progress-winget.ps1`, `scripts/generate-summary.ps1` において、`ToLocalTime()` 依存による実行環境（GitHub Actions 等の UTC ランナー）での JST 日時ズレを解消し、`ToOffset([TimeSpan]::FromHours(9))` による明示的な JST 変換に統一
 - 観測データ保存（CSV, JSON, JSONL）失敗時に例外を握りつぶさずコンテキスト付きで再 throw してプロセスを非ゼロ終了するよう修正
 - `CHANGELOG.md` 末尾に `[Unreleased]` 比較リンク定義を追加し、`release-automate` による版確定処理の正規表現契約を満たすよう対応
 
 ### Added
 
+- `tsconfig.json`, `package.json`, `.github/workflows/ci.yml`, `lefthook.yml`: strict な型チェック（`tsc --noEmit`、`bun run typecheck`）を導入し、CI と pre-commit に組み込み（Issue #18）
 - `microsoft/winget-pkgs` のレビュートリアージ・キュー境界・消化速度を定点観測する PowerShell スクリプト群を追加
   - `scripts/progress-winget.ps1`: PR 待機時間、消化前線、待ち件数、過去 30 日間マージ実績サンプル（中央値・P90）の集計・推移記録
   - `scripts/explore-winget-depths.ps1`: 健康的な大底、真の大底、遭難・放置の底、特急レーンのキュー境界探索

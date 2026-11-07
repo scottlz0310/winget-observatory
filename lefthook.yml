@@ -7,3 +7,6 @@ pre-commit:
     biome:
       glob: "*.{js,ts,json,jsonc,md,yml,yaml}"
       run: bunx biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+    typecheck:
+      glob: "*.ts"
+      run: bunx tsc --noEmit

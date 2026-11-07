@@ -23,10 +23,13 @@ export interface GitHubDetailedSearchResult {
   items: GitHubDetailedSearchItem[];
 }
 
+/** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
+export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
 export interface GitHubApiClientOptions {
   token?: string;
   baseUrl?: string;
-  fetch?: typeof fetch;
+  fetch?: FetchLike;
 }
 
 export class GitHubApiError extends Error {
@@ -46,7 +49,7 @@ export class GitHubApiError extends Error {
 export class GitHubApiClient {
   private readonly token: string | undefined;
   private readonly baseUrl: string;
-  private readonly fetchFn: typeof fetch;
+  private readonly fetchFn: FetchLike;
 
   constructor(options: GitHubApiClientOptions = {}) {
     this.token = options.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? undefined;
@@ -283,7 +286,7 @@ export class GitHubApiClient {
 
     while (nextUrl && pageCount < maxPages) {
       pageCount++;
-      const res = await this.fetchFn(nextUrl, {
+      const res: Response = await this.fetchFn(nextUrl, {
         method: "GET",
         headers: this.getHeaders(),
       });
@@ -315,10 +318,10 @@ export class GitHubApiClient {
       }
 
       // Link ヘッダーから次ページ URL を探索
-      const linkHeader = res.headers.get("Link") ?? res.headers.get("link");
+      const linkHeader: string | null = res.headers.get("Link") ?? res.headers.get("link");
       nextUrl = null;
       if (linkHeader) {
-        const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+        const match: RegExpMatchArray | null = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
         if (match) {
           nextUrl = match[1];
         }
