@@ -64,14 +64,6 @@ bun run explore:depths --output-path "data/latest-depths.json"
 3. **遭難・放置の底 (Stale Bottom)**: 健康体の中で更新日時（updated）が最も古く、完全に止まっている PR
 4. **特急レーン・追い越し (Express Lane)**: 基準 PR 起票日以降に起票され、すでにマージされた PR
 
-### 3. `src/cli/generate-summary.ts`（まとめダッシュボード生成）
-
-蓄積された進捗ログ（CSV）および最新スナップショット（JSON）から、人間が見て一目で状況を把握できる Markdown ドキュメント（[`SUMMARY.md`](SUMMARY.md)）を自動生成します。
-
-```bash
-bun run summary --output-path "SUMMARY.md"
-```
-
 ---
 
 ## データ蓄積と自動化（GitHub Actions / Dropbox / GitHub Pages）
@@ -81,7 +73,7 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 - **GitHub Pages によるダッシュボード公開**:
   - `scripts/build-pages.ts` により生成された HTML ダッシュボードが GitHub Pages へ直接デプロイされます。
   - `actions/deploy-pages` を使用するため、Git コミットや `gh-pages` ブランチの作成を行わずクリーンに公開されます。
-  - **注記**: 定期観測（cron）による最新ダッシュボードおよび推移データは GitHub Pages 上で公開・更新されます（厳格なブランチ保護ルールを維持するため、リポジトリ直下の `SUMMARY.md` は cron で自動コミットされません）。
+  - 最新のダッシュボードと推移データは <https://scottlz0310.github.io/winget-observatory/> で公開されます（人間が読む場所は Pages に一本化しており、リポジトリ内に生成物のドキュメントは置きません）。
 - **Dropbox App Folder による生データ永続化**:
   - 収集された CSV / JSONL / JSON は、`scripts/sync-dropbox.ts` を通じて Dropbox の専用 App Folder（`/data/`）へ自動同期・蓄積されます。
   - Git リポジトリ（`main` ブランチ）への直接 push を全廃し、厳格なブランチ保護ルールを維持します。
@@ -126,6 +118,9 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 ```bash
 # 依存ツールのセットアップ
 bun install
+
+# 型チェック
+bun run typecheck
 
 # Lint / Format の確認
 bun run check
