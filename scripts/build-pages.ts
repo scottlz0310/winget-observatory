@@ -485,7 +485,126 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   let progress: LatestProgress | null = null;
   if (existsSync(progressPath)) {
     try {
-      progress = JSON.parse(readFileSync(progressPath, "utf-8"));
+      const raw = JSON.parse(readFileSync(progressPath, "utf-8")) as Record<string, unknown>;
+      progress = {
+        Timestamp: String(raw.Timestamp ?? raw.timestamp ?? ""),
+        TimestampJst: String(raw.TimestampJst ?? raw.timestampJst ?? ""),
+        Repository: String(raw.Repository ?? raw.repository ?? ""),
+        TargetPr:
+          raw.TargetPr !== undefined
+            ? Number(raw.TargetPr)
+            : raw.targetPr !== undefined
+              ? Number(raw.targetPr)
+              : undefined,
+        PrTitle:
+          raw.PrTitle !== undefined
+            ? String(raw.PrTitle)
+            : raw.prTitle !== undefined
+              ? String(raw.prTitle)
+              : undefined,
+        PrUrl:
+          raw.PrUrl !== undefined
+            ? String(raw.PrUrl)
+            : raw.prUrl !== undefined
+              ? String(raw.prUrl)
+              : undefined,
+        PrState:
+          raw.PrState !== undefined
+            ? String(raw.PrState)
+            : raw.prState !== undefined
+              ? String(raw.prState)
+              : undefined,
+        FrontNumber:
+          raw.FrontNumber !== undefined
+            ? Number(raw.FrontNumber)
+            : raw.frontNumber !== undefined
+              ? Number(raw.frontNumber)
+              : undefined,
+        FrontCreatedAt:
+          raw.FrontCreatedAt !== undefined
+            ? String(raw.FrontCreatedAt)
+            : raw.frontCreatedAt !== undefined
+              ? String(raw.frontCreatedAt)
+              : undefined,
+        ActiveAhead:
+          raw.ActiveAhead !== undefined
+            ? Number(raw.ActiveAhead)
+            : raw.activeAhead !== undefined
+              ? Number(raw.activeAhead)
+              : undefined,
+        TotalAhead:
+          raw.TotalAhead !== undefined
+            ? Number(raw.TotalAhead)
+            : raw.totalAhead !== undefined
+              ? Number(raw.totalAhead)
+              : undefined,
+        Behind:
+          raw.Behind !== undefined
+            ? Number(raw.Behind)
+            : raw.behind !== undefined
+              ? Number(raw.behind)
+              : undefined,
+        TotalLifetimeDays:
+          raw.TotalLifetimeDays !== undefined
+            ? Number(raw.TotalLifetimeDays)
+            : raw.totalLifetimeDays !== undefined
+              ? Number(raw.totalLifetimeDays)
+              : undefined,
+        TurnLatencyDays:
+          raw.TurnLatencyDays !== undefined
+            ? Number(raw.TurnLatencyDays)
+            : raw.turnLatencyDays !== undefined
+              ? Number(raw.turnLatencyDays)
+              : undefined,
+        WaitDays:
+          raw.WaitDays !== undefined
+            ? Number(raw.WaitDays)
+            : raw.waitDays !== undefined
+              ? Number(raw.waitDays)
+              : undefined,
+        CommitCount:
+          raw.CommitCount !== undefined
+            ? Number(raw.CommitCount)
+            : raw.commitCount !== undefined
+              ? Number(raw.commitCount)
+              : undefined,
+        TotalMedianDays:
+          raw.TotalMedianDays !== undefined
+            ? Number(raw.TotalMedianDays)
+            : raw.totalMedianDays !== undefined
+              ? Number(raw.totalMedianDays)
+              : undefined,
+        TotalP75Days:
+          raw.TotalP75Days !== undefined
+            ? Number(raw.TotalP75Days)
+            : raw.totalP75Days !== undefined
+              ? Number(raw.totalP75Days)
+              : undefined,
+        TurnMedianDays:
+          raw.TurnMedianDays !== undefined
+            ? Number(raw.TurnMedianDays)
+            : raw.turnMedianDays !== undefined
+              ? Number(raw.turnMedianDays)
+              : undefined,
+        TurnP75Days:
+          raw.TurnP75Days !== undefined
+            ? Number(raw.TurnP75Days)
+            : raw.turnP75Days !== undefined
+              ? Number(raw.turnP75Days)
+              : undefined,
+        ReadyMedianDays:
+          raw.ReadyMedianDays !== undefined
+            ? Number(raw.ReadyMedianDays)
+            : raw.readyMedianDays !== undefined
+              ? Number(raw.readyMedianDays)
+              : undefined,
+        ReadyP75Days:
+          raw.ReadyP75Days !== undefined
+            ? Number(raw.ReadyP75Days)
+            : raw.readyP75Days !== undefined
+              ? Number(raw.readyP75Days)
+              : undefined,
+      };
     } catch (e) {
       console.warn(`[Build Pages] progress JSON パース失敗: ${e}`);
     }
