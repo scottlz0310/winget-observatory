@@ -4,6 +4,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_REPOSITORY, DEFAULT_TARGET_PR } from "../src/cli/args";
+import { describeGuidance, describeOvertake } from "../src/domain/benchmark";
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
@@ -15,10 +16,14 @@ import {
   extractStaleFrontierSamples,
   parseDepthsHistory,
 } from "../src/domain/forecast";
-import { parseCsvRows } from "../src/domain/progress";
+import { formatDateTimeWithDay, formatHumanDays, parseCsvRows } from "../src/domain/progress";
 import type { DepthsSnapshot } from "../src/models/depths";
 import type { StaleFrontierForecast, StaleFrontierSample } from "../src/models/forecast";
-import type { ProgressHistoryRow, ProgressSnapshot } from "../src/models/progress";
+import type {
+  ProgressHistoryRow,
+  ProgressSnapshot,
+  ReferenceGuidance,
+} from "../src/models/progress";
 
 interface BuildOptions {
   dataDir: string;
@@ -121,6 +126,147 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
 }
 
 const DAY_MS = 86_400_000;
+
+/** 実績サンプルが少なく、数値が揺れやすいとみなす件数 */
+const FEW_SAMPLES = 10;
+
+/** 日数統計カード（中央値・75%点・最大）と、基準 PR の現在値の位置づけ */
+function renderStatCard(
+  title: string,
+  stats: { median?: number | null; p75?: number | null; max?: number | null },
+  currentDays: number | string | undefined,
+  guidance: ReferenceGuidance | undefined,
+  description: string,
+): string {
+  const position = guidance
+    ? `<div class="card-subtext">${escapeHtml(describeGuidance(guidance, formatHumanDays))} サンプルの ${guidance.ShorterSharePct}% はこれより短い期間でマージ済み</div>`
+    : "";
+  return `
+      <div class="card stat-card">
+        <div class="card-title">${title}</div>
+        <div class="card-value" style="font-size: 1.4rem;">
+          P50: ${formatDaysStat(stats.median)}
+          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
+          P75: ${formatDaysStat(stats.p75)}
+          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
+          最大: ${formatDaysStat(stats.max)}
+        </div>
+        <div class="card-subtext">${description}</div>
+        <div class="card-subtext">基準 PR の現在: <strong>${escapeHtml(currentDays)}</strong> 日</div>
+        ${position}
+      </div>`;
+}
+
+/** 追い越しの比較（採用サンプル内で、基準 PR より後に作成・成立してマージされた件数） */
+function renderOvertakeSection(progress: LatestProgress | null): string {
+  const c = progress?.Comparison;
+  if (!c) return "";
+  const target = progress?.TargetPr ?? DEFAULT_TARGET_PR;
+  const noteColor = c.Verdict === "overtaken" ? "var(--danger)" : "var(--text-muted)";
+  return `
+    <h2 class="section-title">🏃 追い越しの比較（採用サンプル内）</h2>
+    <p class="section-note">
+      直近にマージされた PR のうち、基準 PR と比べた件数です（全期間の件数ではありません）。
+    </p>
+    <table>
+      <thead>
+        <tr><th>比較</th><th>件数</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>自分より後に作成され、マージ済み（追い越し）</td><td><strong>${c.LaterCreated}</strong> 件</td></tr>
+        <tr><td>自分より前に作成され、マージ済み</td><td>${c.EarlierCreated} 件</td></tr>
+        <tr><td>自分より後に条件が整い（ReadyAt）、マージ済み</td><td>${c.LaterReady} 件</td></tr>
+        <tr><td>自分より新しい PR 番号 (&gt;${escapeHtml(target)}) でマージ済み</td><td>${c.NewerNumber} 件</td></tr>
+        <tr><td>自分より古い PR 番号 (&lt;${escapeHtml(target)}) でマージ済み</td><td>${c.OlderNumber} 件</td></tr>
+      </tbody>
+    </table>
+    <p class="section-note" style="color: ${noteColor};">※ ${escapeHtml(describeOvertake(c))}</p>`;
+}
+
+/** 直前のライバル PR（作成順で基準 PR の直前に並ぶ健康な未マージ PR） */
+function renderRivalsSection(progress: LatestProgress | null): string {
+  const rivals = progress?.Rivals ?? [];
+  if (rivals.length === 0) return "";
+  const observedMs = Date.parse(progress?.Timestamp ?? "");
+  const rows = rivals
+    .map((r) => {
+      const updatedMs = Date.parse(r.UpdatedAt);
+      const idle =
+        Number.isNaN(observedMs) || Number.isNaN(updatedMs)
+          ? "-"
+          : `${Math.round(((observedMs - updatedMs) / DAY_MS) * 10) / 10} 日`;
+      return `
+        <tr>
+          <td><a href="${escapeHtml(r.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(r.Number)}</a></td>
+          <td>${escapeHtml(formatDateTimeWithDay(r.CreatedAt))}</td>
+          <td>${escapeHtml(formatDateTimeWithDay(r.UpdatedAt))}</td>
+          <td>${idle}</td>
+          <td>${escapeHtml(r.Title)}</td>
+        </tr>`;
+    })
+    .join("");
+  return `
+    <h2 class="section-title">🥊 直前のライバル PR（TOP ${rivals.length}）</h2>
+    <p class="section-note">
+      作成順で基準 PR の直前に並ぶ健康な未マージ PR です。更新が止まっているほど、順番待ちに徹している PR と読めます。
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>PR 番号</th>
+          <th>起票 (JST)</th>
+          <th>最終更新 (JST)</th>
+          <th>更新からの経過</th>
+          <th>タイトル</th>
+        </tr>
+      </thead>
+      <tbody>${rows}
+      </tbody>
+    </table>`;
+}
+
+/** 比較に使ったマージ済みサンプルの一覧（折りたたみ） */
+function renderSamplesSection(progress: LatestProgress | null, repo: string): string {
+  const samples = progress?.Samples ?? [];
+  if (samples.length === 0) return "";
+  const rows = samples
+    .map(
+      (sample) => `
+        <tr>
+          <td><a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(sample.Number)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(sample.Number)}</a></td>
+          <td>${sample.Relation === "older" ? "古い" : "新しい"}</td>
+          <td>${escapeHtml(sample.CommitCount)}</td>
+          <td>${sample.TurnDays.toFixed(1)} 日</td>
+          <td>${sample.TotalDays.toFixed(1)} 日</td>
+          <td>${sample.ReadyDays.toFixed(1)} 日</td>
+          <td>${escapeHtml(formatDateTimeWithDay(sample.LatestCommittedDate))}</td>
+          <td>${escapeHtml(formatDateTimeWithDay(sample.MergedAt))}</td>
+        </tr>`,
+    )
+    .join("");
+  return `
+    <h2 class="section-title">🧪 比較に使ったサンプル（${samples.length} 件）</h2>
+    <details style="margin-bottom: 2rem;">
+      <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">マージ日時の新しい順に表示</summary>
+      <table>
+        <thead>
+          <tr>
+            <th>PR 番号</th>
+            <th>作成順</th>
+            <th>コミット数</th>
+            <th>レビュー待ち</th>
+            <th>通算日数</th>
+            <th>成立後</th>
+            <th>最新コミット (JST)</th>
+            <th>マージ (JST)</th>
+          </tr>
+        </thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+    </details>
+    <p class="section-note">待機はラベルと Draft の履歴に基づきます。候補検索は現在の必須ラベルを使うため、マージ後にそれらが外れた PR は含まれません。</p>`;
+}
 
 const FORECAST_UNAVAILABLE_TEXT: Record<string, string> = {
   "no-samples": "遭難の底の観測がありません",
@@ -529,38 +675,42 @@ function generateHtml(
       </div>
     </div>
 
-    <h2 class="section-title">⏱️ マージ実績の所要日数統計 (直近 30 日間)</h2>
-    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">
-      <div class="card stat-card">
-        <div class="card-title">手番所要日数 (Turn Latency)</div>
-        <div class="card-value" style="font-size: 1.4rem;">
-          P50: ${formatDaysStat(progress?.TurnMedianDays)}
-          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          P75: ${formatDaysStat(progress?.TurnP75Days)}
-        </div>
-        <div class="card-subtext">最新コミットからマージされるまでの日数（修正後の再レビュー待ち）</div>
-      </div>
-
-      <div class="card stat-card">
-        <div class="card-title">Ready 成立後所要日数 (Ready Latency)</div>
-        <div class="card-value" style="font-size: 1.4rem;">
-          P50: ${formatDaysStat(progress?.ReadyMedianDays)}
-          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          P75: ${formatDaysStat(progress?.ReadyP75Days)}
-        </div>
-        <div class="card-subtext">CI 通過および必須ラベル成立からマージされるまでの日数</div>
-      </div>
-
-      <div class="card stat-card">
-        <div class="card-title">通算所要日数 (Total Lifetime)</div>
-        <div class="card-value" style="font-size: 1.4rem;">
-          P50: ${formatDaysStat(progress?.TotalMedianDays)}
-          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          P75: ${formatDaysStat(progress?.TotalP75Days)}
-        </div>
-        <div class="card-subtext">PR 起票からマージ完了までの全期間の所要日数</div>
-      </div>
+    <h2 class="section-title">⏱️ マージ実績の所要日数統計 (直近 ${escapeHtml(progress?.LookbackDays ?? 30)} 日間${progress?.SampleCount === undefined ? "" : ` / 採用 ${progress.SampleCount} 件・除外 ${progress.SkippedCount ?? 0} 件`})</h2>
+    ${
+      progress?.SampleCount !== undefined && progress.SampleCount < FEW_SAMPLES
+        ? `<p class="section-note">※ サンプルが少ないため、数値は変動しやすくなっています。</p>`
+        : ""
+    }
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">${renderStatCard(
+      "手番所要日数 (Turn Latency)",
+      { median: progress?.TurnMedianDays, p75: progress?.TurnP75Days, max: progress?.TurnMaxDays },
+      progress?.TurnLatencyDays,
+      progress?.Guidance?.Turn,
+      "最新コミットからマージされるまでの日数（修正後の再レビュー待ち）",
+    )}${renderStatCard(
+      "Ready 成立後所要日数 (Ready Latency)",
+      {
+        median: progress?.ReadyMedianDays,
+        p75: progress?.ReadyP75Days,
+        max: progress?.ReadyMaxDays,
+      },
+      progress?.WaitDays,
+      progress?.Guidance?.Ready,
+      "CI 通過および必須ラベル成立からマージされるまでの日数",
+    )}${renderStatCard(
+      "通算所要日数 (Total Lifetime)",
+      {
+        median: progress?.TotalMedianDays,
+        p75: progress?.TotalP75Days,
+        max: progress?.TotalMaxDays,
+      },
+      progress?.TotalLifetimeDays,
+      progress?.Guidance?.Total,
+      "PR 起票からマージ完了までの全期間の所要日数",
+    )}
     </div>
+
+    ${renderOvertakeSection(progress)}
 
     <h2 class="section-title">📊 トリアージキュー構造</h2>
     <div class="flow-container">
@@ -589,6 +739,8 @@ function generateHtml(
       </div>
     </div>
 
+    ${renderRivalsSection(progress)}
+
     <h2 class="section-title">🧭 キュー境界探索（特急・大底・遭難）</h2>
     <table>
       <thead>
@@ -615,8 +767,22 @@ function generateHtml(
         `,
           )
           .join("")}
-        ${(depths?.ExpressLane ?? [])
+        ${(depths?.AbsoluteBottom ?? [])
           .slice(0, 3)
+          .map(
+            (item) => `
+        <tr>
+          <td><span class="badge" style="background:#fce7f3;color:#9d174d;">真の大底</span></td>
+          <td><a href="${escapeHtml(item.Url)}" target="_blank">#${escapeHtml(item.Number)}</a></td>
+          <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
+          <td>${escapeHtml(item.更新日時 || item.UpdatedAt)}</td>
+          <td>${escapeHtml(item.タイトル || item.Title)}</td>
+        </tr>
+        `,
+          )
+          .join("")}
+        ${(depths?.ExpressLane ?? [])
+          .slice(0, 5)
           .map(
             (item) => `
         <tr>
@@ -681,6 +847,8 @@ function generateHtml(
     `
         : `<p style="color: var(--text-muted); font-size: 0.875rem;">現在の指標定義（更新順の待ち順位）の推移データはまだ蓄積されていません。旧定義の履歴は比較できないため表示しません。</p>`
     }
+
+    ${renderSamplesSection(progress, repo)}
 
     <footer>
       <p>Winget Observatory - Automated with GitHub Actions &amp; GitHub Pages</p>

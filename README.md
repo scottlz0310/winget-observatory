@@ -85,6 +85,7 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
   - `scripts/build-pages.ts` により生成された HTML ダッシュボードが GitHub Pages へ直接デプロイされます。
   - `actions/deploy-pages` を使用するため、Git コミットや `gh-pages` ブランチの作成を行わずクリーンに公開されます。
   - 最新のダッシュボードと推移データは <https://scottlz0310.github.io/winget-observatory/> で公開されます（人間が読む場所は Pages に一本化しており、リポジトリ内に生成物のドキュメントは置きません）。
+  - ダッシュボードには、過去のマージ実績との比較（中央値・75%点・最大、基準 PR の位置づけ）、追い越しの比較、直前のライバル PR、比較に使ったサンプル一覧、キュー境界（健康的大底・真の大底・特急レーン）も表示します。
   - ダッシュボードの「マージ時期の予想」は、遭難の底（更新が最も古い健康な PR）の先頭の進みから基準 PR のマージ時期を予想する参考値です。「更新の古い順に処理される」という仮説に基づき、先頭の遅れが一定とする定常待ち時間モデルと、履歴から先頭の進みを実測する観測速度モデルを並べて表示します（進みが観測できない間は後者は算出不能と表示）。
 - **Dropbox App Folder による生データ永続化**:
   - 収集された CSV / JSONL / JSON は、`scripts/sync-dropbox.ts` を通じて Dropbox の専用 App Folder（`/data/`）へ自動同期・蓄積されます。
