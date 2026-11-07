@@ -1,6 +1,7 @@
 # Node / Bun
 node_modules/
 bun.lockb
+site/
 
 # Temporary & backup files
 *.tmp

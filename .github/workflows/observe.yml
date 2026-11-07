@@ -1,5 +1,9 @@
 name: Observe Winget Queue
 
+# 4時間おきの cron 実行または手動起動により、microsoft/winget-pkgs のメトリクスを収集する。
+# 生データ（CSV/JSONL/JSON）は Dropbox App folder へ保存し、ダッシュボードは GitHub Pages へ公開する。
+# main ブランチへの git push は行わず、contents: read で安全に実行する。
+
 on:
   schedule:
     # 4時間おき（15分）に実行
@@ -20,15 +24,32 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
   observe:
-    name: Collect Metrics
+    name: Collect Metrics, Save to Dropbox & Deploy Dashboard
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Download latest history data from Dropbox
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+        run: bun run scripts/sync-dropbox.ts --direction download
 
       - name: Run Winget Observatory Scripts
         shell: pwsh
@@ -56,18 +77,25 @@ jobs:
             -HistoryPath "data/depths-history.jsonl" `
             -OutputPath "data/latest-depths.json"
 
-          # 3. ダッシュボードまとめドキュメントの自動生成
+          # 3. ダッシュボードまとめドキュメント（SUMMARY.md）の生成
           Write-Host "`n=== Running generate-summary.ps1 ==="
           ./scripts/generate-summary.ps1 -OutputPath "SUMMARY.md"
 
-      - name: Commit and push metrics data
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/ SUMMARY.md
-          if git diff --staged --quiet; then
-            echo "No changes in data directory or SUMMARY.md."
-          else
-            git commit -m "chore(data): record winget observatory metrics and update SUMMARY.md [skip ci]"
-            git push
-          fi
+      - name: Save updated metrics to Dropbox
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+        run: bun run scripts/sync-dropbox.ts --direction upload
+
+      - name: Build Dashboard for GitHub Pages
+        run: bun run scripts/build-pages.ts --data-dir data --output-dir site
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
