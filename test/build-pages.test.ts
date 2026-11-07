@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDashboard } from "../scripts/build-pages";
+import { calculateProgressStats, createProgressSnapshot } from "../src/domain/progress";
 
 describe("buildDashboard", () => {
   test("データからダッシュボード HTML とコピーされたデータファイルを生成し、Velocity・ETA・Δ・パーセンタイル統計を出力する", () => {
@@ -351,5 +352,131 @@ describe("buildDashboard: マージ時期の予想", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildDashboard: 過去実績との比較", () => {
+  const sample = (number: number, created: string, merged: string, total: number) => ({
+    number,
+    title: `Merged <${number}>`,
+    createdAt: created,
+    latestCommittedDate: created,
+    commitCount: 2,
+    readyAt: created,
+    mergedAt: merged,
+    totalDays: total,
+    turnDays: total - 1,
+    days: total - 2,
+  });
+
+  const build = (opts: { samples: ReturnType<typeof sample>[]; skipped?: number }) => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-bench-"));
+    const dataDir = join(tempDir, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const stats = calculateProgressStats(opts.samples, opts.skipped ?? 0);
+    const snapshot = createProgressSnapshot({
+      now: new Date("2026-11-08T00:00:00Z"),
+      repository: "microsoft/winget-pkgs",
+      targetPr: 500,
+      prTitle: "Target",
+      prUrl: "https://github.com/microsoft/winget-pkgs/pull/500",
+      prState: "OPEN",
+      frontNumber: 100,
+      frontCreatedAt: "2026-10-01 00:00",
+      activeAhead: 10,
+      totalAhead: 20,
+      behind: 5,
+      totalLifetimeDays: 7,
+      turnLatencyDays: 6,
+      waitDays: 5,
+      commitCount: 1,
+      stats,
+      lookbackDays: 30,
+      skippedCount: opts.skipped ?? 0,
+      rivals: [
+        {
+          number: 470,
+          title: "Rival <script>",
+          createdAt: "2026-10-28T00:00:00Z",
+          updatedAt: "2026-11-06T00:00:00Z",
+          url: "https://github.com/microsoft/winget-pkgs/pull/470",
+        },
+      ],
+      samples: opts.samples,
+      targetCreatedAt: new Date("2026-11-01T00:00:00Z"),
+      targetReadyAt: new Date("2026-11-01T01:00:00Z"),
+    });
+    writeFileSync(join(dataDir, "latest-progress.json"), JSON.stringify(snapshot), "utf-8");
+    writeFileSync(
+      join(dataDir, "latest-depths.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-08T00:00:00Z",
+        TargetPr: { Number: 500, Title: "Target", Url: "u", CreatedAt: "2026-11-01T00:00:00Z" },
+        HealthyBottom: [],
+        AbsoluteBottom: [
+          {
+            Number: 1111,
+            Title: "Absolute <b>",
+            Url: "https://github.com/microsoft/winget-pkgs/pull/1111",
+            作成日時: "2026-01-01 00:00",
+            更新日時: "2026-01-02 00:00",
+          },
+        ],
+        StaleBottom: [],
+        ExpressLane: Array.from({ length: 5 }, (_, i) => ({
+          Number: 9000 + i,
+          Title: `Express ${i}`,
+          Url: `https://github.com/microsoft/winget-pkgs/pull/${9000 + i}`,
+        })),
+      }),
+      "utf-8",
+    );
+    const outputDir = join(tempDir, "site");
+    try {
+      const { htmlPath } = buildDashboard({ dataDir, outputDir });
+      return readFileSync(htmlPath, "utf-8");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  };
+
+  const samples = [
+    sample(400, "2026-10-20T00:00:00Z", "2026-11-04T00:00:00Z", 15),
+    sample(600, "2026-11-02T00:00:00Z", "2026-11-05T00:00:00Z", 3),
+  ];
+
+  test("最大値・位置づけ・追い越し・ライバル・サンプル・真の大底を表示し、HTML をエスケープする", () => {
+    const html = build({ samples, skipped: 3 });
+
+    expect(html).toContain("直近 30 日間 / 採用 2 件・除外 3 件");
+    expect(html).toContain("最大:");
+    expect(html).toContain("基準 PR の現在:");
+    expect(html).toContain("はこれより短い期間でマージ済み");
+    expect(html).toContain("サンプルが少ないため、数値は変動しやすくなっています");
+
+    expect(html).toContain("追い越しの比較");
+    expect(html).toContain("自分より後に作成され、マージ済み（追い越し）");
+
+    expect(html).toContain("直前のライバル PR");
+    expect(html).toContain("#470");
+    expect(html).toContain("Rival &lt;script&gt;");
+    expect(html).not.toContain("Rival <script>");
+
+    expect(html).toContain("比較に使ったサンプル（2 件）");
+    expect(html).toContain("pull/400");
+
+    expect(html).toContain("真の大底");
+    expect(html).toContain("#1111");
+    // 特急レーンは 5 件まで表示する
+    expect(html).toContain("#9004");
+  });
+
+  test("サンプルがないときは追い越し・サンプル一覧を出さず、除外件数だけ示す", () => {
+    const html = build({ samples: [], skipped: 4 });
+
+    expect(html).toContain("採用 0 件・除外 4 件");
+    expect(html).not.toContain("追い越しの比較");
+    expect(html).not.toContain("比較に使ったサンプル");
+    expect(html).toContain("直前のライバル PR");
   });
 });
