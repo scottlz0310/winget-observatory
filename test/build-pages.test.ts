@@ -258,3 +258,98 @@ describe("buildDashboard: 遭難の底と履歴の扱い", () => {
     }
   });
 });
+
+describe("buildDashboard: マージ時期の予想", () => {
+  const stale = (number: number, updated: string) => ({
+    PR: `#${number}`,
+    Number: number,
+    作成日時: "",
+    更新日時: "",
+    CreatedAt: updated,
+    UpdatedAt: updated,
+    タイトル: "",
+    Title: "",
+    Url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
+  });
+  const snapshot = (timestamp: string, pr: number, updated: string) => ({
+    Timestamp: timestamp,
+    TimestampJst: "",
+    Repository: "microsoft/winget-pkgs",
+    TargetPr: null,
+    HealthyBottom: [],
+    AbsoluteBottom: [],
+    StaleBottom: [stale(pr, updated)],
+    ExpressLane: [],
+  });
+
+  const setup = (history: string) => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-forecast-"));
+    const dataDir = join(tempDir, "data");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(
+      join(dataDir, "latest-depths.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-08T00:00:00Z",
+        TargetPr: {
+          Number: 123,
+          Title: "t",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/123",
+          CreatedAt: "2026-10-28T00:00:00Z",
+          CreatedAtJst: "",
+          UpdatedAt: "2026-10-20T00:00:00Z",
+        },
+        StaleBottom: [stale(10, "2026-10-10T00:00:00Z")],
+      }),
+      "utf-8",
+    );
+    writeFileSync(join(dataDir, "depths-history.jsonl"), history, "utf-8");
+    return { tempDir, dataDir, outputDir: join(tempDir, "site") };
+  };
+
+  test("定常待ち時間モデルと観測速度モデルの予想を並べて表示する", () => {
+    // 先頭が 24 時間で 1 日分進む（1 日/日）。基準 PR との差は 10 日 → 約 10 日後
+    const history = [
+      snapshot("2026-11-07T00:00:00Z", 10, "2026-10-09T00:00:00Z"),
+      snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"),
+    ]
+      .map((s) => JSON.stringify(s))
+      .join("\n");
+    const { tempDir, dataDir, outputDir } = setup(history);
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+      expect(html).toContain("マージ時期の予想");
+      expect(html).toContain("定常待ち時間モデル");
+      expect(html).toContain("観測速度モデル");
+      expect(html).toContain("約 10 <span");
+      expect(html).toContain("先頭の進み: <strong>1</strong> 日/日");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("先頭が進んでいなければ観測速度モデルは理由付きで算出不能と表示する", () => {
+    const history = [
+      snapshot("2026-11-07T00:00:00Z", 10, "2026-10-10T00:00:00Z"),
+      snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"),
+    ]
+      .map((s) => JSON.stringify(s))
+      .join("\n");
+    const { tempDir, dataDir, outputDir } = setup(history);
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+      expect(html).toContain("観測期間内に先頭が進んでいないため算出できません");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("履歴 JSONL が壊れている場合は空の予想を出さずパス付きで中断する", () => {
+    const { tempDir, dataDir, outputDir } = setup("{ broken\n");
+    try {
+      expect(() => buildDashboard({ dataDir, outputDir })).toThrow("キュー境界履歴");
+      expect(() => buildDashboard({ dataDir, outputDir })).toThrow("depths-history.jsonl");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});

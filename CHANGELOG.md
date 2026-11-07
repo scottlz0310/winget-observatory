@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `scripts/build-pages.ts`: ダッシュボードに「マージ時期の予想」を追加（Issue #18）。遭難の底の推移（`depths-history.jsonl`）から、定常待ち時間モデルと観測速度モデルの予想日、先頭の遅れ、直近の先頭の推移を、既存の ETA と並列に表示。算出不能のときは理由を表示し、履歴が壊れている場合は中断
 - `scripts/build-pages.ts`: 遭難の底（更新が古い順の健康な PR 上位 10 件と更新からの経過）を専用の表として追加し、「指摘なく順番待ちする PR の先頭」として説明（Issue #18）
 - `src/domain/forecast.ts`, `src/models/forecast.ts`: 遭難の底（更新が最も古い健康な PR。指摘なく順番待ちをする基準 PR と同種の PR）の推移から基準 PR のマージ時期を予想するモデルを追加（Issue #18）。先頭の遅れが一定とする「定常待ち時間モデル」と、履歴から先頭の進み（日/日）を実測する「観測速度モデル」を並列に算出し、進みが観測できない場合は理由付きで算出不能とする。`depths-history.jsonl` のパースと観測列の抽出も純粋関数として提供
 - `src/api/github.ts`, `src/domain/depths.ts`, `src/models/depths.ts`: キュー境界スナップショットの基準 PR 情報に最終更新時刻（`UpdatedAt`）を追加（予想モデルの入力）
