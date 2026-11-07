@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `src/cli/explore-depths.ts`: 基準 PR の取得失敗時に基準 PR 無しのスナップショットを履歴 JSONL へ追記して続行していた問題を修正し、中断するよう変更。エントリポイントの引数エラーも他 CLI と同じ書式で報告（Issue #18）
 - `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`: 履歴 CSV の読み込み失敗とマージ済みサンプル計測の失敗（`failed++` で黙殺していた）を PR 番号・パス付きで中断するよう変更し、常に誤解を招いていた `failedCount` を廃止。基準 PR が観測対象外で記録がスキップされた場合は Actions の warning を出力（Issue #18）
 - `scripts/sync-dropbox.ts`: `--direction` の値欠落・未指定が暗黙の upload になる問題と、未知引数が無視される問題を修正し、厳格に拒否するよう変更（Issue #18）
+- `src/cli/progress.ts`: 複数コミットの PR で最新コミット表示の区切り文字のハイフンが二重になる問題を修正し、回帰テストを追加（Issue #18）
+- `src/domain/progress.ts`: `formatDateTimeWithDay` が `getTimezoneOffset` とローカル時刻の getter を併用しており実行環境のタイムゾーンに依存していたため、`getUTC*` ベースに統一し、日跨ぎ・別タイムゾーンのテストを追加（Issue #18）
+- `test/cli/progress.test.ts`: `process.env` オブジェクト自体を置換していた復元処理を、変更したキーのみの復元に修正（Issue #18）
 - `src/api/github.ts`: `GitHubApiClientOptions.fetch` を `typeof fetch` から呼び出しシグネチャのみの `FetchLike` へ変更し、モック注入時の型エラー（`preconnect` 欠落）を解消。タイムライン取得ループの暗黙 any を明示的な型注釈で解消（Issue #18）
 - `bun.lock`: `package.json` と食い違っていた `@biomejs/biome` の specifier を再生成で整合（Issue #18）
 - `package.json`: `lint` スクリプトが `--write` でファイルを書き換えていたため検査のみに変更（修正は `check:fix`）（Issue #18）
@@ -53,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `README.md`: 累積待ち件数の定義を実装（検索ヒット件数）に合わせて修正し、`progress` / `explore-depths` の主なオプション、基準 PR が観測対象外のときの挙動、前提 Bun のバージョン指針（`.bun-version`）、`data/` ディレクトリの位置づけを追記（Issue #18）
+- `scripts/build-pages.ts`: 「手番所要日数」の説明を実装（最新コミット→マージ）に合わせて修正（Issue #18）
+- `src/domain/progress.ts`, `scripts/lib/dropbox.ts`: パーセンタイル算出方式の注記（R-7）と Dropbox 保存先パスのコメントを実装に合わせて修正（Issue #18）
+- `renovate.json`, `.gitattributes`: PowerShell 退役後も残っていた PowerShell 用のプリセットと `*.ps1` の改行設定を削除（Issue #18）
 - `.github/workflows/observe.yml`: 定期メトリクス収集ステップを PowerShell (`pwsh`) から Bun / TypeScript スクリプト（`src/cli/progress.ts`, `src/cli/explore-depths.ts`, `src/cli/generate-summary.ts`）のネイティブ実行へ刷新し、外部プロセス依存を完全排除
 - `README.md`: PowerShell スクリプトから Bun / TypeScript CLI コマンド（`bun run progress`, `bun run explore:depths`, `bun run summary`）への案内へ更新
 - `scripts/lib/dropbox.ts`: Dropbox アプリフォルダー内の二重階層を解消するため、保存先プレフィックス `DROPBOX_ROOT` を `/winget-observatory/` から `/data/` へ変更。移行互換用として旧プレフィックス `LEGACY_DROPBOX_ROOT`（`/winget-observatory/`）の読み取りを許容

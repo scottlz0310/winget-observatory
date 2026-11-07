@@ -506,7 +506,7 @@ function generateHtml(
           <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
           P75: ${formatDaysStat(progress?.TurnP75Days)}
         </div>
-        <div class="card-subtext">メンテナがレビュー・トリアージを開始してからマージされるまでの日数</div>
+        <div class="card-subtext">最新コミットからマージされるまでの日数（修正後の再レビュー待ち）</div>
       </div>
 
       <div class="card stat-card">
