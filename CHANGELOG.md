@@ -56,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/cli/args.ts`: 各 CLI に複製されていた引数検証（値の取得・後続フラグの誤消費防止・整数範囲・基準 PR の環境変数解決）と、既定の基準 PR・リポジトリの定数を共通化。`progress` / `explore-depths` / `build-pages` に散在していたハードコードを置換し、`test/cli/args.test.ts` を追加（Issue #18）
+- `scripts/build-pages.ts`: `models/` の型（`ProgressSnapshot` / `DepthsSnapshot` / `ProgressHistoryRow`）と `domain` の `parseCsvRows` を再利用するよう変更し、独自の型定義・CSV パーサ・数値整形の重複を削減。数値が空欄の項目を `0` ではなく `-` と表示（Issue #18）
 - `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`, `src/api/github.ts`: 待ち行列の指標を再設計（Issue #18）。消化前線を「直近マージ PR」から「条件を満たす最古の未マージ PR」に変更して単調に進むようにし、実質待ちを「更新順で自 PR より前に並ぶ健康な PR の数」（指摘なく順番待ちをしている PR の待ち順位）に変更。履歴 CSV に算出基準を示す `QueueBasis` 列を追加し、旧定義の行（空欄）との前回比は出力しない
 - `src/domain/progress.ts`, `src/domain/depths.ts`: 「健康な PR」の検索条件を `buildHealthyQueryParts` に一本化し、`progress` と `explore-depths` で除外ラベルの定義がずれていた問題を解消
 - `src/cli/explore-depths.ts`: 遭難の底（更新が最も古い健康な PR）の取得件数を 3 件から 10 件に拡張
@@ -74,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- 未使用・互換目的のコードを削除（Issue #18）: `progress` の `--queue-limit`（パース・検証のみで未使用）、`simulateReadySince` の `isFinalValidation` / `currentLabels`、`migrateCsvRecord`（内部の `toHistoryRow` へ）、`PercentileStats`、`build-pages.ts` の camelCase キー互換正規化と `StrandedCandidates` 互換
 - `src/cli/generate-summary.ts`, `src/domain/summary.ts`, `src/models/summary.ts`, 対応するテスト、`SUMMARY.md`、`package.json` の `summary` スクリプト、`observe.yml` の生成ステップ、README の該当節: サマリー（`SUMMARY.md`）生成機能を廃止。cron では生成物がコミットも公開もされず捨てられており、フッターの「定期更新」も事実と異なっていたため、Issue #7 の合意どおり人間向けの閲覧先を GitHub Pages に一本化（Issue #18）
 - レガシーな PowerShell 計測スクリプト群（`scripts/progress-winget.ps1`, `scripts/explore-winget-depths.ps1`, `scripts/generate-summary.ps1`, `scripts/check-syntax.ps1`）および PowerShell テスト群（`tests/*.ps1`）を TypeScript 化に伴い完全退役
 - `.github/workflows/ci.yml` および `lefthook.yml` から PowerShell 構文検査と PSScriptAnalyzer 検査ステップを退役（Biome & TypeScript Tests に一本化）

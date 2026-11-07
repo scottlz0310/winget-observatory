@@ -203,10 +203,8 @@ export function formatDateTimeWithDay(input: Date | string, offsetHours = 9): st
  */
 export function simulateReadySince(
   events: ProgressTimelineEvent[],
-  currentLabels: string[],
   currentIsDraft: boolean,
   endAt: Date,
-  isFinalValidation = false,
 ): Date | null {
   // 有効なイベントのみ抽出して日付昇順ソート
   const targetEvents = events
@@ -272,22 +270,6 @@ export function simulateReadySince(
     }
   }
 
-  // 現在 OPEN な PR の場合、イベント走査後の状態と現在のラベル・Draft状態が一致するか検証
-  if (isFinalValidation) {
-    const currentSet = new Set(currentLabels);
-    if (labels.size !== currentSet.size) {
-      throw new Error("ラベル履歴と現在状態が一致しません。");
-    }
-    for (const name of currentSet) {
-      if (!labels.has(name)) {
-        throw new Error("ラベル履歴と現在状態が一致しません。");
-      }
-    }
-    if (isDraft !== currentIsDraft) {
-      throw new Error("Draft履歴と現在状態が一致しません。");
-    }
-  }
-
   return readySince;
 }
 
@@ -345,16 +327,16 @@ export function parseCsvRows(csvContent: string): ProgressHistoryRow[] {
     for (let j = 0; j < header.length; j++) {
       raw[header[j]] = cols[j] ?? "";
     }
-    rows.push(migrateCsvRecord(raw));
+    rows.push(toHistoryRow(raw));
   }
 
   return rows;
 }
 
 /**
- * 旧 CSV スキーマからの互換マッピング。
+ * CSV 1 行分の列マップを ProgressHistoryRow へ変換する。列が欠けている旧スキーマの行は空文字で補う。
  */
-export function migrateCsvRecord(raw: Record<string, string>): ProgressHistoryRow {
+function toHistoryRow(raw: Record<string, string>): ProgressHistoryRow {
   return {
     Timestamp: raw.Timestamp ?? "",
     TargetPr: raw.TargetPr ?? "",

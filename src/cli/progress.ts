@@ -21,6 +21,13 @@ import type {
   ProgressRivalPr,
   ProgressSnapshot,
 } from "../models/progress";
+import {
+  DEFAULT_REPOSITORY,
+  parseBoundedInt,
+  parseTargetPrArg,
+  readOptionValue,
+  resolveDefaultTargetPr,
+} from "./args";
 
 /** 履歴 CSV の ActiveAhead の算出基準（更新順）。基準が変わったら値を変え、旧基準の行との前回比を避ける */
 const QUEUE_BASIS = "updated";
@@ -31,7 +38,6 @@ export interface ProgressCliOptions {
   lookbackDays: number;
   sampleSize: number;
   fetchLimit: number;
-  queueLimit: number;
   logPath?: string;
   snapshotPath?: string;
   noLog: boolean;
@@ -39,87 +45,32 @@ export interface ProgressCliOptions {
 }
 
 export function parseArgs(argv: string[]): ProgressCliOptions {
-  let targetPr = 464302;
-  if (process.env.WINGET_TARGET_PR) {
-    const envVal = process.env.WINGET_TARGET_PR;
-    const parsed = Number.parseInt(envVal, 10);
-    if (Number.isNaN(parsed) || parsed <= 0 || !/^\d+$/.test(envVal)) {
-      throw new Error(
-        `無効な環境変数 WINGET_TARGET_PR です: ${envVal}（正の整数を指定してください）`,
-      );
-    }
-    targetPr = parsed;
-  }
-
-  let repository = process.env.WINGET_REPOSITORY ?? "microsoft/winget-pkgs";
+  let targetPr = resolveDefaultTargetPr();
+  let repository = process.env.WINGET_REPOSITORY ?? DEFAULT_REPOSITORY;
   let lookbackDays = 30;
   let sampleSize = 30;
   let fetchLimit = 1000;
-  let queueLimit = 500;
   let logPath: string | undefined = process.env.WINGET_LOG_PATH;
   let snapshotPath: string | undefined = process.env.WINGET_SNAPSHOT_PATH;
   let noLog = false;
   let asJson = false;
 
-  const parseBoundedInt = (val: string, name: string, min: number, max: number): number => {
-    const parsed = Number.parseInt(val, 10);
-    if (Number.isNaN(parsed) || !/^\d+$/.test(val) || parsed < min || parsed > max) {
-      throw new Error(
-        `--${name} に無効な値が指定されました: ${val}（${min} 以上 ${max} 以下の整数を指定してください）`,
-      );
-    }
-    return parsed;
-  };
-
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--target-pr") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--target-pr オプションには正の整数の値が必要です");
-      }
-      const val = argv[++i];
-      const parsed = Number.parseInt(val, 10);
-      if (Number.isNaN(parsed) || parsed <= 0 || !/^\d+$/.test(val)) {
-        throw new Error(
-          `--target-pr に無効な値が指定されました: ${val}（正の整数を指定してください）`,
-        );
-      }
-      targetPr = parsed;
+      targetPr = parseTargetPrArg(readOptionValue(argv, i++, "正の整数の値"));
     } else if (arg === "--repository" || arg === "--repo") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error(`${arg} オプションにはリポジトリ名 (owner/repo) の値が必要です`);
-      }
-      repository = argv[++i];
+      repository = readOptionValue(argv, i++, "リポジトリ名 (owner/repo) の値");
     } else if (arg === "--lookback-days") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--lookback-days オプションには値が必要です");
-      }
-      lookbackDays = parseBoundedInt(argv[++i], "lookback-days", 1, 365);
+      lookbackDays = parseBoundedInt(readOptionValue(argv, i++), "lookback-days", 1, 365);
     } else if (arg === "--sample-size") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--sample-size オプションには値が必要です");
-      }
-      sampleSize = parseBoundedInt(argv[++i], "sample-size", 1, 100);
+      sampleSize = parseBoundedInt(readOptionValue(argv, i++), "sample-size", 1, 100);
     } else if (arg === "--fetch-limit") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--fetch-limit オプションには値が必要です");
-      }
-      fetchLimit = parseBoundedInt(argv[++i], "fetch-limit", 1, 1000);
-    } else if (arg === "--queue-limit") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--queue-limit オプションには値が必要です");
-      }
-      queueLimit = parseBoundedInt(argv[++i], "queue-limit", 50, 1000);
+      fetchLimit = parseBoundedInt(readOptionValue(argv, i++), "fetch-limit", 1, 1000);
     } else if (arg === "--log-path") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--log-path オプションにはファイルパスが必要です");
-      }
-      logPath = argv[++i];
+      logPath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--snapshot-path") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--snapshot-path オプションにはファイルパスが必要です");
-      }
-      snapshotPath = argv[++i];
+      snapshotPath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--no-log") {
       noLog = true;
     } else if (arg === "--as-json") {
@@ -135,7 +86,6 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
     lookbackDays,
     sampleSize,
     fetchLimit,
-    queueLimit,
     logPath,
     snapshotPath,
     noLog,
@@ -215,13 +165,7 @@ export async function runProgressCli(
 
   // 対象 PR のタイムライン取得と成立日時特定
   const targetTimeline = await client.getIssueTimeline(options.repository, options.targetPr);
-  const targetReady = simulateReadySince(
-    targetTimeline,
-    pr.labels,
-    pr.isDraft,
-    now,
-    false, // 実環境の外部イベント揺れを許容
-  );
+  const targetReady = simulateReadySince(targetTimeline, pr.isDraft, now);
 
   if (!targetReady) {
     throw new Error("対象PRの条件成立日時を履歴から特定できませんでした。");
@@ -361,14 +305,8 @@ export async function runProgressCli(
       const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
       const mergedAt = new Date(mergedAtStr);
       const candTimeline = await client.getIssueTimeline(options.repository, cand.number);
-      const candLabels = (cand.labels ?? []).map((l) => l.name);
 
-      const readyAt = simulateReadySince(
-        candTimeline,
-        candLabels,
-        Boolean(cand.is_draft),
-        mergedAt,
-      );
+      const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
       if (!readyAt) {
         skipped++;
         continue;

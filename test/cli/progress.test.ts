@@ -32,7 +32,6 @@ describe("CLI: progress parseArgs", () => {
       expect(opts.lookbackDays).toBe(30);
       expect(opts.sampleSize).toBe(30);
       expect(opts.fetchLimit).toBe(1000);
-      expect(opts.queueLimit).toBe(500);
       expect(opts.noLog).toBeFalse();
       expect(opts.asJson).toBeFalse();
     } finally {
@@ -56,8 +55,6 @@ describe("CLI: progress parseArgs", () => {
       "20",
       "--fetch-limit",
       "200",
-      "--queue-limit",
-      "300",
       "--log-path",
       "custom.csv",
       "--snapshot-path",
@@ -71,7 +68,6 @@ describe("CLI: progress parseArgs", () => {
     expect(opts.lookbackDays).toBe(14);
     expect(opts.sampleSize).toBe(20);
     expect(opts.fetchLimit).toBe(200);
-    expect(opts.queueLimit).toBe(300);
     expect(opts.logPath).toBe("custom.csv");
     expect(opts.snapshotPath).toBe("custom.json");
     expect(opts.noLog).toBeTrue();
@@ -84,7 +80,7 @@ describe("CLI: progress parseArgs", () => {
     expect(() => parseArgs(["--lookback-days", "0"])).toThrow("無効な値");
     expect(() => parseArgs(["--lookback-days", "400"])).toThrow("無効な値");
     expect(() => parseArgs(["--sample-size", "150"])).toThrow("無効な値");
-    expect(() => parseArgs(["--queue-limit", "10"])).toThrow("無効な値");
+    expect(() => parseArgs(["--fetch-limit", "0"])).toThrow("無効な値");
   });
 
   test("引数値の欠落や後続フラグの誤消費を拒否する", () => {
@@ -145,7 +141,6 @@ describe("CLI: runProgressCli with mock client", () => {
         lookbackDays: 30,
         sampleSize: 30,
         fetchLimit: 1000,
-        queueLimit: 500,
         noLog: true,
         asJson: false,
       },
@@ -183,7 +178,6 @@ describe("CLI: runProgressCli with mock client", () => {
         lookbackDays: 30,
         sampleSize: 30,
         fetchLimit: 1000,
-        queueLimit: 500,
         noLog: true,
         asJson: false,
       },
@@ -261,7 +255,6 @@ describe("CLI: runProgressCli with mock client", () => {
           lookbackDays: 30,
           sampleSize: 30,
           fetchLimit: 1000,
-          queueLimit: 500,
           logPath,
           snapshotPath,
           noLog: false,
@@ -408,7 +401,6 @@ describe("CLI: runProgressCli with mock client", () => {
         lookbackDays: 30,
         sampleSize: 10,
         fetchLimit: 200,
-        queueLimit: 500,
         noLog: true,
         asJson: false,
       },
@@ -473,7 +465,6 @@ describe("CLI: 前線・実質待ち（更新順）の算出", () => {
     lookbackDays: 30,
     sampleSize: 30,
     fetchLimit: 1000,
-    queueLimit: 500,
     asJson: false,
   };
 
@@ -625,7 +616,6 @@ describe("CLI: progress のコミット表示", () => {
         lookbackDays: 30,
         sampleSize: 30,
         fetchLimit: 1000,
-        queueLimit: 500,
         noLog: true,
         asJson: false,
       },
@@ -692,7 +682,6 @@ describe("CLI: runProgressCli のエラー伝播", () => {
           lookbackDays: 30,
           sampleSize: 30,
           fetchLimit: 1000,
-          queueLimit: 500,
           noLog: true,
           asJson: false,
         },
@@ -746,7 +735,6 @@ describe("CLI: progress の保全とスキップ通知", () => {
             lookbackDays: 30,
             sampleSize: 30,
             fetchLimit: 1000,
-            queueLimit: 500,
             logPath,
             noLog: false,
             asJson: false,

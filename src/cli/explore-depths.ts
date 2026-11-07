@@ -15,24 +15,19 @@ import type {
   ExploreDepthsOptions,
   TargetPrInfo,
 } from "../models/depths";
+import {
+  DEFAULT_REPOSITORY,
+  parseTargetPrArg,
+  readOptionValue,
+  resolveDefaultTargetPr,
+} from "./args";
 
 /** 遭難の底（更新が最も古い健康な PR）として取得・表示する件数 */
 const STALE_BOTTOM_LIMIT = 10;
 
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
-  let targetPr = 464302;
-  if (process.env.WINGET_TARGET_PR) {
-    const envVal = process.env.WINGET_TARGET_PR;
-    const parsed = Number.parseInt(envVal, 10);
-    if (Number.isNaN(parsed) || parsed <= 0 || !/^\d+$/.test(envVal)) {
-      throw new Error(
-        `無効な環境変数 WINGET_TARGET_PR です: ${envVal}（正の整数を指定してください）`,
-      );
-    }
-    targetPr = parsed;
-  }
-
-  let repository = process.env.WINGET_REPOSITORY ?? "microsoft/winget-pkgs";
+  let targetPr = resolveDefaultTargetPr();
+  let repository = process.env.WINGET_REPOSITORY ?? DEFAULT_REPOSITORY;
   let outputPath: string | undefined = process.env.WINGET_DEPTHS_OUTPUT_PATH;
   let historyPath: string | undefined = process.env.WINGET_DEPTHS_HISTORY_PATH;
   let noTargetPr = false;
@@ -42,32 +37,13 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--target-pr") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--target-pr オプションには正の整数の値が必要です");
-      }
-      const val = argv[++i];
-      const parsed = Number.parseInt(val, 10);
-      if (Number.isNaN(parsed) || parsed <= 0 || !/^\d+$/.test(val)) {
-        throw new Error(
-          `--target-pr に無効な値が指定されました: ${val}（正の整数を指定してください）`,
-        );
-      }
-      targetPr = parsed;
+      targetPr = parseTargetPrArg(readOptionValue(argv, i++, "正の整数の値"));
     } else if (arg === "--repository") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--repository オプションにはリポジトリ名 (owner/repo) の値が必要です");
-      }
-      repository = argv[++i];
+      repository = readOptionValue(argv, i++, "リポジトリ名 (owner/repo) の値");
     } else if (arg === "--output-path") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--output-path オプションにはファイルパスが必要です");
-      }
-      outputPath = argv[++i];
+      outputPath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--history-path") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("--history-path オプションにはファイルパスが必要です");
-      }
-      historyPath = argv[++i];
+      historyPath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--no-target-pr") {
       noTargetPr = true;
     } else if (arg === "--no-history") {
