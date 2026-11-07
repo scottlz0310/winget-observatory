@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `README.md`: Dropbox 保存先パス（`/data/`）、前提ツール（PowerShell 依存削除）、ロードマップ（Pages ダッシュボード完了）、および定期観測ダッシュボードの閲覧案内を最新実装に合わせて更新し、Codecov バッジを追加（Issue #16）
+- `.github/workflows/observe.yml`: 定期観測ワークフローに防御的な `bun install --frozen-lockfile` ステップを追加し、将来の依存追加時の潜在リスクを排除（Issue #16）
 - `.github/workflows/ci.yml`: `id-token: write` パーミッションおよび `codecov/codecov-action` ステップを追加し、GitHub Actions の OIDC 認証（トークンレス）を用いた Codecov へのカバレッジ自動送信を有効化（Issue #14）
 - `package.json`, `.gitignore`: カバレッジ計測コマンド `test:coverage`（`bun test --coverage --coverage-reporter=lcov`）を追加し、出力先 `coverage/` を git 除外対象に設定
 - `src/cli/generate-summary.ts`: 観測データ（JSON / CSV）の読み込み・パース失敗時に例外を握りつぶさずファイルパス付きでエラーを伝播させて非ゼロ終了するよう修正

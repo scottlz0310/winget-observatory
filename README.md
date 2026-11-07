@@ -1,6 +1,7 @@
 # winget-observatory
 
 [![CI](https://github.com/scottlz0310/winget-observatory/actions/workflows/ci.yml/badge.svg)](https://github.com/scottlz0310/winget-observatory/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/scottlz0310/winget-observatory/graph/badge.svg)](https://codecov.io/gh/scottlz0310/winget-observatory)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 巨大 OSS [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) のレビュートリアージ・キュー境界・消化速度を定点観測（Observatory）し、メトリクスを自動蓄積・分析するためのツールキットです。
@@ -80,8 +81,9 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 - **GitHub Pages によるダッシュボード公開**:
   - `scripts/build-pages.ts` により生成された HTML ダッシュボードが GitHub Pages へ直接デプロイされます。
   - `actions/deploy-pages` を使用するため、Git コミットや `gh-pages` ブランチの作成を行わずクリーンに公開されます。
+  - **注記**: 定期観測（cron）による最新ダッシュボードおよび推移データは GitHub Pages 上で公開・更新されます（厳格なブランチ保護ルールを維持するため、リポジトリ直下の `SUMMARY.md` は cron で自動コミットされません）。
 - **Dropbox App Folder による生データ永続化**:
-  - 収集された CSV / JSONL / JSON は、`scripts/sync-dropbox.ts` を通じて Dropbox の専用 App Folder（`/winget-observatory/`）へ自動同期・蓄積されます。
+  - 収集された CSV / JSONL / JSON は、`scripts/sync-dropbox.ts` を通じて Dropbox の専用 App Folder（`/data/`）へ自動同期・蓄積されます。
   - Git リポジトリ（`main` ブランチ）への直接 push を全廃し、厳格なブランチ保護ルールを維持します。
 
 ### 自動化・連携スクリプト
@@ -108,7 +110,7 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 
 ## 今後の展望 (Roadmap)
 
-- [ ] **データ可視化 (Visualization)**: 蓄積された CSV/JSON を用いたグラフ化（GitHub Pages / SVG レポート生成）
+- [x] **データ可視化 (Visualization)**: 蓄積された CSV/JSON を用いた GitHub Pages ダッシュボード自動生成（ETA・消化速度・差分・パーセンタイル統計）
 - [ ] **複数 PR 同時観測**: 複数の PR を一括監視・比較するモードの追加
 - [ ] **トリアージ速度推移の分析**: 曜日別・時間帯別のレビュー消化ペース推定
 
@@ -118,17 +120,20 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 
 ### 前提ツール
 
-- [PowerShell 7+](https://github.com/PowerShell/PowerShell)
-- [GitHub CLI (gh)](https://cli.github.com/)
-- [Bun](https://bun.sh/)（Biome / Lefthook 実行用）
+- [Bun](https://bun.sh/)（v1.2+、スクリプト実行・テスト・Biome / Lefthook 実行用）
+- [GitHub CLI (gh)](https://cli.github.com/)（必要に応じて PR / Issue 操作用）
 
-```powershell
+```bash
 # 依存ツールのセットアップ
 bun install
 
 # Lint / Format の確認
 bun run check
 bun run format
+
+# テスト実行（カバレッジ計測含む）
+bun run test
+bun run test:coverage
 ```
 
 ---
