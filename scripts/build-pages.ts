@@ -12,6 +12,7 @@ import {
   formatJstDate,
   selectComparableHistory,
 } from "../src/domain/dashboard";
+import { calculateExitBreakdown } from "../src/domain/exit-breakdown";
 import { extractStaleFrontierSamples, parseDepthsHistory } from "../src/domain/forecast";
 import {
   buildForecastSource,
@@ -20,6 +21,10 @@ import {
 import { parseForecastHistory, scoreForecasts } from "../src/domain/forecast-history";
 import { formatDateTimeWithDay, formatHumanDays, parseCsvRows } from "../src/domain/progress";
 import type { DepthsSnapshot } from "../src/models/depths";
+import type {
+  ExitBreakdownResult,
+  ExitBreakdownUnavailableReason,
+} from "../src/models/exit-breakdown";
 import type { StaleFrontierSample } from "../src/models/forecast";
 import type { ForecastComparison, HypothesisId } from "../src/models/forecast-comparison";
 import type { ForecastHistoryLine, ForecastScore } from "../src/models/forecast-history";
@@ -481,6 +486,60 @@ function renderForecastScoreSection(
     <h2 class="section-title">🎯 予想の答え合わせ</h2>${note}${tables}`;
 }
 
+const EXIT_UNAVAILABLE_TEXT: Record<ExitBreakdownUnavailableReason, string> = {
+  "no-records":
+    "内訳の記録は、この機能の導入後の観測から貯まります（記録のある観測が 2 回以上必要です）。",
+  "short-window": "観測の間隔が短いため、内訳を出せません（6 時間以上の間隔が必要です）。",
+  inconsistent: "累積件数が減っているなど、記録が矛盾しているため、内訳を出せません。",
+};
+
+/** JST の "YYYY-MM-DD HH:mm" */
+function formatJstDateTime(timeMs: number): string {
+  return `${formatJstDate(timeMs)} ${new Date(timeMs + 9 * 3_600_000).toISOString().slice(11, 16)}`;
+}
+
+/** 待ち行列からの離脱の内訳: 実質待ちの減少が、実際のマージによるものか、それ以外かを分解して示す */
+function renderExitBreakdownSection(result: ExitBreakdownResult): string {
+  const head = `
+    <h2 class="section-title">🧮 待ち行列からの離脱の内訳</h2>
+    <p class="section-note">
+      実質待ち（更新順の順位）の減少が、実際のマージによるものか、それ以外かを分解します。仮説①（順位消化）の予想が、実際のマージをどれだけ反映しているかの目安です。
+    </p>`;
+  if (!result.available) {
+    return `${head}
+    <p class="section-note">${escapeHtml(EXIT_UNAVAILABLE_TEXT[result.reason])}</p>`;
+  }
+
+  const { counts, perDay, mergeShare } = result;
+  const share = (value: number): string =>
+    counts.rank > 0 ? `${Math.round((value / counts.rank) * 100)}%` : "-";
+  const row = (label: string, key: keyof typeof counts, indent = false): string => `
+        <tr>
+          <td${indent ? ' style="padding-left: 2rem;"' : ""}>${indent ? "うち " : ""}${escapeHtml(label)}</td>
+          <td>${counts[key]} 件</td>
+          <td>${perDay[key]} 件/日</td>
+          <td>${indent ? share(counts[key]) : "100%"}</td>
+        </tr>`;
+
+  const summary =
+    mergeShare === null
+      ? "実質待ちが減っていないため、マージの割合は出せません。"
+      : `実質待ちの減少のうち、実際のマージは約 <strong>${Math.round(mergeShare * 100)}%</strong> です。`;
+
+  return `${head}
+    <p class="section-note">${escapeHtml(formatJstDateTime(result.baseMs))} 〜 ${escapeHtml(formatJstDateTime(result.latestMs))}（${result.hours} 時間）の変化。${summary}</p>
+    <table>
+      <thead>
+        <tr><th>内訳</th><th>件数</th><th>1 日あたり</th><th>割合</th></tr>
+      </thead>
+      <tbody>${row("実質待ち（更新順）の減少", "rank")}${row("マージ", "merged", true)}${row("未マージでクローズ", "closed", true)}${row("健康条件の変化など（推定）", "healthChange", true)}${row("更新による順位の入れ替わり（推定）", "reshuffle", true)}
+      </tbody>
+    </table>
+    <p class="section-note">
+      マージ・クローズは、起票が基準 PR より前で、必須ラベルが現在も付いている PR の、基準 PR の起票以降の累積件数の差です（検索の集計）。「健康条件の変化など」は、累積待ち（作成順）の減少からマージ・クローズを引いた残り、「更新による順位の入れ替わり」は、実質待ちの減少から累積待ちの減少を引いた差で、どちらも推定です。
+    </p>`;
+}
+
 function generateHtml(
   progress: LatestProgress | null,
   depths: LatestDepths | null,
@@ -536,6 +595,7 @@ function generateHtml(
     buildForecastSource({ progress, depths, history: historyRecords, frontierSamples }),
   );
   const forecastScores = scoreForecasts(forecastHistory);
+  const exitBreakdown = calculateExitBreakdown(historyRecords);
 
   // 直近 10 件の推移（差分付き、新しい順）
   const recentHistoryWithDeltas = metrics.historyWithDeltas.slice(-10).reverse();
@@ -823,6 +883,8 @@ function generateHtml(
       現在の定義で記録された観測だけを表示します。実質待ち（更新順）は、前にいた PR が更新されて順位が入れ替わった分も含んで増減するため、作成順の累積待ちと並べて見てください。
     </p>
     ${renderChartCard(queueChart)}
+
+    ${renderExitBreakdownSection(exitBreakdown)}
 
     <h2 class="section-title">⏱️ マージ実績の所要日数統計 (直近 ${escapeHtml(progress?.LookbackDays ?? 30)} 日間${progress?.SampleCount === undefined ? "" : ` / 採用 ${progress.SampleCount} 件・除外 ${progress.SkippedCount ?? 0} 件`})</h2>
     ${

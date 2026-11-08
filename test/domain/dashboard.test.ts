@@ -396,6 +396,18 @@ describe("selectComparableHistory", () => {
     CommitCount: "1",
   };
 
+  test.each([
+    ["離脱の累積件数がある行は数値にする", { MergedOlder: "192", ClosedOlder: "27" }, 192, 27],
+    ["空欄の旧い行は null（0 件と誤認させない）", { MergedOlder: "", ClosedOlder: "" }, null, null],
+    ["列が省略された行は null", {}, null, null],
+    ["数値でない値は null", { MergedOlder: "abc", ClosedOlder: "x" }, null, null],
+    ["0 件は 0 のまま", { MergedOlder: "0", ClosedOlder: "0" }, 0, 0],
+  ])("履歴レコードの離脱の累積件数: %s", (_name, extra, merged, closed) => {
+    const [record] = selectComparableHistory([{ ...baseRow, ...extra }], 100);
+    expect(record.mergedOlder).toBe(merged);
+    expect(record.closedOlder).toBe(closed);
+  });
+
   test("新定義の行を数値に変換する", () => {
     const [record] = selectComparableHistory([baseRow], 100);
     expect(record).toMatchObject({

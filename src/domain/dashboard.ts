@@ -37,6 +37,13 @@ function toNumber(value: number | string): number {
   return value === "" ? Number.NaN : Number(value);
 }
 
+/** 空欄・省略・非数は、0 件と誤認させないよう null にする（任意の列用） */
+function toNullableNumber(value: number | string | undefined): number | null {
+  if (value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /**
  * 履歴 CSV の行から、速度・前回比の計算に使える履歴を選別する。
  * - 基準 PR が異なる行は混ぜない（別 PR を観測した履歴との差分は意味を持たない）
@@ -70,6 +77,8 @@ export function selectComparableHistory(
       totalAhead,
       behind,
       waitDays,
+      mergedOlder: toNullableNumber(row.MergedOlder),
+      closedOlder: toNullableNumber(row.ClosedOlder),
     });
   }
   return records;

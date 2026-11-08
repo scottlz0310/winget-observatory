@@ -90,7 +90,7 @@ function summarizeRankVelocity(source: ForecastComparisonSource, nowMs: number):
     progressText,
     progressRatio: null,
     estimates,
-    note: "前にいた PR が更新されて順位が入れ替わった分も減少に含むため、実際の消化より速く出ることがあります",
+    note: "前にいた PR が更新されて順位が入れ替わった分も減少に含むため、実際の消化より速く出ることがあります（内訳は「待ち行列からの離脱の内訳」を参照）",
   };
 }
 
