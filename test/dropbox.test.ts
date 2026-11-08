@@ -2,18 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { assertSafePath, DropboxClient, describeSecretShape } from "../scripts/lib/dropbox";
 
 describe("assertSafePath", () => {
-  test("正しいプレフィックス（/data/ および移行互換 /winget-observatory/）配下の安全なパスを受け入れる", () => {
-    expect(() => assertSafePath("/data/progress-history.csv")).not.toThrow();
-    expect(() => assertSafePath("/data/sub/data.json")).not.toThrow();
-    expect(() => assertSafePath("/winget-observatory/progress-history.csv")).not.toThrow();
-  });
+  test.each([
+    "/data/progress-history.csv",
+    "/data/sub/data.json",
+    "/winget-observatory/progress-history.csv",
+  ])(
+    "プレフィックス（/data/ および移行互換 /winget-observatory/）配下の安全なパス %s を受け入れる",
+    (path) => {
+      expect(() => assertSafePath(path)).not.toThrow();
+    },
+  );
 
-  test("プレフィックス外やドットセグメントを含むパスを拒否する", () => {
-    expect(() => assertSafePath("/other/path.csv")).toThrow();
-    expect(() => assertSafePath("/unknown/test.csv")).toThrow();
-    expect(() => assertSafePath("/data/../hack.csv")).toThrow();
-    expect(() => assertSafePath("/data/./hack.csv")).toThrow();
-    expect(() => assertSafePath("/winget-observatory/../hack.csv")).toThrow();
+  test.each([
+    "/other/path.csv",
+    "/unknown/test.csv",
+    "/data/../hack.csv",
+    "/data/./hack.csv",
+    "/winget-observatory/../hack.csv",
+  ])("プレフィックス外やドットセグメントを含むパス %s を拒否する", (path) => {
+    expect(() => assertSafePath(path)).toThrow();
   });
 });
 

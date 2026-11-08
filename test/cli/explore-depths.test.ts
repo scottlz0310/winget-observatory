@@ -101,36 +101,37 @@ describe("CLI: explore-depths", () => {
     }
   });
 
-  test("parseArgs は不正な引数や欠落、フラグの誤消費を厳格に拒否する", () => {
-    // 1. --target-pr に数値以外を指定した場合
-    expect(() => parseArgs(["--target-pr", "abc"])).toThrow(
+  test.each([
+    [
+      "--target-pr に数値以外",
+      ["--target-pr", "abc"],
       "--target-pr に無効な値が指定されました: abc",
-    );
-    expect(() => parseArgs(["--target-pr", "-1"])).toThrow();
-
-    // 2. 引数の値が欠落している場合
-    expect(() => parseArgs(["--target-pr"])).toThrow(
-      "--target-pr オプションには正の整数の値が必要です",
-    );
-    expect(() => parseArgs(["--repository"])).toThrow(
+    ],
+    ["--target-pr に負数", ["--target-pr", "-1"], undefined],
+    ["--target-pr の値が欠落", ["--target-pr"], "--target-pr オプションには正の整数の値が必要です"],
+    [
+      "--repository の値が欠落",
+      ["--repository"],
       "--repository オプションにはリポジトリ名 (owner/repo) の値が必要です",
-    );
-    expect(() => parseArgs(["--output-path"])).toThrow(
+    ],
+    [
+      "--output-path の値が欠落",
+      ["--output-path"],
       "--output-path オプションにはファイルパスが必要です",
-    );
-
-    // 3. 値を取るフラグの直後に別のフラグが来て誤消費されるケース
-    expect(() => parseArgs(["--output-path", "--no-history"])).toThrow(
+    ],
+    [
+      "値を取るフラグの直後に別のフラグ (--output-path)",
+      ["--output-path", "--no-history"],
       "--output-path オプションにはファイルパスが必要です",
-    );
-    expect(() => parseArgs(["--target-pr", "--no-target-pr"])).toThrow(
+    ],
+    [
+      "値を取るフラグの直後に別のフラグ (--target-pr)",
+      ["--target-pr", "--no-target-pr"],
       "--target-pr オプションには正の整数の値が必要です",
-    );
-
-    // 4. 未知のオプション
-    expect(() => parseArgs(["--unknown-flag"])).toThrow(
-      "未知の引数が指定されました: --unknown-flag",
-    );
+    ],
+    ["未知のオプション", ["--unknown-flag"], "未知の引数が指定されました: --unknown-flag"],
+  ])("parseArgs は不正な引数を拒否する: %s", (_name, args, message) => {
+    expect(() => parseArgs(args)).toThrow(message);
   });
 
   test("既定の保存先は実行時の cwd ではなくリポジトリルートの data/ を起点に解決する", () => {

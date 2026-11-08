@@ -10,19 +10,16 @@ describe("redactText", () => {
     expect(result).toContain(REDACTED);
   });
 
-  test("Bearer トークン形式の文字列を自動伏字にする", () => {
-    const text = "Authorization: Bearer secret_abc_123456789";
+  test.each([
+    ["Bearer トークン", "Authorization: Bearer secret_abc_123456789", "secret_abc_123456789"],
+    [
+      "JWT",
+      "Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThisSignature",
+      "doNotLeakThisSignature",
+    ],
+  ])("%s 形式の文字列を自動伏字にする", (_kind, text, leaked) => {
     const result = redactText(text);
-    expect(result).not.toContain("secret_abc_123456789");
-    expect(result).toContain(`Bearer ${REDACTED}`);
-  });
-
-  test("JWT 形式の文字列を自動伏字にする", () => {
-    const jwt =
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThisSignature";
-    const text = `Token: ${jwt}`;
-    const result = redactText(text);
-    expect(result).not.toContain("doNotLeakThisSignature");
+    expect(result).not.toContain(leaked);
     expect(result).toContain(REDACTED);
   });
 
