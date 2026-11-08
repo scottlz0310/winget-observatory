@@ -566,6 +566,26 @@ describe("buildDashboard: 過去実績との比較", () => {
     expect(html).toContain('<link rel="icon" href="data:image/svg+xml,');
   });
 
+  test("サンプルが多いときは、統計に使った総数を見出しに、一覧は新しい順の一部であることを示す", () => {
+    // 35 件を採用（マージが新しい順に #1000 が最古、#1034 が最新）
+    const many = Array.from({ length: 35 }, (_, i) =>
+      sample(
+        1000 + i,
+        "2026-10-20T00:00:00Z",
+        new Date(Date.parse("2026-10-01T00:00:00Z") + i * 86_400_000).toISOString(),
+        10 + i / 10,
+      ),
+    );
+    const html = build({ samples: many });
+
+    expect(html).toContain("比較に使ったサンプル（35 件）");
+    expect(html).toContain("マージ日時の新しい順に 30 件表示");
+    expect(html).toContain("pull/1034");
+    // 古い 5 件（#1000〜#1004）は一覧に載せない
+    expect(html).not.toContain("pull/1004");
+    expect(html).toContain("pull/1005");
+  });
+
   test("サンプルがないときは追い越し・サンプル一覧を出さず、除外件数だけ示す", () => {
     const html = build({ samples: [], skipped: 4 });
 

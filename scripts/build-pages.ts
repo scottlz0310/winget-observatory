@@ -231,6 +231,8 @@ function renderRivalsSection(progress: LatestProgress | null): string {
 function renderSamplesSection(progress: LatestProgress | null, repo: string): string {
   const samples = progress?.Samples ?? [];
   if (samples.length === 0) return "";
+  // 一覧は新しい順の一部（スナップショットの上限）。統計に使った総数は SampleCount
+  const total = Math.max(progress?.SampleCount ?? 0, samples.length);
   const rows = samples
     .map(
       (sample) => `
@@ -247,9 +249,9 @@ function renderSamplesSection(progress: LatestProgress | null, repo: string): st
     )
     .join("");
   return `
-    <h2 class="section-title">🧪 比較に使ったサンプル（${samples.length} 件）</h2>
+    <h2 class="section-title">🧪 比較に使ったサンプル（${total} 件）</h2>
     <details style="margin-bottom: 2rem;">
-      <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">マージ日時の新しい順に表示</summary>
+      <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">マージ日時の新しい順に${total > samples.length ? ` ${samples.length} 件` : ""}表示</summary>
       <table>
         <thead>
           <tr>

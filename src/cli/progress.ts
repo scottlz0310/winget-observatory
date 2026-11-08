@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
 import { describeGuidance, describeOvertake } from "../domain/benchmark";
@@ -16,6 +16,13 @@ import {
   serializeCsvRows,
   simulateReadySince,
 } from "../domain/progress";
+import {
+  fromCachedSample,
+  indexSampleCache,
+  parseSampleCache,
+  serializeSampleCacheEntries,
+  toCachedSample,
+} from "../domain/sample-cache";
 import type {
   MergedCandidateSample,
   ProgressHistoryRow,
@@ -24,6 +31,7 @@ import type {
   ProgressSnapshot,
   ReferenceGuidance,
 } from "../models/progress";
+import type { SampleCacheEntry } from "../models/sample-cache";
 import {
   DEFAULT_REPOSITORY,
   parseBoundedInt,
@@ -36,8 +44,11 @@ export interface ProgressCliOptions {
   targetPr: number;
   repository: string;
   lookbackDays: number;
-  sampleSize: number;
+  /** 1 回の実行で新規に取得するマージ済み PR の上限（キャッシュ済みの分は数えない） */
+  fetchBudget: number;
   fetchLimit: number;
+  /** マージ済み PR のサンプルキャッシュ（JSONL）。省略時はキャッシュを使わない */
+  cachePath?: string;
   logPath?: string;
   snapshotPath?: string;
   noLog: boolean;
@@ -48,10 +59,11 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
   let targetPr = resolveDefaultTargetPr();
   let repository = process.env.WINGET_REPOSITORY ?? DEFAULT_REPOSITORY;
   let lookbackDays = 30;
-  let sampleSize = 30;
+  let fetchBudget = 100;
   let fetchLimit = 1000;
   let logPath: string | undefined = process.env.WINGET_LOG_PATH;
   let snapshotPath: string | undefined = process.env.WINGET_SNAPSHOT_PATH;
+  let cachePath: string | undefined = process.env.WINGET_CACHE_PATH;
   let noLog = false;
   let asJson = false;
 
@@ -63,14 +75,16 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
       repository = readOptionValue(argv, i++, "リポジトリ名 (owner/repo) の値");
     } else if (arg === "--lookback-days") {
       lookbackDays = parseBoundedInt(readOptionValue(argv, i++), "lookback-days", 1, 365);
-    } else if (arg === "--sample-size") {
-      sampleSize = parseBoundedInt(readOptionValue(argv, i++), "sample-size", 1, 100);
+    } else if (arg === "--fetch-budget") {
+      fetchBudget = parseBoundedInt(readOptionValue(argv, i++), "fetch-budget", 1, 100);
     } else if (arg === "--fetch-limit") {
       fetchLimit = parseBoundedInt(readOptionValue(argv, i++), "fetch-limit", 1, 1000);
     } else if (arg === "--log-path") {
       logPath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--snapshot-path") {
       snapshotPath = readOptionValue(argv, i++, "ファイルパス");
+    } else if (arg === "--cache-path") {
+      cachePath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--no-log") {
       noLog = true;
     } else if (arg === "--as-json") {
@@ -84,13 +98,32 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
     targetPr,
     repository,
     lookbackDays,
-    sampleSize,
+    fetchBudget,
     fetchLimit,
     logPath,
     snapshotPath,
+    cachePath,
     noLog,
     asJson,
   };
+}
+
+function readSampleCache(path: string): SampleCacheEntry[] {
+  if (!existsSync(path)) return [];
+  try {
+    return parseSampleCache(readFileSync(path, "utf-8"));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`サンプルキャッシュの読み込みに失敗しました (${path}): ${msg}`, { cause: err });
+  }
+}
+
+/** 末尾が改行で終わっていないファイルにも、行が連結しないよう追記する */
+function appendSampleCache(path: string, entries: SampleCacheEntry[]): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
+  const needsBreak = existing.length > 0 && !existing.endsWith("\n");
+  appendFileSync(path, `${needsBreak ? "\n" : ""}${serializeSampleCacheEntries(entries)}`, "utf-8");
 }
 
 export function resolveDefaultDataDir(baseDir: string = import.meta.dirname): string {
@@ -300,56 +333,109 @@ export async function runProgressCli(
   const samples: MergedCandidateSample[] = [];
   let skipped = 0;
 
-  for (const cand of candidates) {
-    if (samples.length >= options.sampleSize) break;
-    try {
-      const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
-      const mergedAt = new Date(mergedAtStr);
-      const candTimeline = await client.getIssueTimeline(options.repository, cand.number);
+  const cacheIndex = options.cachePath
+    ? indexSampleCache(readSampleCache(options.cachePath))
+    : new Map<number, SampleCacheEntry>();
+  const newEntries: SampleCacheEntry[] = [];
+  let fetched = 0;
+  let deferred = 0;
 
-      const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
-      if (!readyAt) {
-        skipped++;
+  try {
+    // 新しくマージされた順。キャッシュ済みは API を使わずに採用し、未取得の候補は予算の範囲で取得する
+    for (const cand of candidates) {
+      const cached = cacheIndex.get(cand.number);
+      if (cached) {
+        if (cached.Type === "sample") {
+          samples.push(fromCachedSample(cached));
+        } else {
+          skipped++;
+        }
         continue;
       }
-
-      const readyDays = (mergedAt.getTime() - readyAt.getTime()) / (1000 * 60 * 60 * 24);
-      if (readyDays < 0) {
-        skipped++;
+      if (fetched >= options.fetchBudget) {
+        deferred++;
         continue;
       }
+      fetched++;
 
-      const candDetail = await client.getPullRequestDetails(options.repository, cand.number);
-      const candCreatedAt = new Date(candDetail.createdAt);
-      const candCommits = candDetail.commits;
-      const candLatestCommit = candCommits.length > 0 ? candCommits[candCommits.length - 1] : null;
-      const candLatestCommittedDate = candLatestCommit
-        ? new Date(candLatestCommit.committedDate)
-        : candCreatedAt;
+      try {
+        const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
+        const mergedAt = new Date(mergedAtStr);
+        const candTimeline = await client.getIssueTimeline(options.repository, cand.number);
 
-      const totalDays = (mergedAt.getTime() - candCreatedAt.getTime()) / (1000 * 60 * 60 * 24);
-      const turnDays =
-        (mergedAt.getTime() - candLatestCommittedDate.getTime()) / (1000 * 60 * 60 * 24);
+        const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
+        if (!readyAt) {
+          skipped++;
+          newEntries.push({
+            Type: "skipped",
+            Number: cand.number,
+            MergedAt: mergedAt.toISOString(),
+            Reason: "no-ready",
+          });
+          continue;
+        }
 
-      samples.push({
-        number: cand.number,
-        title: cand.title,
-        createdAt: candDetail.createdAt,
-        latestCommittedDate: candLatestCommittedDate.toISOString(),
-        commitCount: candCommits.length,
-        readyAt: readyAt.toISOString(),
-        mergedAt: mergedAt.toISOString(),
-        totalDays: Number(totalDays.toFixed(2)),
-        turnDays: Number(turnDays.toFixed(2)),
-        days: Number(readyDays.toFixed(2)),
-      });
-    } catch (err: unknown) {
-      // 一部だけ欠けた統計は誤った比較値になるため、握りつぶさず中断する
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`マージ済み PR #${cand.number} のサンプル計測に失敗しました: ${msg}`, {
-        cause: err,
-      });
+        const readyDays = (mergedAt.getTime() - readyAt.getTime()) / (1000 * 60 * 60 * 24);
+        if (readyDays < 0) {
+          skipped++;
+          newEntries.push({
+            Type: "skipped",
+            Number: cand.number,
+            MergedAt: mergedAt.toISOString(),
+            Reason: "negative-ready",
+          });
+          continue;
+        }
+
+        const candDetail = await client.getPullRequestDetails(options.repository, cand.number);
+        const candCreatedAt = new Date(candDetail.createdAt);
+        const candCommits = candDetail.commits;
+        const candLatestCommit =
+          candCommits.length > 0 ? candCommits[candCommits.length - 1] : null;
+        const candLatestCommittedDate = candLatestCommit
+          ? new Date(candLatestCommit.committedDate)
+          : candCreatedAt;
+
+        const totalDays = (mergedAt.getTime() - candCreatedAt.getTime()) / (1000 * 60 * 60 * 24);
+        const turnDays =
+          (mergedAt.getTime() - candLatestCommittedDate.getTime()) / (1000 * 60 * 60 * 24);
+
+        const sample: MergedCandidateSample = {
+          number: cand.number,
+          title: cand.title,
+          createdAt: candDetail.createdAt,
+          latestCommittedDate: candLatestCommittedDate.toISOString(),
+          commitCount: candCommits.length,
+          readyAt: readyAt.toISOString(),
+          mergedAt: mergedAt.toISOString(),
+          totalDays: Number(totalDays.toFixed(2)),
+          turnDays: Number(turnDays.toFixed(2)),
+          days: Number(readyDays.toFixed(2)),
+        };
+        samples.push(sample);
+        newEntries.push(toCachedSample(sample));
+      } catch (err: unknown) {
+        // 一部だけ欠けた統計は誤った比較値になるため、握りつぶさず中断する
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`マージ済み PR #${cand.number} のサンプル計測に失敗しました: ${msg}`, {
+          cause: err,
+        });
+      }
     }
+  } finally {
+    // マージ済み PR の履歴は後から変わらないので、途中で失敗しても取得済みの分は保存し、次回の再取得を避ける
+    if (options.cachePath && newEntries.length > 0) {
+      appendSampleCache(options.cachePath, newEntries);
+    }
+  }
+
+  log(
+    `サンプル         : 採用 ${samples.length} 件・除外 ${skipped} 件（キャッシュ ${samples.length + skipped - newEntries.length} 件を再利用、今回の新規取得 ${fetched} 件／予算 ${options.fetchBudget} 件）`,
+  );
+  if (deferred > 0) {
+    log(
+      `  取得予算に達したため、未取得の候補 ${deferred} 件は次回以降に取得します（統計は取得済みの分で計算）`,
+    );
   }
 
   const behindCount = Math.max(0, allTotal - aheadTotal - 1);
@@ -616,15 +702,39 @@ export function reportSkippedObservation(
   }
 }
 
+/**
+ * レート制限の残量を診断ログとして出す。呼び出し自体は制限を消費しない。
+ * 診断のための補助なので、取得に失敗しても計測の成否には影響させず、警告として見える形で残す。
+ */
+export async function logRateLimit(
+  client: Pick<GitHubApiClient, "getRateLimit">,
+  log: (msg: string) => void = console.log,
+): Promise<void> {
+  try {
+    const { core, search } = await client.getRateLimit();
+    const fmt = (name: string, b: { limit: number; remaining: number; resetAt: string | null }) =>
+      `${name}: 残り ${b.remaining} / ${b.limit}（使用 ${b.limit - b.remaining}）${b.resetAt ? ` リセット ${b.resetAt}` : ""}`;
+    log(`[RateLimit] ${fmt("core", core)} / ${fmt("search", search)}`);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`::warning::レート制限の残量を取得できませんでした: ${message}`);
+  }
+}
+
 // 直接実行時のエントリポイント
 if (import.meta.main) {
+  const client = new GitHubApiClient();
   try {
     const options = parseArgs(process.argv.slice(2));
-    const { snapshot } = await runProgressCli(options);
+    const { snapshot } = await runProgressCli(options, client);
     reportSkippedObservation(snapshot, process.env);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`エラー: ${message}`);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    // 失敗（レート制限超過を含む）したときこそ残量が診断に役立つため、成否にかかわらず出す
+    await logRateLimit(client);
   }
+  if (process.exitCode) process.exit(process.exitCode);
 }

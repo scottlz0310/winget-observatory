@@ -30,7 +30,7 @@ describe("CLI: progress parseArgs", () => {
       expect(opts.targetPr).toBe(464302);
       expect(opts.repository).toBe("microsoft/winget-pkgs");
       expect(opts.lookbackDays).toBe(30);
-      expect(opts.sampleSize).toBe(30);
+      expect(opts.fetchBudget).toBe(100);
       expect(opts.fetchLimit).toBe(1000);
       expect(opts.noLog).toBeFalse();
       expect(opts.asJson).toBeFalse();
@@ -51,7 +51,7 @@ describe("CLI: progress parseArgs", () => {
       "custom/repo",
       "--lookback-days",
       "14",
-      "--sample-size",
+      "--fetch-budget",
       "20",
       "--fetch-limit",
       "200",
@@ -66,7 +66,7 @@ describe("CLI: progress parseArgs", () => {
     expect(opts.targetPr).toBe(99999);
     expect(opts.repository).toBe("custom/repo");
     expect(opts.lookbackDays).toBe(14);
-    expect(opts.sampleSize).toBe(20);
+    expect(opts.fetchBudget).toBe(20);
     expect(opts.fetchLimit).toBe(200);
     expect(opts.logPath).toBe("custom.csv");
     expect(opts.snapshotPath).toBe("custom.json");
@@ -79,7 +79,10 @@ describe("CLI: progress parseArgs", () => {
     [["--target-pr", "-5"], undefined],
     [["--lookback-days", "0"], "無効な値"],
     [["--lookback-days", "400"], "無効な値"],
-    [["--sample-size", "150"], "無効な値"],
+    [["--fetch-budget", "101"], "無効な値"],
+    [["--fetch-budget", "0"], "無効な値"],
+    [["--sample-size", "30"], "未知のオプション"],
+    [["--cache-path"], "必要です"],
     [["--fetch-limit", "0"], "無効な値"],
     [["--target-pr"], "必要です"],
     [["--target-pr", "--no-log"], "必要です"],
@@ -135,7 +138,7 @@ describe("CLI: runProgressCli with mock client", () => {
         targetPr: 100,
         repository: "test/repo",
         lookbackDays: 30,
-        sampleSize: 30,
+        fetchBudget: 30,
         fetchLimit: 1000,
         noLog: true,
         asJson: false,
@@ -172,7 +175,7 @@ describe("CLI: runProgressCli with mock client", () => {
         targetPr: 101,
         repository: "test/repo",
         lookbackDays: 30,
-        sampleSize: 30,
+        fetchBudget: 30,
         fetchLimit: 1000,
         noLog: true,
         asJson: false,
@@ -249,7 +252,7 @@ describe("CLI: runProgressCli with mock client", () => {
           targetPr: 200,
           repository: "test/repo",
           lookbackDays: 30,
-          sampleSize: 30,
+          fetchBudget: 30,
           fetchLimit: 1000,
           logPath,
           snapshotPath,
@@ -395,7 +398,7 @@ describe("CLI: runProgressCli with mock client", () => {
         targetPr: 500,
         repository: "test/repo",
         lookbackDays: 30,
-        sampleSize: 10,
+        fetchBudget: 10,
         fetchLimit: 200,
         noLog: true,
         asJson: false,
@@ -459,7 +462,7 @@ describe("CLI: 前線・実質待ち（更新順）の算出", () => {
     targetPr: 200,
     repository: "test/repo",
     lookbackDays: 30,
-    sampleSize: 30,
+    fetchBudget: 30,
     fetchLimit: 1000,
     asJson: false,
   };
@@ -610,7 +613,7 @@ describe("CLI: progress のコミット表示", () => {
         targetPr: 200,
         repository: "test/repo",
         lookbackDays: 30,
-        sampleSize: 30,
+        fetchBudget: 30,
         fetchLimit: 1000,
         noLog: true,
         asJson: false,
@@ -676,7 +679,7 @@ describe("CLI: runProgressCli のエラー伝播", () => {
           targetPr: 200,
           repository: "test/repo",
           lookbackDays: 30,
-          sampleSize: 30,
+          fetchBudget: 30,
           fetchLimit: 1000,
           noLog: true,
           asJson: false,
@@ -729,7 +732,7 @@ describe("CLI: progress の保全とスキップ通知", () => {
             targetPr: 200,
             repository: "test/repo",
             lookbackDays: 30,
-            sampleSize: 30,
+            fetchBudget: 30,
             fetchLimit: 1000,
             logPath,
             noLog: false,
@@ -850,7 +853,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     targetPr: 500,
     repository: "test/repo",
     lookbackDays: 30,
-    sampleSize: 10,
+    fetchBudget: 10,
     fetchLimit: 100,
     noLog: true,
     asJson: false,

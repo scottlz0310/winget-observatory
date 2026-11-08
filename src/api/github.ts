@@ -26,6 +26,19 @@ export interface GitHubDetailedSearchResult {
 /** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+/** レート制限の 1 枠（core / search）の残量 */
+export interface GitHubRateLimitBucket {
+  limit: number;
+  remaining: number;
+  /** 枠がリセットされる時刻（ISO 8601, UTC）。不明なら null */
+  resetAt: string | null;
+}
+
+export interface GitHubRateLimit {
+  core: GitHubRateLimitBucket;
+  search: GitHubRateLimitBucket;
+}
+
 export interface GitHubApiClientOptions {
   token?: string;
   baseUrl?: string;
@@ -108,6 +121,42 @@ export class GitHubApiClient {
         updated_at: String(item.updated_at),
       };
     });
+  }
+
+  /**
+   * レート制限の残量を取得する。このエンドポイントの呼び出し自体は、制限を消費しない。
+   * core（通常の REST）と search（検索 API）は別枠なので、それぞれ返す。
+   */
+  async getRateLimit(): Promise<GitHubRateLimit> {
+    const res = await this.fetchFn(`${this.baseUrl}/rate_limit`, {
+      method: "GET",
+      headers: this.getHeaders(),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new GitHubApiError(
+        `GitHub レート制限の取得に失敗しました (status ${res.status}): ${errText}`,
+        res.status,
+      );
+    }
+
+    const data = (await res.json()) as { resources?: Record<string, unknown> };
+    const pick = (name: string): GitHubRateLimitBucket => {
+      const bucket = data.resources?.[name] as Record<string, unknown> | undefined;
+      const limit = Number(bucket?.limit);
+      const remaining = Number(bucket?.remaining);
+      const reset = Number(bucket?.reset);
+      if (!bucket || !Number.isFinite(limit) || !Number.isFinite(remaining)) {
+        throw new GitHubApiError(`GitHub レート制限の応答に ${name} がありません`, res.status);
+      }
+      return {
+        limit,
+        remaining,
+        resetAt: Number.isFinite(reset) ? new Date(reset * 1000).toISOString() : null,
+      };
+    };
+    return { core: pick("core"), search: pick("search") };
   }
 
   /**

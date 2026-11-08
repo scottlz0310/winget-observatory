@@ -5,6 +5,7 @@ import {
   compareWithSamples,
   describeGuidance,
   describeOvertake,
+  SNAPSHOT_SAMPLE_LIMIT,
   toSnapshotSamples,
 } from "../../src/domain/benchmark";
 import type { MergedCandidateSample, ProgressStatsSummary } from "../../src/models/progress";
@@ -193,5 +194,27 @@ describe("Domain: toSnapshotSamples", () => {
     );
     expect(out.map((s) => s.Relation)).toEqual(["older", "newer"]);
     expect(out[0]).toMatchObject({ Number: 400, ReadyDays: 3, TotalDays: 4 });
+  });
+
+  test("一覧には、マージが新しい順に上限件数だけ載せる（入力の並びに依らない）", () => {
+    const merged = (n: number) => ({
+      ...sample(n, "2026-10-20T00:00:00Z", "2026-10-20T01:00:00Z"),
+      mergedAt: `2026-11-${String(n - 1000 + 1).padStart(2, "0")}T00:00:00Z`,
+    });
+    // 古い順・新しい順を混ぜて渡す
+    const input = [merged(1002), merged(1000), merged(1004), merged(1001), merged(1003)];
+
+    expect(toSnapshotSamples(input, 500, 3).map((s) => s.Number)).toEqual([1004, 1003, 1002]);
+    expect(toSnapshotSamples(input, 500).map((s) => s.Number)).toEqual([
+      1004, 1003, 1002, 1001, 1000,
+    ]);
+  });
+
+  test("既定の上限は SNAPSHOT_SAMPLE_LIMIT 件", () => {
+    const many = Array.from({ length: SNAPSHOT_SAMPLE_LIMIT + 10 }, (_, i) =>
+      sample(1000 + i, "2026-10-20T00:00:00Z", "2026-10-20T01:00:00Z"),
+    );
+    expect(SNAPSHOT_SAMPLE_LIMIT).toBe(30);
+    expect(toSnapshotSamples(many, 500)).toHaveLength(SNAPSHOT_SAMPLE_LIMIT);
   });
 });

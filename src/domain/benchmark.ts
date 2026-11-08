@@ -16,12 +16,20 @@ import type {
 
 const round2 = (value: number): number => Number(value.toFixed(2));
 
-/** 採用サンプルを、スナップショットに保存する形へ変換する（基準 PR との作成順の関係を付与） */
+/** スナップショットに載せるサンプル一覧の最大件数（表示用。統計・比較は全件で計算する） */
+export const SNAPSHOT_SAMPLE_LIMIT = 30;
+
+/**
+ * 採用サンプルを、スナップショットに保存する形へ変換する（基準 PR との作成順の関係を付与）。
+ * キャッシュにより採用件数が数百件になるため、一覧にはマージが新しい順に limit 件だけ載せる。
+ */
 export function toSnapshotSamples(
   samples: MergedCandidateSample[],
   targetPr: number,
+  limit: number = SNAPSHOT_SAMPLE_LIMIT,
 ): ProgressSnapshotSample[] {
-  return samples.map((s) => ({
+  const newestFirst = [...samples].sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
+  return newestFirst.slice(0, limit).map((s) => ({
     Number: s.number,
     Title: s.title,
     Relation: s.number < targetPr ? "older" : "newer",
