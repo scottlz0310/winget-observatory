@@ -16,3 +16,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.local
+
+# 観測データ（正は Dropbox。sync-dropbox の取得先・計測の出力先として使うローカル作業領域）
+data/
