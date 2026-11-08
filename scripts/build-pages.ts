@@ -5,6 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { join, resolve } from "node:path";
 import { DEFAULT_REPOSITORY, DEFAULT_TARGET_PR } from "../src/cli/args";
 import { describeGuidance, describeOvertake } from "../src/domain/benchmark";
+import { renderLineChartSvg } from "../src/domain/chart";
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
@@ -131,6 +132,9 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
 }
 
 const DAY_MS = 86_400_000;
+
+/** チャートに載せる観測の最大数（直近のものを使う） */
+const CHART_MAX_POINTS = 120;
 
 /** 実績サンプルが少なく、数値が揺れやすいとみなす件数 */
 const FEW_SAMPLES = 10;
@@ -291,6 +295,13 @@ function formatEta(forecast: StaleFrontierForecast, etaDays: number | null): str
 }
 
 /** 遭難の底の推移から基準 PR のマージ時期を予想するセクション（既存の ETA と並列） */
+/** チャートを載せるカード。描画できるだけの観測が無いときは理由を示す */
+function renderChartCard(svg: string | null): string {
+  return `<div class="card chart-card" style="margin-bottom: 1.5rem;">${
+    svg ?? `<div class="card-subtext">観測が 2 件以上たまると推移を表示します</div>`
+  }</div>`;
+}
+
 function renderLifetimeCard(lifetime: LifetimeForecast | null): string {
   const body = lifetime
     ? `<div class="card-value">${
@@ -319,7 +330,20 @@ function renderForecastSection(
   samples: StaleFrontierSample[],
   lifetime: LifetimeForecast | null,
 ): string {
-  const recent = samples.slice(-10).reverse();
+  const recent = samples.slice(-5).reverse();
+  const lagChart = renderLineChartSvg({
+    title: "遭難の底の先頭の遅れの推移（日）",
+    series: [
+      {
+        label: "先頭の遅れ（日）",
+        color: "var(--warning)",
+        points: samples
+          .slice(-CHART_MAX_POINTS)
+          .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.updatedMs) / DAY_MS })),
+      },
+    ],
+    decimals: 1,
+  });
   const rows = recent
     .map((sample) => {
       const lag = Math.round(((sample.timestampMs - sample.updatedMs) / DAY_MS) * 10) / 10;
@@ -362,6 +386,10 @@ function renderForecastSection(
         <div class="card-subtext">履歴から先頭の進みを実測して予想</div>
       </div>${renderLifetimeCard(lifetime)}
     </div>
+    <p class="section-note">
+      先頭の遅れが横ばいなら先頭は進んでいません。実時間と同じ速度（1 日/日）で先頭が進むと、遅れは一定のままです。右下がりなら先頭が実時間より速く進んでいます。
+    </p>
+    ${renderChartCard(lagChart)}
     ${
       recent.length > 0
         ? `<table>
@@ -414,6 +442,23 @@ function generateHtml(
   const behindDeltaBadge = formatDeltaBadge(metrics.latestDelta.behindDelta);
 
   const healthyBottomFirst = depths?.HealthyBottom?.[0];
+
+  const chartRecords = historyRecords.slice(-CHART_MAX_POINTS);
+  const queueChart = renderLineChartSvg({
+    title: "待ち件数の推移",
+    series: [
+      {
+        label: "実質待ち（更新順）",
+        color: "var(--primary)",
+        points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.activeAhead })),
+      },
+      {
+        label: "累積待ち（作成順）",
+        color: "var(--text-muted)",
+        points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.totalAhead })),
+      },
+    ],
+  });
 
   const targetUpdatedMs = depths?.TargetPr?.UpdatedAt
     ? Date.parse(depths.TargetPr.UpdatedAt)
@@ -713,6 +758,12 @@ function generateHtml(
         </div>
       </div>
     </div>
+
+    <h2 class="section-title">📉 待ち件数の推移</h2>
+    <p class="section-note">
+      現在の定義で記録された観測だけを表示します。実質待ち（更新順）は、前にいた PR が更新されて順位が入れ替わった分も含んで増減するため、作成順の累積待ちと並べて見てください。
+    </p>
+    ${renderChartCard(queueChart)}
 
     <h2 class="section-title">⏱️ マージ実績の所要日数統計 (直近 ${escapeHtml(progress?.LookbackDays ?? 30)} 日間${progress?.SampleCount === undefined ? "" : ` / 採用 ${progress.SampleCount} 件・除外 ${progress.SkippedCount ?? 0} 件`})</h2>
     ${

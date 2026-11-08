@@ -84,6 +84,9 @@ describe("buildDashboard", () => {
       // 新指標: 前回比 Δ バッジ
       expect(html).toContain("delta-badge delta-progress");
       expect(html).toContain("-50"); // 待ち件数減少（進行）
+      // 待ち件数の推移チャート（実質待ち・累積待ちの 2 系列）
+      expect(html).toContain('aria-label="待ち件数の推移"');
+      expect(html.match(/<polyline /g)?.length).toBeGreaterThanOrEqual(2);
       expect(html).toContain("+50"); // 前線番号増加（進行）
 
       // 新指標: Velocity & ETA（24時間で50件消化 = 日速50件、残り100件で約2日後）
@@ -322,7 +325,20 @@ describe("buildDashboard: マージ時期の予想", () => {
       expect(html).toContain("定常待ち時間モデル");
       expect(html).toContain("観測速度モデル");
       expect(html).toContain("約 10 <span");
+      expect(html).toContain('aria-label="遭難の底の先頭の遅れの推移（日）"');
       expect(html).toContain("先頭の進み: <strong>1</strong> 日/日");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("観測が 1 件だけなら先頭の遅れのチャートは描かず、理由を示す", () => {
+    const history = JSON.stringify(snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"));
+    const { tempDir, dataDir, outputDir } = setup(history);
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+      expect(html).not.toContain('aria-label="遭難の底の先頭の遅れの推移（日）"');
+      expect(html).toContain("観測が 2 件以上たまると推移を表示します");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
