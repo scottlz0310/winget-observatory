@@ -4,7 +4,11 @@
  */
 
 import type { DepthsSnapshot } from "../models/depths";
-import type { StaleFrontierForecast, StaleFrontierSample } from "../models/forecast";
+import type {
+  LifetimeForecast,
+  StaleFrontierForecast,
+  StaleFrontierSample,
+} from "../models/forecast";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -135,4 +139,37 @@ export function calculateStaleFrontierForecast(
   result.observedUnavailable = null;
   result.observedEtaDays = gapMs <= 0 ? 0 : round1(gapMs / DAY_MS / speed);
   return result;
+}
+
+/**
+ * 通算所要日数（起票からマージまで）の中央値・75%点から、基準 PR のマージ予想日を求める。
+ * 統計が無い（旧スナップショット）、または日時が解釈できないときは null。
+ *
+ * @param targetCreatedMs 基準 PR の起票時刻（UTC ミリ秒）
+ * @param medianDays 通算所要日数の中央値
+ * @param p75Days 通算所要日数の 75%点
+ * @param nowMs 観測時刻（UTC ミリ秒）
+ */
+export function calculateLifetimeForecast(
+  targetCreatedMs: number,
+  medianDays: number | null | undefined,
+  p75Days: number | null | undefined,
+  nowMs: number,
+): LifetimeForecast | null {
+  if (!Number.isFinite(targetCreatedMs) || !Number.isFinite(nowMs)) return null;
+  if (medianDays === null || medianDays === undefined || !Number.isFinite(medianDays)) return null;
+
+  const etaDaysOf = (dateMs: number): number => Math.max(0, round1((dateMs - nowMs) / DAY_MS));
+  const medianDateMs = targetCreatedMs + medianDays * DAY_MS;
+  const hasP75 = p75Days !== null && p75Days !== undefined && Number.isFinite(p75Days);
+  const p75DateMs = hasP75 ? targetCreatedMs + p75Days * DAY_MS : null;
+
+  return {
+    medianDays,
+    medianDateMs,
+    medianEtaDays: etaDaysOf(medianDateMs),
+    exceededMedian: medianDateMs <= nowMs,
+    p75DateMs,
+    p75EtaDays: p75DateMs === null ? null : etaDaysOf(p75DateMs),
+  };
 }
