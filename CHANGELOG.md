@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/cli/record-forecast.ts`, `src/domain/forecast-history.ts`, `src/models/forecast-history.ts`, `scripts/sync-dropbox.ts`, `.github/workflows/observe.yml`: 観測のたびに 3 つの仮説の予想日を `forecast-history.jsonl` へ記録し（観測時刻が同じ予想は二重に記録しない）、基準 PR がマージされたら実際のマージ日を 1 回だけ記録する CLI を追加（Issue #18）。Dropbox の同期対象に加え、ワークフローでは計測結果の保存後に記録して再保存する（予想の記録が失敗しても計測は失われない）。マージ日が記録された基準 PR は、仮説・モデルごとに予想誤差（予想日 − 実際のマージ日）の平均・平均絶対・最後の予想を採点できる
+- `scripts/build-pages.ts`: ダッシュボードに「予想の答え合わせ」を追加（Issue #18）。結果が出るまでは記録件数を示し、結果が出たら基準 PR ごとに採点表を表示。予想履歴は公開データとしてコピーしフッターからリンクする。壊れた履歴は空の採点を出さず中断する
+- `src/domain/forecast-comparison.ts`: 表示と記録で入力が同じになるよう、スナップショットと履歴から比較の入力を組み立てる `buildForecastSource` を追加（Issue #18）
 - `src/domain/forecast-comparison.ts`, `src/models/forecast-comparison.ts`, `src/domain/chart.ts`, `scripts/build-pages.ts`: ダッシュボードの最上部に、マージ時期を 3 つの仮説（① 順位消化＝実質待ち件数が直近の速度で減る、② 更新順＝更新の古い順に処理される、③ 作成順＝通算所要日数が実績どおり）で予想して比較するパネルを追加（Issue #18）。見出しに主な予想日の範囲、今日から予想日までの時間軸（範囲の帯つき）、仮説ごとの前提・現在の進捗（③ は進捗バー）・予想日を示す。範囲の計算は純粋関数 `calculateForecastComparison`、時間軸は `renderTimelineSvg`。単一の日付は出さない（どの仮説が実態に近いかはまだ検証できていないため）
 - `src/domain/chart.ts`, `scripts/build-pages.ts`: ダッシュボードに推移チャート（インライン SVG の折れ線）を追加（Issue #18）。「待ち件数の推移」（実質待ち・累積待ち）と、マージ時期の予想の節の「先頭の遅れの推移」。横軸は JST、縦軸の目盛りは 1・2・5 刻みのきりの良い値。観測が 2 件に満たないときは理由を表示。ライト/ダークは CSS 変数で追従し、外部ライブラリは使わない
 - `src/domain/forecast.ts`, `src/models/forecast.ts`, `scripts/build-pages.ts`: マージ時期の予想に、通算所要日数ベース（作成順の消化）の第 3 の予想を追加（Issue #18）。基準 PR の起票日に、直近のマージ実績の通算所要日数の中央値・75%点を足して予想日を出す。更新の入れ替わりの影響を受けないため、他の 2 つ（更新の古い順に処理される前提）とのずれから、どちらの前提が実態に近いかを見る手掛かりになる。統計が無い旧スナップショットでは算出不能と表示

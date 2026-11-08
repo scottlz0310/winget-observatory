@@ -4,12 +4,14 @@
  */
 
 import type { HistoryRecord } from "../models/dashboard";
+import type { DepthsSnapshot } from "../models/depths";
 import type { StaleFrontierForecast, StaleFrontierSample } from "../models/forecast";
 import type {
   ForecastComparison,
   ForecastEstimate,
   HypothesisSummary,
 } from "../models/forecast-comparison";
+import type { ProgressSnapshot } from "../models/progress";
 import { calculateVelocityMetrics } from "./dashboard";
 import { calculateLifetimeForecast, calculateStaleFrontierForecast } from "./forecast";
 
@@ -233,4 +235,35 @@ export function calculateForecastComparison(source: ForecastComparisonSource): F
         };
 
   return { nowMs, hypotheses, range };
+}
+
+/**
+ * 最新の進捗スナップショット・境界探索スナップショットと履歴から、比較の入力を組み立てる。
+ * ダッシュボードの表示と、予想日の履歴への記録で、同じ入力になるようここに集約する。
+ *
+ * 観測時刻は進捗スナップショットの Timestamp を優先し、無ければ履歴の最新観測、
+ * 遭難の底の最新観測の順に使う。
+ */
+export function buildForecastSource(input: {
+  progress: Partial<ProgressSnapshot> | null;
+  depths: Partial<DepthsSnapshot> | null;
+  /** 現在の定義（更新順）で記録された履歴 */
+  history: HistoryRecord[];
+  frontierSamples: StaleFrontierSample[];
+}): ForecastComparisonSource {
+  const { progress, depths, history, frontierSamples } = input;
+  return {
+    nowMs:
+      Date.parse(progress?.Timestamp ?? "") ||
+      history[history.length - 1]?.timestampMs ||
+      frontierSamples[frontierSamples.length - 1]?.timestampMs ||
+      Number.NaN,
+    targetCreatedMs: Date.parse(depths?.TargetPr?.CreatedAt ?? ""),
+    targetUpdatedMs: depths?.TargetPr?.UpdatedAt ? Date.parse(depths.TargetPr.UpdatedAt) : null,
+    activeAhead: Number(progress?.ActiveAhead) || 0,
+    totalMedianDays: progress?.TotalMedianDays,
+    totalP75Days: progress?.TotalP75Days,
+    history,
+    frontierSamples,
+  };
 }
