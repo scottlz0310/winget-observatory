@@ -87,6 +87,21 @@ jobs:
           DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
         run: bun run scripts/sync-dropbox.ts --direction upload
 
+      # 計測結果を先に保存してから予想日を記録する（予想の記録が失敗しても計測は失われない）
+      - name: Record forecast history
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINGET_TARGET_PR: ${{ inputs.target_pr || '464302' }}
+          WINGET_REPOSITORY: ${{ inputs.repository || 'microsoft/winget-pkgs' }}
+        run: bun run src/cli/record-forecast.ts --target-pr "$WINGET_TARGET_PR" --repo "$WINGET_REPOSITORY"
+
+      - name: Save forecast history to Dropbox
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+        run: bun run scripts/sync-dropbox.ts --direction upload
+
       - name: Build Dashboard for GitHub Pages
         run: bun run scripts/build-pages.ts --data-dir data --output-dir site
 
