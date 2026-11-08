@@ -13,11 +13,16 @@ import {
   selectComparableHistory,
 } from "../src/domain/dashboard";
 import { extractStaleFrontierSamples, parseDepthsHistory } from "../src/domain/forecast";
-import { calculateForecastComparison } from "../src/domain/forecast-comparison";
+import {
+  buildForecastSource,
+  calculateForecastComparison,
+} from "../src/domain/forecast-comparison";
+import { parseForecastHistory, scoreForecasts } from "../src/domain/forecast-history";
 import { formatDateTimeWithDay, formatHumanDays, parseCsvRows } from "../src/domain/progress";
 import type { DepthsSnapshot } from "../src/models/depths";
 import type { StaleFrontierSample } from "../src/models/forecast";
 import type { ForecastComparison, HypothesisId } from "../src/models/forecast-comparison";
+import type { ForecastHistoryLine, ForecastScore } from "../src/models/forecast-history";
 import type {
   ProgressHistoryRow,
   ProgressSnapshot,
@@ -415,11 +420,71 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
     }`;
 }
 
+const SCORE_KEY_LABELS: Record<string, string> = {
+  "rank-velocity": "① 順位消化",
+  "update-order:steady": "② 更新順（定常待ち時間）",
+  "update-order:observed": "② 更新順（実測の進み）",
+  "creation-order:median": "③ 作成順（中央値）",
+  "creation-order:p75": "③ 作成順（75%点）",
+};
+
+/** 誤差（日）を符号つきで表示する。+ は予想が実際より遅かった */
+function formatErrorDays(days: number): string {
+  if (days === 0) return "±0 日";
+  return `${days > 0 ? "+" : ""}${days} 日`;
+}
+
+/** 予想の答え合わせ: 基準 PR のマージ後に、仮説・モデルごとの予想誤差を示す */
+function renderForecastScoreSection(
+  history: ForecastHistoryLine[],
+  scores: ForecastScore[],
+): string {
+  const recorded = history.filter((line) => line.Type === "forecast").length;
+  const note = `
+    <p class="section-note">
+      観測のたびに 3 つの仮説の予想日を記録し、基準 PR がマージされたら実際のマージ日との誤差を採点します。誤差は「予想日 − 実際のマージ日」で、+ は予想が遅すぎ、− は早すぎです。
+    </p>`;
+  if (scores.length === 0) {
+    return `
+    <h2 class="section-title">🎯 予想の答え合わせ</h2>${note}
+    <p class="section-note">基準 PR がマージされると、仮説・モデルごとの予想誤差をここに表示します（記録済みの予想 ${recorded} 件）。</p>`;
+  }
+
+  const tables = scores
+    .map((score) => {
+      const rows = score.keys
+        .map(
+          (k) => `
+        <tr>
+          <td>${escapeHtml(SCORE_KEY_LABELS[k.key] ?? k.key)}</td>
+          <td>${k.count} 件</td>
+          <td>${formatErrorDays(k.meanErrorDays)}</td>
+          <td>${k.meanAbsErrorDays} 日</td>
+          <td>${formatErrorDays(k.lastErrorDays)}</td>
+        </tr>`,
+        )
+        .join("");
+      return `
+    <h3 class="section-note" style="margin: 1rem 0 0.5rem; font-weight: 600;">${escapeHtml(score.repository)} #${score.targetPr}（マージ: ${escapeHtml(formatJstDate(score.mergedAtMs))}、予想の記録 ${score.observationCount} 回）</h3>
+    <table>
+      <thead>
+        <tr><th>仮説・モデル</th><th>採点数</th><th>平均誤差</th><th>平均絶対誤差</th><th>最後の予想の誤差</th></tr>
+      </thead>
+      <tbody>${rows}
+      </tbody>
+    </table>`;
+    })
+    .join("");
+  return `
+    <h2 class="section-title">🎯 予想の答え合わせ</h2>${note}${tables}`;
+}
+
 function generateHtml(
   progress: LatestProgress | null,
   depths: LatestDepths | null,
   csvRows: ProgressHistoryRow[],
   frontierSamples: StaleFrontierSample[] = [],
+  forecastHistory: ForecastHistoryLine[] = [],
 ): string {
   const updatedJst = progress?.TimestampJst || depths?.TimestampJst || "未観測";
   const repo = progress?.Repository || depths?.Repository || DEFAULT_REPOSITORY;
@@ -465,20 +530,10 @@ function generateHtml(
     ],
   });
 
-  const comparison = calculateForecastComparison({
-    nowMs:
-      Date.parse(progress?.Timestamp ?? "") ||
-      historyRecords[historyRecords.length - 1]?.timestampMs ||
-      frontierSamples[frontierSamples.length - 1]?.timestampMs ||
-      Number.NaN,
-    targetCreatedMs: Date.parse(depths?.TargetPr?.CreatedAt ?? ""),
-    targetUpdatedMs: depths?.TargetPr?.UpdatedAt ? Date.parse(depths.TargetPr.UpdatedAt) : null,
-    activeAhead: currentActiveAhead,
-    totalMedianDays: progress?.TotalMedianDays,
-    totalP75Days: progress?.TotalP75Days,
-    history: historyRecords,
-    frontierSamples,
-  });
+  const comparison = calculateForecastComparison(
+    buildForecastSource({ progress, depths, history: historyRecords, frontierSamples }),
+  );
+  const forecastScores = scoreForecasts(forecastHistory);
 
   // 直近 10 件の推移（差分付き、新しい順）
   const recentHistoryWithDeltas = metrics.historyWithDeltas.slice(-10).reverse();
@@ -894,6 +949,8 @@ function generateHtml(
 
     ${renderForecastSection(frontierSamples)}
 
+    ${renderForecastScoreSection(forecastHistory, forecastScores)}
+
     <h2 class="section-title">📈 直近の観測推移ログ (最新 10 件)</h2>
     ${
       recentHistoryWithDeltas.length > 0
@@ -940,7 +997,7 @@ function generateHtml(
     <footer>
       <p>Winget Observatory - Automated with GitHub Actions &amp; GitHub Pages</p>
       <p style="margin-top: 0.5rem; font-size: 0.75rem;">
-        RAW Data: <a href="data/progress-history.csv">progress-history.csv</a> | <a href="data/latest-progress.json">latest-progress.json</a> | <a href="data/latest-depths.json">latest-depths.json</a> | <a href="data/depths-history.jsonl">depths-history.jsonl</a>
+        RAW Data: <a href="data/progress-history.csv">progress-history.csv</a> | <a href="data/latest-progress.json">latest-progress.json</a> | <a href="data/latest-depths.json">latest-depths.json</a> | <a href="data/depths-history.jsonl">depths-history.jsonl</a> | <a href="data/forecast-history.jsonl">forecast-history.jsonl</a>
       </p>
     </footer>
   </div>
@@ -960,6 +1017,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   const depthsPath = join(dataDir, "latest-depths.json");
   const csvPath = join(dataDir, "progress-history.csv");
   const depthsHistoryPath = join(dataDir, "depths-history.jsonl");
+  const forecastHistoryPath = join(dataDir, "forecast-history.jsonl");
 
   let progress: LatestProgress | null = null;
   if (existsSync(progressPath)) {
@@ -999,7 +1057,16 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     }
   }
 
-  const html = generateHtml(progress, depths, csvRows, frontierSamples);
+  let forecastHistory: ForecastHistoryLine[] = [];
+  if (existsSync(forecastHistoryPath)) {
+    try {
+      forecastHistory = parseForecastHistory(readFileSync(forecastHistoryPath, "utf-8"));
+    } catch (e) {
+      throw buildError("予想履歴", forecastHistoryPath, e);
+    }
+  }
+
+  const html = generateHtml(progress, depths, csvRows, frontierSamples, forecastHistory);
   const htmlPath = join(outputDir, "index.html");
   writeFileSync(htmlPath, html, "utf-8");
   console.log(`[Build Pages] HTML 生成完了: ${htmlPath}`);
@@ -1015,6 +1082,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     "latest-progress.json",
     "latest-depths.json",
     "depths-history.jsonl",
+    "forecast-history.jsonl",
   ];
 
   for (const file of copyTargets) {

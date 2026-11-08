@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildForecastSource,
   calculateForecastComparison,
   type ForecastComparisonSource,
 } from "../../src/domain/forecast-comparison";
@@ -174,5 +175,75 @@ describe("Domain: calculateForecastComparison", () => {
     );
     expect(result.range).toBeNull();
     expect(result.hypotheses.every((h) => h.estimates.length === 0)).toBeTrue();
+  });
+});
+
+describe("Domain: buildForecastSource", () => {
+  const history = [record(24, 2500), record(0, 2400)];
+  const frontierSamples = [sample(24, 30), sample(0, 30)];
+  const depths = {
+    TargetPr: {
+      Number: 1,
+      Title: "t",
+      Url: "u",
+      CreatedAt: "2026-10-29T00:00:00Z",
+      CreatedAtJst: "",
+      UpdatedAt: "2026-11-05T00:00:00Z",
+    },
+  };
+
+  test("スナップショットの値を、比較の入力へ写す", () => {
+    const source = buildForecastSource({
+      progress: {
+        Timestamp: "2026-11-08T00:00:00Z",
+        ActiveAhead: 2400,
+        TotalMedianDays: 44,
+        TotalP75Days: 45,
+      },
+      depths,
+      history,
+      frontierSamples,
+    });
+    expect(source).toMatchObject({
+      nowMs: Date.parse("2026-11-08T00:00:00Z"),
+      targetCreatedMs: Date.parse("2026-10-29T00:00:00Z"),
+      targetUpdatedMs: Date.parse("2026-11-05T00:00:00Z"),
+      activeAhead: 2400,
+      totalMedianDays: 44,
+      totalP75Days: 45,
+    });
+    expect(source.history).toBe(history);
+    expect(source.frontierSamples).toBe(frontierSamples);
+  });
+
+  test.each([
+    ["進捗スナップショットの観測時刻を優先する", { Timestamp: "2026-11-09T00:00:00Z" }, NOW + DAY],
+    ["観測時刻が無ければ、履歴の最新観測を使う", {}, NOW],
+  ])("観測時刻: %s", (_name, progress, expected) => {
+    expect(buildForecastSource({ progress, depths, history, frontierSamples }).nowMs).toBe(
+      expected,
+    );
+  });
+
+  test("履歴も無ければ遭難の底の最新観測を使い、それも無ければ NaN", () => {
+    expect(
+      buildForecastSource({ progress: null, depths: null, history: [], frontierSamples }).nowMs,
+    ).toBe(NOW);
+    expect(
+      buildForecastSource({ progress: null, depths: null, history: [], frontierSamples: [] }).nowMs,
+    ).toBeNaN();
+  });
+
+  test("スナップショットが無い・値が欠けていれば、既定の値（待ち 0 件・更新時刻 null・起票時刻 NaN）にする", () => {
+    const source = buildForecastSource({
+      progress: null,
+      depths: null,
+      history: [],
+      frontierSamples: [],
+    });
+    expect(source.activeAhead).toBe(0);
+    expect(source.targetUpdatedMs).toBeNull();
+    expect(source.targetCreatedMs).toBeNaN();
+    expect(source.totalMedianDays).toBeUndefined();
   });
 });

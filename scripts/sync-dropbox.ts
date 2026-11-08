@@ -17,6 +17,7 @@ const TARGET_FILES = [
   "latest-progress.json",
   "depths-history.jsonl",
   "latest-depths.json",
+  "forecast-history.jsonl",
 ];
 
 export function parseArgs(args: string[], cwd: string = process.cwd()): SyncOptions {
