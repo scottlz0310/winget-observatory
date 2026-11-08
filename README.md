@@ -90,7 +90,7 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 - **Dropbox App Folder による生データ永続化**:
   - 収集された CSV / JSONL / JSON は、`scripts/sync-dropbox.ts` を通じて Dropbox の専用 App Folder（`/data/`）へ自動同期・蓄積されます。
   - Git リポジトリ（`main` ブランチ）への直接 push を全廃し、厳格なブランチ保護ルールを維持します。
-  - リポジトリ内の `data/` は旧運用（main への自動コミット）時点のスナップショットで、現在は更新されません。定期実行はワークフロー開始時に Dropbox から最新の履歴を取得して `data/` を上書きします（ローカル実行時の初期データとして残しています）。
+  - 観測データの正は Dropbox（`/data/`）で、リポジトリでは追跡しません（`.gitignore` 対象）。`data/` はローカルの作業領域で、定期実行はワークフロー開始時に Dropbox から最新の履歴を取得して `data/` に展開します。ローカルで実行する場合も、先に `bun run scripts/sync-dropbox.ts --direction download` で取得してください（資格情報が無い環境では `--allow-skip` を付けるとスキップでき、その場合は空の状態から計測が始まります）。
 
 ### 自動化・連携スクリプト
 
