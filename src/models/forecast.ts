@@ -43,3 +43,23 @@ export interface StaleFrontierForecast {
   /** 観測速度が算出できない理由 */
   observedUnavailable: ForecastUnavailableReason | null;
 }
+
+/**
+ * 通算所要日数ベースの予想: 直近にマージされた PR の起票からマージまでの日数（通算所要日数）が、
+ * 基準 PR の起票日に対しても同じ分布で成り立つと仮定する。作成順に近い消化なら、
+ * 更新の入れ替わりの影響を受けないため、速度ベースの ETA の妥当性を見る目安になる。
+ */
+export interface LifetimeForecast {
+  /** 予想に使った通算所要日数の中央値（日） */
+  medianDays: number;
+  /** 中央値で見たマージ予想日（UTC ミリ秒） */
+  medianDateMs: number;
+  /** 観測時点から中央値の予想日までの日数。超過済みなら 0 */
+  medianEtaDays: number;
+  /** 基準 PR の経過日数が、すでに中央値を超えているか */
+  exceededMedian: boolean;
+  /** 75%点で見たマージ予想日（UTC ミリ秒）。75%点が不明なら null */
+  p75DateMs: number | null;
+  /** 観測時点から 75%点の予想日までの日数。超過済みなら 0。不明なら null */
+  p75EtaDays: number | null;
+}

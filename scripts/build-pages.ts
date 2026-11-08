@@ -12,13 +12,18 @@ import {
   selectComparableHistory,
 } from "../src/domain/dashboard";
 import {
+  calculateLifetimeForecast,
   calculateStaleFrontierForecast,
   extractStaleFrontierSamples,
   parseDepthsHistory,
 } from "../src/domain/forecast";
 import { formatDateTimeWithDay, formatHumanDays, parseCsvRows } from "../src/domain/progress";
 import type { DepthsSnapshot } from "../src/models/depths";
-import type { StaleFrontierForecast, StaleFrontierSample } from "../src/models/forecast";
+import type {
+  LifetimeForecast,
+  StaleFrontierForecast,
+  StaleFrontierSample,
+} from "../src/models/forecast";
 import type {
   ProgressHistoryRow,
   ProgressSnapshot,
@@ -286,9 +291,33 @@ function formatEta(forecast: StaleFrontierForecast, etaDays: number | null): str
 }
 
 /** 遭難の底の推移から基準 PR のマージ時期を予想するセクション（既存の ETA と並列） */
+function renderLifetimeCard(lifetime: LifetimeForecast | null): string {
+  const body = lifetime
+    ? `<div class="card-value">${
+        lifetime.exceededMedian
+          ? `中央値を超過`
+          : `約 ${lifetime.medianEtaDays} <span style="font-size: 1rem; font-weight: normal;">日後</span> <span style="font-size: 0.875rem; font-weight: normal; color: var(--text-muted);">(${escapeHtml(formatJstDate(lifetime.medianDateMs))} 頃)</span>`
+      }</div>
+        <div class="card-subtext"><span>起票日 + 通算所要日数の中央値 <strong>${escapeHtml(lifetime.medianDays)}</strong> 日</span></div>
+        ${
+          lifetime.p75DateMs !== null
+            ? `<div class="card-subtext"><span>75%点で見ると ${escapeHtml(formatJstDate(lifetime.p75DateMs))} 頃（${lifetime.p75EtaDays} 日後）</span></div>`
+            : ""
+        }`
+    : `<div class="card-value"><span style="font-size: 1.25rem; color: var(--text-muted);">-</span></div>
+        <div class="card-subtext">通算所要日数の統計または基準 PR の起票日時が未記録です</div>`;
+  return `
+      <div class="card">
+        <div class="card-title">通算所要日数ベース（作成順の消化）</div>
+        ${body}
+        <div class="card-subtext">直近のマージ実績の通算所要日数が基準 PR にも当てはまると仮定。更新の入れ替わりの影響を受けない</div>
+      </div>`;
+}
+
 function renderForecastSection(
   forecast: StaleFrontierForecast,
   samples: StaleFrontierSample[],
+  lifetime: LifetimeForecast | null,
 ): string {
   const recent = samples.slice(-10).reverse();
   const rows = recent
@@ -313,6 +342,9 @@ function renderForecastSection(
     <p class="section-note">
       遭難の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します。更新の古い順に処理される、という仮説に基づく参考値です。
     </p>
+    <p class="section-note">
+      定常待ち時間モデルと観測速度モデルは「更新の古い順に処理される」、通算所要日数ベースは「作成順に近く消化される」という前提です。予想日が大きくずれるときは、どちらの前提が実態に近いかを見る手掛かりになります（上部の到着予測 ETA は実質待ち件数の変化から算出します）。
+    </p>
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">
       <div class="card">
         <div class="card-title">定常待ち時間モデル</div>
@@ -328,7 +360,7 @@ function renderForecastSection(
         <div class="card-value">${formatEta(forecast, forecast.observedEtaDays)}</div>
         <div class="card-subtext">${observed}</div>
         <div class="card-subtext">履歴から先頭の進みを実測して予想</div>
-      </div>
+      </div>${renderLifetimeCard(lifetime)}
     </div>
     ${
       recent.length > 0
@@ -387,6 +419,12 @@ function generateHtml(
     ? Date.parse(depths.TargetPr.UpdatedAt)
     : null;
   const forecast = calculateStaleFrontierForecast(frontierSamples, targetUpdatedMs);
+  const lifetime = calculateLifetimeForecast(
+    Date.parse(depths?.TargetPr?.CreatedAt ?? ""),
+    progress?.TotalMedianDays,
+    progress?.TotalP75Days,
+    Date.parse(progress?.Timestamp ?? "") || (forecast.frontier?.observedMs ?? Number.NaN),
+  );
 
   // 直近 10 件の推移（差分付き、新しい順）
   const recentHistoryWithDeltas = metrics.historyWithDeltas.slice(-10).reverse();
@@ -635,6 +673,7 @@ function generateHtml(
               ? `<span>速度: ${escapeHtml(metrics.velocity.velocityPerDay)} 件/日 (キュー停滞または後退中)</span>`
               : `<span>観測データ蓄積待ち (30分以上の推移が必要)</span>`
         }</div>
+        <div class="card-subtext">実質待ち件数の変化から算出。前にいた PR が更新されて順位が入れ替わった分も含むため、実際の消化より速く出ることがあります</div>
       </div>
 
       <div class="card">
@@ -805,7 +844,7 @@ function generateHtml(
     </p>
     ${renderStaleBottomTable(depths)}
 
-    ${renderForecastSection(forecast, frontierSamples)}
+    ${renderForecastSection(forecast, frontierSamples, lifetime)}
 
     <h2 class="section-title">📈 直近の観測推移ログ (最新 10 件)</h2>
     ${

@@ -328,6 +328,44 @@ describe("buildDashboard: マージ時期の予想", () => {
     }
   });
 
+  test("通算所要日数ベースの予想を、中央値から求めた日付付きで並べて表示する", () => {
+    const history = JSON.stringify(snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"));
+    const { tempDir, dataDir, outputDir } = setup(history);
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-08T00:00:00Z",
+        TargetPr: 123,
+        TotalMedianDays: 44.5,
+        TotalP75Days: 45,
+      }),
+      "utf-8",
+    );
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+      expect(html).toContain("通算所要日数ベース（作成順の消化）");
+      // 起票 2026-10-28 + 44.5 日 = 2026-12-11 頃、観測 2026-11-08 から 33.5 日後
+      expect(html).toContain("約 33.5 <span");
+      expect(html).toContain("2026-12-11 頃");
+      expect(html).toContain("75%点で見ると 2026-12-12 頃");
+      expect(html).toContain("実際の消化より速く出ることがあります");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("通算所要日数の統計が無い旧スナップショットでは、第 3 の予想を算出不能として示す", () => {
+    const history = JSON.stringify(snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"));
+    const { tempDir, dataDir, outputDir } = setup(history);
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+      expect(html).toContain("通算所要日数ベース（作成順の消化）");
+      expect(html).toContain("通算所要日数の統計または基準 PR の起票日時が未記録です");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("先頭が進んでいなければ観測速度モデルは理由付きで算出不能と表示する", () => {
     const history = [
       snapshot("2026-11-07T00:00:00Z", 10, "2026-10-10T00:00:00Z"),

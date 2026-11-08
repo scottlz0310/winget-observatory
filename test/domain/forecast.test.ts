@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  calculateLifetimeForecast,
   calculateStaleFrontierForecast,
   extractStaleFrontierSamples,
   parseDepthsHistory,
@@ -135,5 +136,48 @@ describe("Domain: calculateStaleFrontierForecast", () => {
     expect(result.gapDays).toBe(-1);
     expect(result.steadyEtaDays).toBe(0);
     expect(result.observedEtaDays).toBe(0);
+  });
+});
+
+describe("Domain: calculateLifetimeForecast", () => {
+  const created = Date.parse("2026-10-29T00:00:00Z");
+  const now = Date.parse("2026-11-08T00:00:00Z"); // 起票から 10 日後
+
+  test("起票日に中央値・75%点を足した予想日と、現在からの残り日数を返す", () => {
+    const result = calculateLifetimeForecast(created, 44.5, 45, now);
+    expect(result).toEqual({
+      medianDays: 44.5,
+      medianDateMs: created + 44.5 * DAY,
+      medianEtaDays: 34.5,
+      exceededMedian: false,
+      p75DateMs: created + 45 * DAY,
+      p75EtaDays: 35,
+    });
+  });
+
+  test.each([
+    ["中央値を超過している", 8, 9, 0, 0, true],
+    ["中央値は超過・75%点は未到達", 8, 12, 0, 2, true],
+  ])("%s: 残り日数は 0 に丸める", (_name, median, p75, medianEta, p75Eta, exceeded) => {
+    const result = calculateLifetimeForecast(created, median, p75, now);
+    expect(result?.medianEtaDays).toBe(medianEta);
+    expect(result?.p75EtaDays).toBe(p75Eta);
+    expect(result?.exceededMedian).toBe(exceeded);
+  });
+
+  test("75%点が無ければ中央値だけで算出し、75%点は null", () => {
+    const result = calculateLifetimeForecast(created, 44.5, null, now);
+    expect(result?.medianEtaDays).toBe(34.5);
+    expect(result?.p75DateMs).toBeNull();
+    expect(result?.p75EtaDays).toBeNull();
+  });
+
+  test.each([
+    ["中央値が無い", created, null, now],
+    ["中央値が未定義", created, undefined, now],
+    ["起票時刻が不正", Number.NaN, 44.5, now],
+    ["観測時刻が不正", created, 44.5, Number.NaN],
+  ])("算出できない入力は null を返す: %s", (_name, createdMs, median, nowMs) => {
+    expect(calculateLifetimeForecast(createdMs, median, 45, nowMs)).toBeNull();
   });
 });
