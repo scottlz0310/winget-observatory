@@ -153,12 +153,10 @@ function renderStatCard(
   return `
       <div class="card stat-card">
         <div class="card-title">${title}</div>
-        <div class="card-value" style="font-size: 1.4rem;">
-          P50: ${formatDaysStat(stats.median)}
-          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          P75: ${formatDaysStat(stats.p75)}
-          <span style="font-size: 1rem; color: var(--text-muted); margin: 0 0.5rem;">/</span>
-          最大: ${formatDaysStat(stats.max)}
+        <div class="card-value" style="font-size: 1.15rem; display: flex; flex-wrap: wrap; column-gap: 0.75rem;">
+          <span style="white-space: nowrap;">P50: ${formatDaysStat(stats.median)}</span>
+          <span style="white-space: nowrap;">P75: ${formatDaysStat(stats.p75)}</span>
+          <span style="white-space: nowrap;">最大: ${formatDaysStat(stats.max)}</span>
         </div>
         <div class="card-subtext">${description}</div>
         <div class="card-subtext">基準 PR の現在: <strong>${escapeHtml(currentDays)}</strong> 日</div>
@@ -170,7 +168,6 @@ function renderStatCard(
 function renderOvertakeSection(progress: LatestProgress | null): string {
   const c = progress?.Comparison;
   if (!c) return "";
-  const target = progress?.TargetPr ?? DEFAULT_TARGET_PR;
   const noteColor = c.Verdict === "overtaken" ? "var(--danger)" : "var(--text-muted)";
   return `
     <h2 class="section-title">🏃 追い越しの比較（採用サンプル内）</h2>
@@ -185,8 +182,6 @@ function renderOvertakeSection(progress: LatestProgress | null): string {
         <tr><td>自分より後に作成され、マージ済み（追い越し）</td><td><strong>${c.LaterCreated}</strong> 件</td></tr>
         <tr><td>自分より前に作成され、マージ済み</td><td>${c.EarlierCreated} 件</td></tr>
         <tr><td>自分より後に条件が整い（ReadyAt）、マージ済み</td><td>${c.LaterReady} 件</td></tr>
-        <tr><td>自分より新しい PR 番号 (&gt;${escapeHtml(target)}) でマージ済み</td><td>${c.NewerNumber} 件</td></tr>
-        <tr><td>自分より古い PR 番号 (&lt;${escapeHtml(target)}) でマージ済み</td><td>${c.OlderNumber} 件</td></tr>
       </tbody>
     </table>
     <p class="section-note" style="color: ${noteColor};">※ ${escapeHtml(describeOvertake(c))}</p>`;
@@ -441,8 +436,6 @@ function generateHtml(
   });
   const behindDeltaBadge = formatDeltaBadge(metrics.latestDelta.behindDelta);
 
-  const healthyBottomFirst = depths?.HealthyBottom?.[0];
-
   const chartRecords = historyRecords.slice(-CHART_MAX_POINTS);
   const queueChart = renderLineChartSvg({
     title: "待ち件数の推移",
@@ -480,6 +473,7 @@ function generateHtml(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Winget Observatory Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%94%AD%3C/text%3E%3C/svg%3E">
   <style>
     :root {
       --bg-color: #f8fafc;
@@ -626,7 +620,7 @@ function generateHtml(
       border-radius: 0.5rem;
       padding: 0.75rem 1rem;
       text-align: center;
-      min-width: 140px;
+      min-width: 120px;
       flex-shrink: 0;
     }
     .flow-node.target {
@@ -636,9 +630,13 @@ function generateHtml(
     .flow-arrow {
       color: var(--text-muted);
       font-weight: bold;
-      font-size: 1.1rem;
+      font-size: 1rem;
       text-align: center;
       white-space: nowrap;
+    }
+    .flow-arrow-note {
+      font-size: 0.75rem;
+      font-weight: normal;
     }
     .section-title {
       font-size: 1.25rem;
@@ -805,21 +803,16 @@ function generateHtml(
     <h2 class="section-title">📊 トリアージキュー構造</h2>
     <div class="flow-container">
       <div class="flow-node">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">健康的大底</div>
-        <strong>${healthyBottomFirst?.Number ? `<a href="${escapeHtml(healthyBottomFirst.Url)}" target="_blank">#${healthyBottomFirst.Number}</a>` : "-"}</strong>
-        <div style="font-size: 0.7rem; color: var(--text-muted);">${escapeHtml(healthyBottomFirst?.作成日時)}</div>
-      </div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">消化前線</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">消化前線（健康的大底）</div>
         <strong>${progress?.FrontNumber ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${progress.FrontNumber}" target="_blank">#${progress.FrontNumber}</a>` : "-"}</strong>
         <div style="font-size: 0.7rem; color: var(--text-muted);">${escapeHtml(progress?.FrontCreatedAt)}</div>
       </div>
-      <div class="flow-arrow">… ${formatNumber(progress?.ActiveAhead)} 件 ${metrics.calendarGap.gapDays !== null ? `(差 ${metrics.calendarGap.gapDays} 日)` : ""} … →</div>
+      <div class="flow-arrow">… 作成順で ${formatNumber(progress?.TotalAhead)} 件 … →${metrics.calendarGap.gapDays !== null ? `<div class="flow-arrow-note">起票日の差 ${metrics.calendarGap.gapDays} 日</div>` : ""}</div>
       <div class="flow-node target">
         <div style="font-size: 0.75rem; color: var(--primary);">基準 PR</div>
         <strong><a href="${escapeHtml(targetUrl)}" target="_blank">#${escapeHtml(targetPrNum)}</a></strong>
         <div style="font-size: 0.7rem; color: var(--primary);">待機 ${escapeHtml(progress?.WaitDays)} 日</div>
+        <div style="font-size: 0.7rem; color: var(--primary);">更新順の順位 ${formatNumber(progress?.ActiveAhead)}</div>
       </div>
       <div class="flow-arrow">→ … ${formatNumber(progress?.Behind)} 件 … →</div>
       <div class="flow-node">

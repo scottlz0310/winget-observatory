@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `scripts/build-pages.ts`: ダッシュボードの表示を整理（Issue #18）。トリアージキュー構造の図は、前線と基準 PR の間を作成順の累積待ち（起票日の差つき）とし、更新順の順位は基準 PR のノードに示す（従来は更新順の順位が作成順の区間に書かれて食い違って見えた）。「健康的大底」のノードは消化前線と同じ PR になったため統合。追い越しの表から、起票日と実質同じ意味になる PR 番号の 2 行を削除（スナップショットと CLI ログには残す）。統計カードの P50 / P75 / 最大が途中で折り返さないよう調整。favicon を埋め込み 404 を解消
 - `scripts/build-pages.ts`: マージ時期の予想の節の「先頭の遅れ」の表を、推移チャートに代わるため直近 10 件から 5 件に縮小（Issue #18）
 - `scripts/build-pages.ts`: ダッシュボード上部の到着予測（ETA）に、実質待ち件数（更新順の順位）の変化から算出するため、前にいた PR の更新による順位の入れ替わりを含み、実際の消化より速く出ることがある旨の注記を追加。マージ時期の予想の節に、3 つの予想の前提の違いを説明する注記を追加（Issue #18）
 - 同じ形で入力だけが異なるテストを `test.each` に集約（Issue #18）。対象は `test/domain/progress.test.ts`（ラベル判定・パーセンタイル・書式）、`test/domain/dashboard.test.ts`（タイムスタンプ解釈・カレンダー距離・差分バッジ）、`test/redact.test.ts`、`test/dropbox.test.ts`、`test/sync-dropbox.test.ts`（資格情報検証）、`test/cli/progress.test.ts`・`test/cli/explore-depths.test.ts`（引数の拒否）。ケースごとに名前が付き、失敗時に原因の入力が分かる。アサーション数は変わらない（625）。1 件のシナリオを検証するテストは対象外

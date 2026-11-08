@@ -525,6 +525,33 @@ describe("buildDashboard: 過去実績との比較", () => {
     expect(html).toContain("#9004");
   });
 
+  test("追い越しの表は作成順・成立順の 3 行にし、起票順と同じ意味になる PR 番号の行は出さない", () => {
+    const html = build({ samples });
+    const table = html.slice(html.indexOf("追い越しの比較"), html.indexOf("トリアージキュー構造"));
+    expect(table.match(/<tr><td>/g)).toHaveLength(3);
+    expect(table).not.toContain("PR 番号");
+  });
+
+  test("トリアージ構造の図は作成順の件数を矢印に、更新順の順位を基準 PR に示し、前線を重複させない", () => {
+    const html = build({ samples });
+    const flow = html.slice(
+      html.indexOf('<div class="flow-container">'),
+      html.indexOf("直前のライバル"),
+    );
+    // 前線と基準 PR の間は作成順の累積待ち（20）。更新順の順位（10）は基準 PR のノードに示す
+    expect(flow).toContain("作成順で 20 件");
+    expect(flow).toContain("更新順の順位 10");
+    expect(flow).not.toContain("… 10 件");
+    expect(flow.match(/class="flow-node/g)).toHaveLength(3);
+    expect(flow).toContain("消化前線（健康的大底）");
+  });
+
+  test("統計カードの P50 / P75 / 最大は途中で折り返さず、favicon を埋め込んで 404 を避ける", () => {
+    const html = build({ samples });
+    expect(html.match(/<span style="white-space: nowrap;">(P50|P75|最大): /g)?.length).toBe(9);
+    expect(html).toContain('<link rel="icon" href="data:image/svg+xml,');
+  });
+
   test("サンプルがないときは追い越し・サンプル一覧を出さず、除外件数だけ示す", () => {
     const html = build({ samples: [], skipped: 4 });
 
