@@ -89,11 +89,11 @@ describe("buildDashboard", () => {
       expect(html.match(/<polyline /g)?.length).toBeGreaterThanOrEqual(2);
       expect(html).toContain("+50"); // 前線番号増加（進行）
 
-      // 新指標: Velocity & ETA（24時間で50件消化 = 日速50件、残り100件で約2日後）
-      expect(html).toContain("到着予測 (ETA) &amp; 消化速度");
-      expect(html).toContain("約 2");
-      expect(html).toContain("日後");
-      expect(html).toContain("50 件/日");
+      // 新指標: 最上部の予想パネルの順位消化（24時間で50件消化 = 日速50件、残り100件で約2日後）
+      expect(html).toContain("予想マージ日（3 つの仮説の比較）");
+      expect(html).toContain("① 順位消化");
+      expect(html).toContain("直近 24 時間で 50 件減（50 件/日）");
+      expect(html).toContain("約 2 日後");
 
       // 新指標: カレンダー距離 (2026-10-01 〜 2026-10-25 = 24 日)
       expect(html).toContain("カレンダー距離 (日付ギャップ)");
@@ -310,8 +310,8 @@ describe("buildDashboard: マージ時期の予想", () => {
     return { tempDir, dataDir, outputDir: join(tempDir, "site") };
   };
 
-  test("定常待ち時間モデルと観測速度モデルの予想を並べて表示する", () => {
-    // 先頭が 24 時間で 1 日分進む（1 日/日）。基準 PR との差は 10 日 → 約 10 日後
+  test("更新順の 2 つのモデルの予想日を、予想パネルに並べて表示する", () => {
+    // 先頭が 24 時間で 1 日分進む（1 日/日）。遅れ 29 日、基準 PR との更新差 10 日 → 10 日後（2026-11-18）
     const history = [
       snapshot("2026-11-07T00:00:00Z", 10, "2026-10-09T00:00:00Z"),
       snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"),
@@ -321,12 +321,14 @@ describe("buildDashboard: マージ時期の予想", () => {
     const { tempDir, dataDir, outputDir } = setup(history);
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-      expect(html).toContain("マージ時期の予想");
-      expect(html).toContain("定常待ち時間モデル");
-      expect(html).toContain("観測速度モデル");
-      expect(html).toContain("約 10 <span");
+      expect(html).toContain("② 更新順");
+      expect(html).toContain("先頭が実時間と同じ速度（1 日/日）で進む場合");
+      expect(html).toContain("実測した先頭の進みが続く場合");
+      expect(html).toContain("<strong>2026-11-18</strong>");
+      expect(html).toContain("（約 10 日後）");
+      expect(html).toContain("実測の進み: 1 日/日（直近 24 時間）");
+      expect(html).toContain("仮説② の根拠");
       expect(html).toContain('aria-label="遭難の底の先頭の遅れの推移（日）"');
-      expect(html).toContain("先頭の進み: <strong>1</strong> 日/日");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -344,7 +346,7 @@ describe("buildDashboard: マージ時期の予想", () => {
     }
   });
 
-  test("通算所要日数ベースの予想を、中央値から求めた日付付きで並べて表示する", () => {
+  test("作成順の予想を中央値から求めた日付と進捗バーで示し、範囲を見出しに出してページの最上部に置く", () => {
     const history = JSON.stringify(snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"));
     const { tempDir, dataDir, outputDir } = setup(history);
     writeFileSync(
@@ -359,24 +361,36 @@ describe("buildDashboard: マージ時期の予想", () => {
     );
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-      expect(html).toContain("通算所要日数ベース（作成順の消化）");
-      // 起票 2026-10-28 + 44.5 日 = 2026-12-11 頃、観測 2026-11-08 から 33.5 日後
-      expect(html).toContain("約 33.5 <span");
-      expect(html).toContain("2026-12-11 頃");
-      expect(html).toContain("75%点で見ると 2026-12-12 頃");
+      expect(html).toContain("③ 作成順");
+      // 起票 2026-10-28 + 44.5 日 = 2026-12-11、観測 2026-11-08 から 33.5 日後
+      expect(html).toContain("<strong>2026-12-11</strong>");
+      expect(html).toContain("（約 33.5 日後）");
+      expect(html).toContain("75%点の日数でマージされる場合");
+      expect(html).toContain("起票から 11 日 / 通算所要日数の中央値 44.5 日（25%）");
+      expect(html).toContain('class="progress-bar"');
+      // 範囲は主な予想の最小〜最大（更新順の 2026-11-18 から作成順の 2026-12-11）
+      expect(html).toContain("2026-11-18 〜 2026-12-11");
+      expect(html).toContain("約 10〜33.5 日後");
+      expect(html).toContain('aria-label="3 つの仮説による予想マージ日"');
+      // 順位消化の注意（更新の入れ替わりを含む）
       expect(html).toContain("実際の消化より速く出ることがあります");
+      // 予想パネルは、上部の統計カードより前に出す
+      expect(html.indexOf("予想マージ日（3 つの仮説の比較）")).toBeLessThan(
+        html.indexOf("実質待ち件数 (更新順の順位)"),
+      );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  test("通算所要日数の統計が無い旧スナップショットでは、第 3 の予想を算出不能として示す", () => {
+  test("通算所要日数の統計が無い旧スナップショットでは、作成順の予想を出さず理由を示す", () => {
     const history = JSON.stringify(snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"));
     const { tempDir, dataDir, outputDir } = setup(history);
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-      expect(html).toContain("通算所要日数ベース（作成順の消化）");
+      expect(html).toContain("③ 作成順");
       expect(html).toContain("通算所要日数の統計または基準 PR の起票日時が未記録です");
+      expect(html).not.toContain('class="progress-bar"');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

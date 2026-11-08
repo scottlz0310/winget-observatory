@@ -5,26 +5,19 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { join, resolve } from "node:path";
 import { DEFAULT_REPOSITORY, DEFAULT_TARGET_PR } from "../src/cli/args";
 import { describeGuidance, describeOvertake } from "../src/domain/benchmark";
-import { renderLineChartSvg } from "../src/domain/chart";
+import { renderLineChartSvg, renderTimelineSvg } from "../src/domain/chart";
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
   formatJstDate,
   selectComparableHistory,
 } from "../src/domain/dashboard";
-import {
-  calculateLifetimeForecast,
-  calculateStaleFrontierForecast,
-  extractStaleFrontierSamples,
-  parseDepthsHistory,
-} from "../src/domain/forecast";
+import { extractStaleFrontierSamples, parseDepthsHistory } from "../src/domain/forecast";
+import { calculateForecastComparison } from "../src/domain/forecast-comparison";
 import { formatDateTimeWithDay, formatHumanDays, parseCsvRows } from "../src/domain/progress";
 import type { DepthsSnapshot } from "../src/models/depths";
-import type {
-  LifetimeForecast,
-  StaleFrontierForecast,
-  StaleFrontierSample,
-} from "../src/models/forecast";
+import type { StaleFrontierSample } from "../src/models/forecast";
+import type { ForecastComparison, HypothesisId } from "../src/models/forecast-comparison";
 import type {
   ProgressHistoryRow,
   ProgressSnapshot,
@@ -272,24 +265,6 @@ function renderSamplesSection(progress: LatestProgress | null, repo: string): st
     <p class="section-note">待機はラベルと Draft の履歴に基づきます。候補検索は現在の必須ラベルを使うため、マージ後にそれらが外れた PR は含まれません。</p>`;
 }
 
-const FORECAST_UNAVAILABLE_TEXT: Record<string, string> = {
-  "no-samples": "遭難の底の観測がありません",
-  "no-target": "基準 PR の更新時刻が未記録です（次回の観測から記録されます）",
-  "insufficient-window": "速度を測る観測期間が足りません（6 時間以上の間隔が必要）",
-  "no-progress": "観測期間内に先頭が進んでいないため算出できません",
-};
-
-function formatEta(forecast: StaleFrontierForecast, etaDays: number | null): string {
-  if (etaDays === null || forecast.frontier === null) {
-    return `<span style="font-size: 1.25rem; color: var(--text-muted);">-</span>`;
-  }
-  const date = formatJstDate(forecast.frontier.observedMs + etaDays * DAY_MS);
-  return etaDays === 0
-    ? `到達済み`
-    : `約 ${etaDays} <span style="font-size: 1rem; font-weight: normal;">日後</span> <span style="font-size: 0.875rem; font-weight: normal; color: var(--text-muted);">(${escapeHtml(date)} 頃)</span>`;
-}
-
-/** 遭難の底の推移から基準 PR のマージ時期を予想するセクション（既存の ETA と並列） */
 /** チャートを載せるカード。描画できるだけの観測が無いときは理由を示す */
 function renderChartCard(svg: string | null): string {
   return `<div class="card chart-card" style="margin-bottom: 1.5rem;">${
@@ -297,34 +272,95 @@ function renderChartCard(svg: string | null): string {
   }</div>`;
 }
 
-function renderLifetimeCard(lifetime: LifetimeForecast | null): string {
-  const body = lifetime
-    ? `<div class="card-value">${
-        lifetime.exceededMedian
-          ? `中央値を超過`
-          : `約 ${lifetime.medianEtaDays} <span style="font-size: 1rem; font-weight: normal;">日後</span> <span style="font-size: 0.875rem; font-weight: normal; color: var(--text-muted);">(${escapeHtml(formatJstDate(lifetime.medianDateMs))} 頃)</span>`
-      }</div>
-        <div class="card-subtext"><span>起票日 + 通算所要日数の中央値 <strong>${escapeHtml(lifetime.medianDays)}</strong> 日</span></div>
-        ${
-          lifetime.p75DateMs !== null
-            ? `<div class="card-subtext"><span>75%点で見ると ${escapeHtml(formatJstDate(lifetime.p75DateMs))} 頃（${lifetime.p75EtaDays} 日後）</span></div>`
-            : ""
-        }`
-    : `<div class="card-value"><span style="font-size: 1.25rem; color: var(--text-muted);">-</span></div>
-        <div class="card-subtext">通算所要日数の統計または基準 PR の起票日時が未記録です</div>`;
-  return `
-      <div class="card">
-        <div class="card-title">通算所要日数ベース（作成順の消化）</div>
-        ${body}
-        <div class="card-subtext">直近のマージ実績の通算所要日数が基準 PR にも当てはまると仮定。更新の入れ替わりの影響を受けない</div>
-      </div>`;
+const HYPOTHESIS_STYLE: Record<HypothesisId, { mark: string; color: string }> = {
+  "rank-velocity": { mark: "①", color: "var(--primary)" },
+  "update-order": { mark: "②", color: "var(--warning)" },
+  "creation-order": { mark: "③", color: "var(--success)" },
+};
+
+/** "2026-12-03" → "12/03" */
+function toMonthDay(timeMs: number): string {
+  return formatJstDate(timeMs).slice(5).replace("-", "/");
 }
 
-function renderForecastSection(
-  forecast: StaleFrontierForecast,
-  samples: StaleFrontierSample[],
-  lifetime: LifetimeForecast | null,
-): string {
+function formatEtaDays(days: number): string {
+  return days === 0 ? "到達済み" : `約 ${days} 日後`;
+}
+
+/** 3 つの仮説によるマージ時期の予想を比較するパネル（ページの最上部に置く） */
+function renderForecastPanel(comparison: ForecastComparison): string {
+  const { range } = comparison;
+  const headline = range
+    ? range.startMs === range.endMs
+      ? escapeHtml(formatJstDate(range.startMs))
+      : `${escapeHtml(formatJstDate(range.startMs))} 〜 ${escapeHtml(formatJstDate(range.endMs))}`
+    : `<span style="color: var(--text-muted);">予想できません</span>`;
+  const headlineDays = range
+    ? range.minDays === range.maxDays
+      ? formatEtaDays(range.minDays)
+      : `約 ${range.minDays}〜${range.maxDays} 日後`
+    : "どの仮説も、予想に必要な観測がそろっていません";
+
+  const markers = comparison.hypotheses.flatMap((h) =>
+    h.estimates
+      .filter((e) => e.primary)
+      .map((e) => ({
+        label: `${HYPOTHESIS_STYLE[h.id].mark} ${toMonthDay(e.dateMs)}`,
+        dateMs: e.dateMs,
+        color: HYPOTHESIS_STYLE[h.id].color,
+      })),
+  );
+  const timeline = renderTimelineSvg({
+    title: "3 つの仮説による予想マージ日",
+    nowMs: comparison.nowMs,
+    markers,
+    band: range ? { startMs: range.startMs, endMs: range.endMs } : undefined,
+  });
+
+  const rows = comparison.hypotheses
+    .map((h) => {
+      const bar =
+        h.progressRatio === null
+          ? ""
+          : `<div class="progress-bar" role="img" aria-label="進捗 ${Math.round(h.progressRatio * 100)}%"><div style="width: ${Math.round(h.progressRatio * 100)}%;"></div></div>`;
+      const estimates =
+        h.estimates.length === 0
+          ? `<span style="color: var(--text-muted);">予想できません</span>`
+          : h.estimates
+              .map(
+                (e) =>
+                  `<div style="margin-bottom: 0.4rem;"><span style="white-space: nowrap;"><strong>${escapeHtml(formatJstDate(e.dateMs))}</strong> <span style="color: var(--text-muted);">（${formatEtaDays(e.etaDays)}）</span></span><div class="card-subtext" style="margin-top: 0;">${escapeHtml(e.label)}</div></div>`,
+              )
+              .join("");
+      return `
+        <tr>
+          <td><strong style="color: ${HYPOTHESIS_STYLE[h.id].color};">${escapeHtml(h.title)}</strong><div class="card-subtext">${escapeHtml(h.premise)}</div></td>
+          <td>${escapeHtml(h.progressText)}${bar}${h.note ? `<div class="card-subtext">${escapeHtml(h.note)}</div>` : ""}</td>
+          <td>${estimates}</td>
+        </tr>`;
+    })
+    .join("");
+
+  return `
+    <section class="card forecast-panel" aria-label="マージ時期の予想の比較">
+      <div class="card-title">予想マージ日（3 つの仮説の比較）</div>
+      <div class="card-value">${headline} <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">${headlineDays}</span></div>
+      <div class="card-subtext">範囲は主な予想の最小〜最大です。3 つの仮説は前提が異なり、どれが実態に近いかはまだ検証できていません。</div>
+      ${timeline ? `<div style="margin: 0.75rem 0;">${timeline}</div>` : ""}
+      <div style="overflow-x: auto;">
+        <table style="margin-bottom: 0;">
+          <thead>
+            <tr><th style="width: 30%;">仮説と前提</th><th>現在の進捗</th><th style="width: 30%;">予想日</th></tr>
+          </thead>
+          <tbody>${rows}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+/** 仮説② の根拠: 遭難の底の先頭の遅れの推移と直近の観測 */
+function renderForecastSection(samples: StaleFrontierSample[]): string {
   const recent = samples.slice(-5).reverse();
   const lagChart = renderLineChartSvg({
     title: "遭難の底の先頭の遅れの推移（日）",
@@ -352,35 +388,11 @@ function renderForecastSection(
     })
     .join("");
 
-  const observed = forecast.observedUnavailable
-    ? `<span>${escapeHtml(FORECAST_UNAVAILABLE_TEXT[forecast.observedUnavailable] ?? forecast.observedUnavailable)}</span>`
-    : `<span>先頭の進み: <strong>${forecast.observedSpeed}</strong> 日/日（直近 ${forecast.windowHours} 時間）</span>`;
-
   return `
-    <h2 class="section-title">🔮 マージ時期の予想（遭難の底の推移）</h2>
+    <h2 class="section-title">🔮 仮説② の根拠（遭難の底の推移）</h2>
     <p class="section-note">
-      遭難の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します。更新の古い順に処理される、という仮説に基づく参考値です。
+      仮説②「更新の古い順に処理される」の根拠です。遭難の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します（予想日は最上部の比較を参照）。
     </p>
-    <p class="section-note">
-      定常待ち時間モデルと観測速度モデルは「更新の古い順に処理される」、通算所要日数ベースは「作成順に近く消化される」という前提です。予想日が大きくずれるときは、どちらの前提が実態に近いかを見る手掛かりになります（上部の到着予測 ETA は実質待ち件数の変化から算出します）。
-    </p>
-    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">
-      <div class="card">
-        <div class="card-title">定常待ち時間モデル</div>
-        <div class="card-value">${formatEta(forecast, forecast.steadyEtaDays)}</div>
-        <div class="card-subtext">
-          <span>先頭の遅れ: <strong>${forecast.lagDays ?? "-"}</strong> 日</span>
-          <span>/ 基準 PR との更新差: <strong>${forecast.gapDays ?? "-"}</strong> 日</span>
-        </div>
-        <div class="card-subtext">先頭が実時間と同じ速度（1 日/日）で進むと仮定</div>
-      </div>
-      <div class="card">
-        <div class="card-title">観測速度モデル</div>
-        <div class="card-value">${formatEta(forecast, forecast.observedEtaDays)}</div>
-        <div class="card-subtext">${observed}</div>
-        <div class="card-subtext">履歴から先頭の進みを実測して予想</div>
-      </div>${renderLifetimeCard(lifetime)}
-    </div>
     <p class="section-note">
       先頭の遅れが横ばいなら先頭は進んでいません。実時間と同じ速度（1 日/日）で先頭が進むと、遅れは一定のままです。右下がりなら先頭が実時間より速く進んでいます。
     </p>
@@ -453,16 +465,20 @@ function generateHtml(
     ],
   });
 
-  const targetUpdatedMs = depths?.TargetPr?.UpdatedAt
-    ? Date.parse(depths.TargetPr.UpdatedAt)
-    : null;
-  const forecast = calculateStaleFrontierForecast(frontierSamples, targetUpdatedMs);
-  const lifetime = calculateLifetimeForecast(
-    Date.parse(depths?.TargetPr?.CreatedAt ?? ""),
-    progress?.TotalMedianDays,
-    progress?.TotalP75Days,
-    Date.parse(progress?.Timestamp ?? "") || (forecast.frontier?.observedMs ?? Number.NaN),
-  );
+  const comparison = calculateForecastComparison({
+    nowMs:
+      Date.parse(progress?.Timestamp ?? "") ||
+      historyRecords[historyRecords.length - 1]?.timestampMs ||
+      frontierSamples[frontierSamples.length - 1]?.timestampMs ||
+      Number.NaN,
+    targetCreatedMs: Date.parse(depths?.TargetPr?.CreatedAt ?? ""),
+    targetUpdatedMs: depths?.TargetPr?.UpdatedAt ? Date.parse(depths.TargetPr.UpdatedAt) : null,
+    activeAhead: currentActiveAhead,
+    totalMedianDays: progress?.TotalMedianDays,
+    totalP75Days: progress?.TotalP75Days,
+    history: historyRecords,
+    frontierSamples,
+  });
 
   // 直近 10 件の推移（差分付き、新しい順）
   const recentHistoryWithDeltas = metrics.historyWithDeltas.slice(-10).reverse();
@@ -668,6 +684,9 @@ function generateHtml(
     }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background-color: rgba(148, 163, 184, 0.05); }
+    .progress-bar { height: 6px; background-color: var(--code-bg); border-radius: 3px; margin-top: 0.4rem; overflow: hidden; }
+    .progress-bar > div { height: 100%; background-color: var(--success); border-radius: 3px; }
+    .forecast-panel { margin-bottom: 0.5rem; }
     .section-note { font-size: 0.875rem; color: var(--text-muted); margin: -0.5rem 0 1rem; }
     a { color: var(--primary); text-decoration: none; }
     a:hover { text-decoration: underline; }
@@ -692,7 +711,9 @@ function generateHtml(
       </div>
     </header>
 
-    <div class="grid">
+    ${renderForecastPanel(comparison)}
+
+    <div class="grid" style="margin-top: 1.5rem;">
       <div class="card">
         <div class="card-title">実質待ち件数 (更新順の順位)</div>
         <div class="card-value">${formatNumber(progress?.ActiveAhead)} <span style="font-size: 1rem; font-weight: normal;">件</span></div>
@@ -700,23 +721,6 @@ function generateHtml(
           <span>前回比: ${renderBadgeHtml(activeDeltaBadge)}</span>
           <span>/ 作成順の累積: ${formatNumber(progress?.TotalAhead)} 件</span>
         </div>
-      </div>
-
-      <div class="card">
-        <div class="card-title">到着予測 (ETA) &amp; 消化速度</div>
-        <div class="card-value">${
-          metrics.velocity.etaDays !== null
-            ? `約 ${metrics.velocity.etaDays} <span style="font-size: 1rem; font-weight: normal;">日後</span>`
-            : `<span style="font-size: 1.25rem; color: var(--text-muted);">-</span>`
-        }</div>
-        <div class="card-subtext">${
-          metrics.velocity.etaDateJst
-            ? `<span>予測到達日: <strong>${escapeHtml(metrics.velocity.etaDateJst)}</strong></span> <span>(速度: ${escapeHtml(metrics.velocity.velocityPerDay)} 件/日)</span>`
-            : metrics.velocity.velocityPerDay !== null && metrics.velocity.velocityPerDay <= 0
-              ? `<span>速度: ${escapeHtml(metrics.velocity.velocityPerDay)} 件/日 (キュー停滞または後退中)</span>`
-              : `<span>観測データ蓄積待ち (30分以上の推移が必要)</span>`
-        }</div>
-        <div class="card-subtext">実質待ち件数の変化から算出。前にいた PR が更新されて順位が入れ替わった分も含むため、実際の消化より速く出ることがあります</div>
       </div>
 
       <div class="card">
@@ -888,7 +892,7 @@ function generateHtml(
     </p>
     ${renderStaleBottomTable(depths)}
 
-    ${renderForecastSection(forecast, frontierSamples, lifetime)}
+    ${renderForecastSection(frontierSamples)}
 
     <h2 class="section-title">📈 直近の観測推移ログ (最新 10 件)</h2>
     ${

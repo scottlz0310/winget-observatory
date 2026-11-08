@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderLineChartSvg } from "../../src/domain/chart";
+import { renderLineChartSvg, renderTimelineSvg } from "../../src/domain/chart";
 
 const HOUR = 60 * 60 * 1000;
 const T0 = Date.parse("2026-11-07T00:00:00Z");
@@ -157,5 +157,79 @@ describe("Domain: renderLineChartSvg", () => {
     });
     expect(manySvg).not.toContain("<circle");
     expect(fewSvg?.match(/<circle /g)).toHaveLength(5);
+  });
+});
+
+describe("Domain: renderTimelineSvg", () => {
+  const DAY = 24 * HOUR;
+  const marker = (label: string, days: number) => ({
+    label,
+    dateMs: T0 + days * DAY,
+    color: "var(--primary)",
+  });
+  /** 印（circle）の cx を左から右の順に取り出す */
+  const circleXs = (svg: string): number[] =>
+    [...svg.matchAll(/<circle cx="([\d.]+)"/g)].map((m) => Number(m[1]));
+
+  test.each([
+    ["印が無い", { nowMs: T0, markers: [] }],
+    ["起点の時刻が不正", { nowMs: Number.NaN, markers: [marker("a", 5)] }],
+    ["印の時刻がすべて不正", { nowMs: T0, markers: [{ ...marker("a", 5), dateMs: Number.NaN }] }],
+  ])("描画できないときは null を返す: %s", (_name, options) => {
+    expect(renderTimelineSvg({ title: "t", ...options })).toBeNull();
+  });
+
+  test("予想日の順に左から右へ印を置き、今日と日付の目盛りを出す", () => {
+    const svg = renderTimelineSvg({
+      title: "予想日",
+      nowMs: T0,
+      // 渡す順は日付順でなくてもよい
+      markers: [marker("③ 11/30", 30), marker("① 11/21", 21), marker("② 11/24", 24)],
+    }) as string;
+    const xs = circleXs(svg);
+    expect(xs).toHaveLength(3);
+    expect(xs).toEqual([...xs].sort((a, b) => a - b));
+    expect(svg).toContain("今日");
+    // 印のラベルは日付順に並ぶ
+    expect(svg.indexOf("① 11/21")).toBeLessThan(svg.indexOf("② 11/24"));
+    expect(svg.indexOf("② 11/24")).toBeLessThan(svg.indexOf("③ 11/30"));
+  });
+
+  test("近い日付の印はラベルの段をずらして重ならないようにする", () => {
+    const svg = renderTimelineSvg({
+      title: "t",
+      nowMs: T0,
+      markers: [marker("a", 20), marker("b", 22), marker("c", 24)],
+    }) as string;
+    const ys = [
+      ...svg.matchAll(/<text x="[\d.]+" y="(\d+)" text-anchor="middle"[^>]*font-weight="600"/g),
+    ].map((m) => m[1]);
+    expect(ys).toHaveLength(3);
+    expect(ys[0]).not.toBe(ys[1]);
+    expect(ys[1]).not.toBe(ys[2]);
+  });
+
+  test("今日以前の印は今日の位置（軸の左端）に寄せ、範囲の帯を描ける", () => {
+    const svg = renderTimelineSvg({
+      title: "t",
+      nowMs: T0,
+      markers: [marker("超過", -3), marker("先", 10)],
+      band: { startMs: T0 + 2 * DAY, endMs: T0 + 8 * DAY },
+    }) as string;
+    const xs = circleXs(svg);
+    expect(xs[0]).toBe(28);
+    expect(xs[1]).toBeGreaterThan(xs[0]);
+    expect(svg).toContain("<rect");
+  });
+
+  test("ラベルは XML エスケープする", () => {
+    const svg = renderTimelineSvg({
+      title: "a<b",
+      nowMs: T0,
+      markers: [marker("<script>", 5)],
+    }) as string;
+    expect(svg).not.toContain("<script>");
+    expect(svg).toContain("&lt;script&gt;");
+    expect(svg).toContain("a&lt;b");
   });
 });
