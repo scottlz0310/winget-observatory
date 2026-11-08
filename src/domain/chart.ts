@@ -31,6 +31,7 @@ const Y_TICKS = 4;
 const X_TICKS = 3;
 /** 点（マーカー）を描くのは、系列の点数がこれ以下のときだけ（多いと線が潰れる） */
 const MAX_MARKED_POINTS = 60;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 1・2・5 × 10^n のうち、目標の刻み幅以上で最小のもの */
 function niceStep(rawStep: number): number {
@@ -143,4 +144,86 @@ export function renderLineChartSvg(options: LineChartOptions): string | null {
 
   const title = xmlEscape(options.title);
   return `<svg viewBox="0 0 ${WIDTH} ${HEIGHT}" role="img" aria-label="${title}" style="width: 100%; height: auto; display: block;"><title>${title}</title>${yGrid}${xLabels}${lines}${legend}</svg>`;
+}
+
+export interface TimelineMarker {
+  /** 印の上に出す文字（例: "① 12/03"） */
+  label: string;
+  /** 時刻（UTC ミリ秒） */
+  dateMs: number;
+  color: string;
+}
+
+export interface TimelineOptions {
+  title: string;
+  /** 起点（今日）の時刻（UTC ミリ秒） */
+  nowMs: number;
+  markers: TimelineMarker[];
+  /** 範囲として帯で示す期間（UTC ミリ秒） */
+  band?: { startMs: number; endMs: number };
+}
+
+const TL_WIDTH = 640;
+const TL_HEIGHT = 120;
+const TL_MARGIN = { left: 28, right: 28 };
+const TL_AXIS_Y = 68;
+/** 隣り合う印のラベルが重ならないよう、段をずらして並べる */
+const TL_LABEL_ROWS = [50, 30];
+
+/** JST の "MM/DD" */
+function formatMonthDay(timeMs: number): string {
+  const iso = new Date(timeMs + 9 * 60 * 60 * 1000).toISOString();
+  return `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
+}
+
+/**
+ * 今日から予想日までの時間軸に、印と範囲の帯を描く SVG を返す。
+ * 描ける印が無い、または時刻が有限でないときは null。今日以前の印は今日の位置に寄せる。
+ */
+export function renderTimelineSvg(options: TimelineOptions): string | null {
+  const markers = options.markers
+    .filter((m) => Number.isFinite(m.dateMs))
+    .sort((a, b) => a.dateMs - b.dateMs);
+  if (!Number.isFinite(options.nowMs) || markers.length === 0) return null;
+
+  const endMs = Math.max(...markers.map((m) => m.dateMs), options.nowMs + DAY_MS);
+  const span = endMs - options.nowMs;
+  const domainEnd = endMs + span * 0.05;
+  const plotW = TL_WIDTH - TL_MARGIN.left - TL_MARGIN.right;
+  const px = (ms: number): number =>
+    TL_MARGIN.left +
+    ((Math.min(Math.max(ms, options.nowMs), domainEnd) - options.nowMs) /
+      (domainEnd - options.nowMs)) *
+      plotW;
+  const num = (value: number): string => String(Math.round(value * 10) / 10);
+
+  const band = options.band
+    ? `<rect x="${num(px(options.band.startMs))}" y="${TL_AXIS_Y - 7}" width="${num(Math.max(px(options.band.endMs) - px(options.band.startMs), 2))}" height="14" rx="3" style="fill: var(--primary); opacity: 0.18" />`
+    : "";
+
+  const ticks = Array.from({ length: 4 }, (_, i) => {
+    const ms = options.nowMs + (domainEnd - options.nowMs) * (i / 3);
+    const x = px(ms);
+    const anchor = i === 0 ? "start" : i === 3 ? "end" : "middle";
+    const text = i === 0 ? "今日" : formatMonthDay(ms);
+    return (
+      `<line x1="${num(x)}" y1="${TL_AXIS_Y - 4}" x2="${num(x)}" y2="${TL_AXIS_Y + 4}" style="stroke: var(--text-muted)" />` +
+      `<text x="${num(x)}" y="${TL_AXIS_Y + 22}" text-anchor="${anchor}" style="fill: var(--text-muted)" font-size="11">${xmlEscape(text)}</text>`
+    );
+  }).join("");
+
+  const marks = markers
+    .map((m, i) => {
+      const x = num(px(m.dateMs));
+      const labelY = TL_LABEL_ROWS[i % TL_LABEL_ROWS.length];
+      return (
+        `<line x1="${x}" y1="${labelY + 4}" x2="${x}" y2="${TL_AXIS_Y}" style="stroke: ${xmlEscape(m.color)}" stroke-width="1" />` +
+        `<circle cx="${x}" cy="${TL_AXIS_Y}" r="6" style="fill: ${xmlEscape(m.color)}" />` +
+        `<text x="${x}" y="${labelY}" text-anchor="middle" style="fill: var(--text-color)" font-size="12" font-weight="600">${xmlEscape(m.label)}</text>`
+      );
+    })
+    .join("");
+
+  const title = xmlEscape(options.title);
+  return `<svg viewBox="0 0 ${TL_WIDTH} ${TL_HEIGHT}" role="img" aria-label="${title}" style="width: 100%; height: auto; display: block;"><title>${title}</title><line x1="${TL_MARGIN.left}" y1="${TL_AXIS_Y}" x2="${TL_WIDTH - TL_MARGIN.right}" y2="${TL_AXIS_Y}" stroke-width="2" style="stroke: var(--border-color)" />${band}${ticks}${marks}</svg>`;
 }
