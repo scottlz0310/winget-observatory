@@ -2,12 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { assertSafePath, DropboxClient, describeSecretShape } from "../scripts/lib/dropbox";
 
 describe("assertSafePath", () => {
-  test.each([
-    "/data/progress-history.csv",
-    "/data/sub/data.json",
-    "/winget-observatory/progress-history.csv",
-  ])(
-    "プレフィックス（/data/ および移行互換 /winget-observatory/）配下の安全なパス %s を受け入れる",
+  test.each(["/data/progress-history.csv", "/data/sub/data.json"])(
+    "プレフィックス（/data/）配下の安全なパス %s を受け入れる",
     (path) => {
       expect(() => assertSafePath(path)).not.toThrow();
     },
@@ -16,6 +12,7 @@ describe("assertSafePath", () => {
   test.each([
     "/other/path.csv",
     "/unknown/test.csv",
+    "/winget-observatory/progress-history.csv",
     "/data/../hack.csv",
     "/data/./hack.csv",
     "/winget-observatory/../hack.csv",

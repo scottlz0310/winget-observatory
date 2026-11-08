@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { downloadMetricsFiles, parseArgs } from "../scripts/sync-dropbox";
@@ -46,8 +46,8 @@ describe("sync-dropbox CLI credentials validation", () => {
   );
 });
 
-describe("downloadMetricsFiles with legacy fallback", () => {
-  test("新パス優先および旧パスへのフォールバック取得が正常に動作する", async () => {
+describe("downloadMetricsFiles", () => {
+  test("/data/ から取得し、存在しないファイルはスキップする（旧パスは参照しない）", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-sync-test-"));
     const requestedPaths: string[] = [];
 
@@ -58,11 +58,7 @@ describe("downloadMetricsFiles with legacy fallback", () => {
         if (path === "/data/progress-history.csv") {
           return "timestamp,pr\n2026-11-07,123\n";
         }
-        // 新パスにはなく、旧パス /winget-observatory/ にのみ存在するファイル
-        if (path === "/winget-observatory/depths-history.jsonl") {
-          return '{"time":"2026-11-07","pr":456}\n';
-        }
-        // どちらにも存在しないファイル
+        // /data/ に存在しないファイル（旧パスに同名があっても取得しない）
         return undefined;
       },
     };
@@ -81,21 +77,16 @@ describe("downloadMetricsFiles with legacy fallback", () => {
         "timestamp,pr\n2026-11-07,123\n",
       );
 
-      // depths-history.jsonl は新パスが undefined で旧パスからフォールバック取得
-      expect(summary.fallback).toEqual(["depths-history.jsonl"]);
-      expect(readFileSync(join(tempDir, "depths-history.jsonl"), "utf-8")).toBe(
-        '{"time":"2026-11-07","pr":456}\n',
-      );
+      // /data/ に無いファイルはスキップし、ローカルにも作らない
+      expect(summary.skipped).toEqual(["depths-history.jsonl", "latest-progress.json"]);
+      expect(existsSync(join(tempDir, "depths-history.jsonl"))).toBe(false);
 
-      // latest-progress.json は両方存在せずスキップ
-      expect(summary.skipped).toEqual(["latest-progress.json"]);
-
-      // 要求されたパス順序の確認
-      expect(requestedPaths).toContain("/data/progress-history.csv");
-      expect(requestedPaths).toContain("/data/depths-history.jsonl");
-      expect(requestedPaths).toContain("/winget-observatory/depths-history.jsonl");
-      expect(requestedPaths).toContain("/data/latest-progress.json");
-      expect(requestedPaths).toContain("/winget-observatory/latest-progress.json");
+      // 要求するのは /data/ 配下のみ
+      expect(requestedPaths).toEqual([
+        "/data/progress-history.csv",
+        "/data/depths-history.jsonl",
+        "/data/latest-progress.json",
+      ]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
