@@ -70,7 +70,8 @@ jobs:
             --target-pr "$WINGET_TARGET_PR" \
             --repo "$WINGET_REPOSITORY" \
             --log-path "data/progress-history.csv" \
-            --snapshot-path "data/latest-progress.json"
+            --snapshot-path "data/latest-progress.json" \
+            --cache-path "data/merged-samples.jsonl"
 
           # 2. キュー境界探索（JSONL追記 & 最新JSONスナップショット生成）
           echo "=== Running explore-depths CLI ==="

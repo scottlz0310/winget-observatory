@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/cli/progress.ts`, `src/domain/sample-cache.ts`, `src/models/sample-cache.ts`, `scripts/sync-dropbox.ts`, `.github/workflows/observe.yml`: マージ済み PR のサンプルキャッシュ（`merged-samples.jsonl`）を追加（Issue #18）。マージ済み PR の履歴は不変なので、計測結果を保存して再利用し、統計を期間内（30 日）のキャッシュ全件で計算する。1 回の実行で新規に取得するのは、新しくマージされた PR と未取得の古い PR（新しい順）を `--fetch-budget` 件まで。API の消費量を一定にしたまま、数日かけて統計の件数が 30 件から数百件へ増える。除外した PR も記録して再取得を避け、計測が途中で失敗しても取得済みの分は保存する。壊れたキャッシュは行番号つきで中断する。Dropbox の同期対象に追加し、ワークフローで `--cache-path` を指定
+- `src/api/github.ts`, `src/cli/progress.ts`: レート制限の残量（core と search）を取得する `getRateLimit` と、実行の最後（失敗時を含む）に残量を出す `[RateLimit]` ログを追加（Issue #18）。取得に失敗しても計測の成否には影響させず、警告として残す
 - `src/cli/record-forecast.ts`, `src/domain/forecast-history.ts`, `src/models/forecast-history.ts`, `scripts/sync-dropbox.ts`, `.github/workflows/observe.yml`: 観測のたびに 3 つの仮説の予想日を `forecast-history.jsonl` へ記録し（観測時刻が同じ予想は二重に記録しない）、基準 PR がマージされたら実際のマージ日を 1 回だけ記録する CLI を追加（Issue #18）。Dropbox の同期対象に加え、ワークフローでは計測結果の保存後に記録して再保存する（予想の記録が失敗しても計測は失われない）。マージ日が記録された基準 PR は、仮説・モデルごとに予想誤差（予想日 − 実際のマージ日）の平均・平均絶対・最後の予想を採点できる
 - `scripts/build-pages.ts`: ダッシュボードに「予想の答え合わせ」を追加（Issue #18）。結果が出るまでは記録件数を示し、結果が出たら基準 PR ごとに採点表を表示。予想履歴は公開データとしてコピーしフッターからリンクする。壊れた履歴は空の採点を出さず中断する
 - `src/domain/forecast-comparison.ts`: 表示と記録で入力が同じになるよう、スナップショットと履歴から比較の入力を組み立てる `buildForecastSource` を追加（Issue #18）
@@ -71,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/cli/progress.ts`: `--sample-size`（統計に使う件数、既定 30、上限 100）を `--fetch-budget`（1 回の実行で新規に取得する件数、既定 100、上限 100）へ置き換え、`--cache-path` を追加。キャッシュを使わない場合は、従来どおり取得した件数だけで統計を計算する（Issue #18）
+- `src/domain/benchmark.ts`, `scripts/build-pages.ts`: 採用サンプルが数百件になるため、スナップショットのサンプル一覧はマージが新しい順に 30 件までとし、統計・比較は全件で計算する。ダッシュボードの見出しは統計に使った総数、一覧は新しい順の一部であることを示す（Issue #18）
 - `scripts/build-pages.ts`: 予想パネルに統合したため、上部の「到着予測 (ETA) & 消化速度」カードと、マージ時期の予想の節の 3 枚のカード（定常待ち時間・観測速度・通算所要日数ベース）を削除。予想の節は「仮説② の根拠」（先頭の遅れのチャートと直近の観測）に改め、予想日は最上部のパネルに一本化（Issue #18）
 - `scripts/build-pages.ts`: ダッシュボードの表示を整理（Issue #18）。トリアージキュー構造の図は、前線と基準 PR の間を作成順の累積待ち（起票日の差つき）とし、更新順の順位は基準 PR のノードに示す（従来は更新順の順位が作成順の区間に書かれて食い違って見えた）。「健康的大底」のノードは消化前線と同じ PR になったため統合。追い越しの表から、起票日と実質同じ意味になる PR 番号の 2 行を削除（スナップショットと CLI ログには残す）。統計カードの P50 / P75 / 最大が途中で折り返さないよう調整。favicon を埋め込み 404 を解消
 - `scripts/build-pages.ts`: マージ時期の予想の節の「先頭の遅れ」の表を、推移チャートに代わるため直近 10 件から 5 件に縮小（Issue #18）

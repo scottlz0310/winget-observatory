@@ -37,7 +37,9 @@ bun run progress --target-pr 464302
 bun run progress --target-pr 464302 --log-path "data/progress-history.csv" --snapshot-path "data/latest-progress.json"
 ```
 
-**主なオプション:** `--target-pr` / `--repository`（別名 `--repo`）/ `--lookback-days`（既定 30）/ `--sample-size`（既定 30）/ `--fetch-limit`（既定 1000）/ `--log-path` / `--snapshot-path` / `--as-json`（スナップショットを標準出力へ）/ `--no-log`（履歴 CSV **と** スナップショットの保存を行わない）
+**主なオプション:** `--target-pr` / `--repository`（別名 `--repo`）/ `--lookback-days`（既定 30）/ `--fetch-budget`（既定 100、1 回の実行で新規に取得するマージ済み PR の上限）/ `--fetch-limit`（既定 1000）/ `--log-path` / `--snapshot-path` / `--cache-path`（マージ済みサンプルのキャッシュ。省略時はキャッシュを使わず、取得予算の件数だけで統計を計算）/ `--as-json`（スナップショットを標準出力へ）/ `--no-log`（履歴 CSV **と** スナップショットの保存を行わない）
+
+**マージ済みサンプルのキャッシュ:** マージ済み PR の履歴（起票・コミット・条件成立・マージの時刻）は後から変わらないため、`--cache-path`（定期実行では `data/merged-samples.jsonl`）に計測結果を保存して再利用します。統計は、期間内（`--lookback-days`、既定 30 日）にマージされたキャッシュ全件で計算し、1 回の実行で新たに取得するのは、新しくマージされた PR と、未取得の古い PR を新しい順に `--fetch-budget` 件までです。そのため、API の消費量（サンプル 1 件あたりコア API 約 3 件）は 1 回あたり一定のまま、数日かけて統計の件数が増えていきます。条件不成立で除外した PR も記録し、再取得しません。キャッシュが壊れているときは、統計を歪めないよう中断します。実行の最後に、レート制限の残量（`GITHUB_TOKEN` は 1 時間あたり 1,000 件・リポジトリ単位）を `[RateLimit]` として出力します。
 
 基準 PR が観測対象外（クローズ済み・Draft・必須ラベル不足・阻害ラベルあり）の場合は、履歴もスナップショットも記録せずに終了します（GitHub Actions 上では warning を出力）。
 

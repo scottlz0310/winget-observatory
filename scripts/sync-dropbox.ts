@@ -18,6 +18,7 @@ const TARGET_FILES = [
   "depths-history.jsonl",
   "latest-depths.json",
   "forecast-history.jsonl",
+  "merged-samples.jsonl",
 ];
 
 export function parseArgs(args: string[], cwd: string = process.cwd()): SyncOptions {
