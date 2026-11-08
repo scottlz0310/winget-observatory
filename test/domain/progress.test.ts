@@ -246,6 +246,38 @@ describe("Domain: CSV and Snapshot helpers", () => {
     expect(serialized).toContain('"TotalLifetimeDays"');
   });
 
+  test("離脱の累積件数（MergedOlder / ClosedOlder）の列を往復でき、無い旧い行は空欄のまま温存する", () => {
+    const header = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"`;
+    const withNewColumns = `${header},"MergedOlder","ClosedOlder"`;
+    const oldRow = `"2026-11-07 10:00:00","464302","464100","2026-11-06 12:00","10","50","5","3.5","3.5","2.8","1","updated"`;
+    const newRow = `${oldRow},"192","27"`;
+
+    // 列が無い旧いファイル → 空欄で読み、書き出すと新しい列が付く
+    const [legacy] = parseCsvRows(`${header}\n${oldRow}\n`);
+    expect(legacy.MergedOlder).toBe("");
+    expect(legacy.ClosedOlder).toBe("");
+    const serialized = serializeCsvRows([legacy]);
+    expect(serialized.split("\n")[0]).toBe(withNewColumns);
+    expect(serialized.split("\n")[1]).toEndWith(',"updated","",""');
+
+    // 新しい列のあるファイル → 値を保つ
+    const [row] = parseCsvRows(`${withNewColumns}\n${newRow}\n`);
+    expect(row.MergedOlder).toBe("192");
+    expect(row.ClosedOlder).toBe("27");
+    expect(serializeCsvRows([row]).split("\n")[1]).toEndWith(',"updated","192","27"');
+  });
+
+  test("旧い行と新しい行が混在するファイルも、そのまま書き戻せる", () => {
+    const rows = parseCsvRows(
+      `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis","MergedOlder","ClosedOlder"\n"a","1","1","x","1","1","1","1","1","1","1","updated","",""\n"b","1","1","x","1","1","1","1","1","1","1","updated","5","6"\n`,
+    );
+    expect(rows.map((r) => [r.MergedOlder, r.ClosedOlder])).toEqual([
+      ["", ""],
+      ["5", "6"],
+    ]);
+    expect(parseCsvRows(serializeCsvRows(rows))).toEqual(rows);
+  });
+
   test("旧 CSV レコードが正しく新スキーマへマイグレーションされる", () => {
     const oldRow = {
       Timestamp: "2026-11-05 10:00:00",

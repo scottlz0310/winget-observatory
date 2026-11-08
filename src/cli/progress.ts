@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
 import { describeGuidance, describeOvertake } from "../domain/benchmark";
+import { buildExitCountQueries } from "../domain/exit-breakdown";
 import {
   buildHealthyQueryParts,
   calculateProgressStats,
@@ -487,6 +488,21 @@ export async function runProgressCli(
   );
   log("----------------------------------------");
 
+  // 待ち行列からの離脱（基準 PR の起票以降にマージ・クローズされた、起票が基準 PR より前の PR）の累積件数。
+  // 実質待ちの減少の内訳（マージ・クローズ・その他）を、観測の間の差から求めるために履歴へ残す
+  const exitQueries = buildExitCountQueries(
+    options.repository,
+    created.toISOString().replace(/\.\d{3}Z$/, "Z"),
+    REQUIRED_LABELS,
+  );
+  const mergedOlder = (await client.searchIssuesDetailed(exitQueries.merged, "updated", "desc", 1))
+    .totalCount;
+  const closedOlder = (await client.searchIssuesDetailed(exitQueries.closed, "updated", "desc", 1))
+    .totalCount;
+  log(
+    `離脱の累積         : 基準 PR の起票以降に、起票が前の PR がマージ ${mergedOlder} 件・未マージでクローズ ${closedOlder} 件`,
+  );
+
   const stats = calculateProgressStats(samples, skipped);
 
   const frontCreatedVal = formatDateTimeWithDay(front.createdAt);
@@ -538,6 +554,8 @@ export async function runProgressCli(
       TurnLatencyDays: Number(turnLatencyDays.toFixed(2)),
       WaitDays: Number(waitDays.toFixed(2)),
       CommitCount: commitCount,
+      MergedOlder: mergedOlder,
+      ClosedOlder: closedOlder,
     };
 
     const logDir = dirname(historyCsvPath);

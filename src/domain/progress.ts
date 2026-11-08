@@ -358,6 +358,8 @@ function toHistoryRow(raw: Record<string, string>): ProgressHistoryRow {
     TurnLatencyDays: raw.TurnLatencyDays ?? "",
     WaitDays: raw.WaitDays ?? "",
     CommitCount: raw.CommitCount ?? "",
+    MergedOlder: raw.MergedOlder ?? "",
+    ClosedOlder: raw.ClosedOlder ?? "",
   };
 }
 
@@ -378,12 +380,14 @@ export function serializeCsvRows(rows: ProgressHistoryRow[]): string {
     "WaitDays",
     "CommitCount",
     "QueueBasis",
+    "MergedOlder",
+    "ClosedOlder",
   ];
 
   const headerLine = headers.map((h) => `"${h}"`).join(",");
   const lines = [headerLine];
   for (const row of rows) {
-    const line = headers.map((h) => `"${row[h]}"`).join(",");
+    const line = headers.map((h) => `"${row[h] ?? ""}"`).join(",");
     lines.push(line);
   }
 

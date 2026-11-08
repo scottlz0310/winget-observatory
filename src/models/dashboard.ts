@@ -10,6 +10,10 @@ export interface HistoryRecord {
   totalAhead: number;
   behind: number;
   waitDays: number;
+  /** 基準 PR の起票以降にマージされた、起票が基準 PR より前の PR の累積件数。記録が無い旧い行は null / 省略 */
+  mergedOlder?: number | null;
+  /** 同じ条件で、未マージのままクローズされた PR の累積件数 */
+  closedOlder?: number | null;
 }
 
 export interface DeltaMetrics {

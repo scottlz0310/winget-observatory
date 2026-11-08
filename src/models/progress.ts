@@ -96,6 +96,13 @@ export interface ProgressHistoryRow {
   TurnLatencyDays: number | string;
   WaitDays: number | string;
   CommitCount: number | string;
+  /**
+   * 基準 PR の起票以降にマージされた、起票が基準 PR より前の PR（必須ラベル付き）の累積件数。
+   * 待ち行列からの離脱の内訳に使う。旧スキーマの行では空文字（省略可）
+   */
+  MergedOlder?: number | string;
+  /** 同じ条件で、未マージのままクローズされた PR の累積件数。旧スキーマの行では空文字（省略可） */
+  ClosedOlder?: number | string;
 }
 
 /** 基準 PR との作成順の関係（番号は作成順に単調増加する） */
