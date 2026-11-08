@@ -10,11 +10,8 @@ const DOWNLOAD_URL = "https://content.dropboxapi.com/2/files/download";
 /** 読み書きを許可する、アプリフォルダー内のプレフィックス */
 export const DROPBOX_ROOT = "/data/";
 
-/** 移行互換用に読み取りを許可する旧プレフィックス */
-export const LEGACY_DROPBOX_ROOT = "/winget-observatory/";
-
 /** プレフィックス配下の英数字・_・.・-・/ だけの安全なパス（連続する / や . / .. を拒否） */
-const SAFE_PATH = /^\/(?:data|winget-observatory)\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/;
+const SAFE_PATH = /^\/data\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/;
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -55,7 +52,7 @@ export function assertSafePath(path: string): void {
   const dotSegment = segments.some((s) => s === "." || s === "..");
   if (!SAFE_PATH.test(path) || dotSegment) {
     throw new Error(
-      `Dropbox の読み書き先は ${DROPBOX_ROOT} または ${LEGACY_DROPBOX_ROOT} 配下の英数字と . _ - / だけのパスにしてください: ${path}`,
+      `Dropbox の読み書き先は ${DROPBOX_ROOT} 配下の英数字と . _ - / だけのパスにしてください: ${path}`,
     );
   }
 }
