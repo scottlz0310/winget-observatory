@@ -70,9 +70,8 @@ describe("Domain: dashboard calculations", () => {
       expect(ms).toBe(Date.parse("2026-11-06T09:22:14Z"));
     });
 
-    test("不正文字列や空文字列で NaN を返す", () => {
-      expect(Number.isNaN(parseTimestampToMs(""))).toBeTrue();
-      expect(Number.isNaN(parseTimestampToMs("invalid-date"))).toBeTrue();
+    test.each(["", "invalid-date"])("不正文字列 %j で NaN を返す", (input) => {
+      expect(Number.isNaN(parseTimestampToMs(input))).toBeTrue();
     });
 
     test("formatJstDate は UTC ミリ秒を JST の YYYY-MM-DD に変換する", () => {
@@ -301,9 +300,11 @@ describe("Domain: dashboard calculations", () => {
   });
 
   describe("calculateCalendarGap", () => {
-    test("欠落時は null を返す", () => {
-      expect(calculateCalendarGap(null, null).gapDays).toBeNull();
-      expect(calculateCalendarGap("2026-09-23 12:00", null).gapDays).toBeNull();
+    test.each([
+      [null, null],
+      ["2026-09-23 12:00", null],
+    ])("欠落時 (%p, %p) は null を返す", (front, target) => {
+      expect(calculateCalendarGap(front, target).gapDays).toBeNull();
     });
 
     test("前線と自 PR の起票日時の日数差を正しく計算する", () => {
@@ -314,48 +315,28 @@ describe("Domain: dashboard calculations", () => {
   });
 
   describe("formatDeltaBadge", () => {
-    describe("待ち件数用 (higherIsBetter = false: 減少が改善)", () => {
-      test("負数（前線進行）は delta-progress を返す", () => {
-        const b = formatDeltaBadge(-8);
-        expect(b.text).toBe("-8");
-        expect(b.className).toBe("delta-progress");
-        expect(b.label).toContain("8 件進行");
-      });
+    const countOptions = undefined; // 待ち件数用 (higherIsBetter = false: 減少が改善)
+    const prNumberOptions = { higherIsBetter: true, unit: "" }; // PR番号用 (増加が進行、減少が後退)
 
-      test("正数（後退・巻き戻り）は delta-rewind を返す", () => {
-        const b = formatDeltaBadge(12);
-        expect(b.text).toBe("+12");
-        expect(b.className).toBe("delta-rewind");
-        expect(b.label).toContain("+12 件増加");
-      });
-
-      test("ゼロは delta-neutral を返す", () => {
-        const b = formatDeltaBadge(0);
-        expect(b.text).toBe("±0");
-        expect(b.className).toBe("delta-neutral");
-      });
-
-      test("null はハイフンを返す", () => {
-        const b = formatDeltaBadge(null);
-        expect(b.text).toBe("-");
-        expect(b.className).toBe("delta-neutral");
-      });
-    });
-
-    describe("PR番号用 (higherIsBetter = true: 増加が進行、減少が後退)", () => {
-      test("正数（前線番号の増加）は delta-progress を返す", () => {
-        const b = formatDeltaBadge(50, { higherIsBetter: true, unit: "" });
-        expect(b.text).toBe("+50");
-        expect(b.className).toBe("delta-progress");
-        expect(b.label).toContain("+50進行");
-      });
-
-      test("負数（前線番号の巻き戻り）は delta-rewind を返す", () => {
-        const b = formatDeltaBadge(-8546, { higherIsBetter: true, unit: "" });
-        expect(b.text).toBe("-8546");
-        expect(b.className).toBe("delta-rewind");
-        expect(b.label).toContain("-8546後退");
-      });
+    test.each([
+      ["待ち件数: 負数（前線進行）", -8, countOptions, "-8", "delta-progress", "8 件進行"],
+      ["待ち件数: 正数（後退・巻き戻り）", 12, countOptions, "+12", "delta-rewind", "+12 件増加"],
+      ["待ち件数: ゼロ", 0, countOptions, "±0", "delta-neutral", undefined],
+      ["待ち件数: null", null, countOptions, "-", "delta-neutral", undefined],
+      ["PR番号: 正数（前線番号の増加）", 50, prNumberOptions, "+50", "delta-progress", "+50進行"],
+      [
+        "PR番号: 負数（前線番号の巻き戻り）",
+        -8546,
+        prNumberOptions,
+        "-8546",
+        "delta-rewind",
+        "-8546後退",
+      ],
+    ])("%s", (_name, value, options, text, className, labelPart) => {
+      const b = formatDeltaBadge(value, options);
+      expect(b.text).toBe(text);
+      expect(b.className).toBe(className);
+      if (labelPart !== undefined) expect(b.label).toContain(labelPart);
     });
   });
 

@@ -22,45 +22,41 @@ describe("Domain: progress label evaluation", () => {
     expect(isEligibleLabels(labels)).toBeTrue();
   });
 
-  test("必須ラベルが1つでも欠けていれば eligible でない", () => {
-    expect(isEligibleLabels(["New-Package", "Azure-Pipeline-Passed"])).toBeFalse();
-    expect(isEligibleLabels(["Azure-Pipeline-Passed", "Validation-Completed"])).toBeFalse();
+  test.each([
+    [["New-Package", "Azure-Pipeline-Passed"]],
+    [["Azure-Pipeline-Passed", "Validation-Completed"]],
+  ])("必須ラベルが欠けていれば eligible でない: %j", (labels) => {
+    expect(isEligibleLabels(labels)).toBeFalse();
   });
 
-  test("阻害ラベルが含まれていれば eligible でない", () => {
-    for (const blocked of BLOCKED_LABELS) {
-      expect(isBlockedLabel(blocked)).toBeTrue();
-      expect(
-        isEligibleLabels(["New-Package", "Azure-Pipeline-Passed", "Validation-Completed", blocked]),
-      ).toBeFalse();
-    }
+  test.each(BLOCKED_LABELS)("阻害ラベル %s が含まれていれば eligible でない", (blocked) => {
+    expect(isBlockedLabel(blocked)).toBeTrue();
+    expect(
+      isEligibleLabels(["New-Package", "Azure-Pipeline-Passed", "Validation-Completed", blocked]),
+    ).toBeFalse();
   });
 
-  test("調査中ラベルが含まれていれば eligible でない", () => {
-    for (const inv of INVESTIGATION_LABELS) {
-      expect(isBlockedLabel(inv)).toBeTrue();
-      expect(
-        isEligibleLabels(["New-Package", "Azure-Pipeline-Passed", "Validation-Completed", inv]),
-      ).toBeFalse();
-    }
+  test.each(INVESTIGATION_LABELS)("調査中ラベル %s が含まれていれば eligible でない", (inv) => {
+    expect(isBlockedLabel(inv)).toBeTrue();
+    expect(
+      isEligibleLabels(["New-Package", "Azure-Pipeline-Passed", "Validation-Completed", inv]),
+    ).toBeFalse();
   });
 
-  test("パターン除外ラベル（Error-*, *-Error, Policy-Test-*, Validation-Submission-*）を正しく除外する", () => {
-    const testCases = [
-      "Error-Build",
-      "Installer-Error",
-      "Policy-Test-Sandbox",
-      "Validation-Submission-Expired",
-      "Validation-Submission-Failed",
-      "Validation-Submission-Mismatch",
-    ];
-    for (const name of testCases) {
-      expect(isBlockedLabel(name)).toBeTrue();
-    }
+  // パターン除外ラベル: Error-*, *-Error, Policy-Test-*, Validation-Submission-*
+  test.each([
+    "Error-Build",
+    "Installer-Error",
+    "Policy-Test-Sandbox",
+    "Validation-Submission-Expired",
+    "Validation-Submission-Failed",
+    "Validation-Submission-Mismatch",
+  ])("パターン除外ラベル %s を除外する", (name) => {
+    expect(isBlockedLabel(name)).toBeTrue();
+  });
 
-    // Validation-Completed などの正常ラベルは除外されない
-    expect(isBlockedLabel("Validation-Completed")).toBeFalse();
-    expect(isBlockedLabel("New-Package")).toBeFalse();
+  test.each(["Validation-Completed", "New-Package"])("正常ラベル %s は除外されない", (name) => {
+    expect(isBlockedLabel(name)).toBeFalse();
   });
 });
 
@@ -69,38 +65,40 @@ describe("Domain: getPercentile", () => {
     expect(() => getPercentile([], 0.5)).toThrow("集計対象がありません。");
   });
 
-  test("範囲外のパーセンタイルは RangeError を投げる", () => {
-    expect(() => getPercentile([1, 2], -0.1)).toThrow(RangeError);
-    expect(() => getPercentile([1, 2], 1.1)).toThrow(RangeError);
+  test.each([-0.1, 1.1])("範囲外のパーセンタイル %p は RangeError を投げる", (p) => {
+    expect(() => getPercentile([1, 2], p)).toThrow(RangeError);
   });
 
-  test("1要素の場合はその要素を返す", () => {
-    expect(getPercentile([42], 0.5)).toBe(42);
-    expect(getPercentile([42], 0)).toBe(42);
-    expect(getPercentile([42], 1)).toBe(42);
+  test.each([0, 0.5, 1])("1要素の場合 (p=%p) はその要素を返す", (p) => {
+    expect(getPercentile([42], p)).toBe(42);
   });
 
-  test("複数要素のパーセンタイルを線形補間で算出する", () => {
-    const values = [10, 20, 30, 40, 50];
-    expect(getPercentile(values, 0)).toBe(10);
-    expect(getPercentile(values, 0.5)).toBe(30);
-    expect(getPercentile(values, 0.75)).toBe(40);
-    expect(getPercentile(values, 1)).toBe(50);
+  test.each([
+    [0, 10],
+    [0.5, 30],
+    [0.75, 40],
+    [1, 50],
+  ])("複数要素のパーセンタイル p=%p を線形補間で %p と算出する", (p, expected) => {
+    expect(getPercentile([10, 20, 30, 40, 50], p)).toBe(expected);
   });
 });
 
 describe("Domain: formatting utilities", () => {
-  test("formatHumanDays は丸めと日・時間表記を正しく出力する", () => {
-    expect(formatHumanDays(1.5)).toBe("1.5日 (1日 12時間)");
-    expect(formatHumanDays(0.5)).toBe("0.5日 (12時間)");
-    expect(formatHumanDays(3.0)).toBe("3.0日 (3日 0時間)");
+  test.each([
+    [1.5, "1.5日 (1日 12時間)"],
+    [0.5, "0.5日 (12時間)"],
+    [3.0, "3.0日 (3日 0時間)"],
+  ])("formatHumanDays(%p) は丸めと日・時間表記で %s を出力する", (days, expected) => {
+    expect(formatHumanDays(days)).toBe(expected);
   });
 
-  test("formatDelta はプラス・マイナス・ゼロを正しく出力する", () => {
-    expect(formatDelta(10, 8)).toBe("[前回比 +2 件]");
-    expect(formatDelta(5, 7)).toBe("[前回比 -2 件]");
-    expect(formatDelta(5, 5)).toBe("[前回比 ±0 件]");
-    expect(formatDelta(5, 3, "日")).toBe("[前回比 +2 日]");
+  test.each([
+    [10, 8, undefined, "[前回比 +2 件]"],
+    [5, 7, undefined, "[前回比 -2 件]"],
+    [5, 5, undefined, "[前回比 ±0 件]"],
+    [5, 3, "日", "[前回比 +2 日]"],
+  ])("formatDelta(%p, %p, %p) は %s を出力する", (current, previous, unit, expected) => {
+    expect(formatDelta(current, previous, unit)).toBe(expected);
   });
 
   test.each([

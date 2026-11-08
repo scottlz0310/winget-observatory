@@ -7,45 +7,43 @@ import { downloadMetricsFiles, parseArgs } from "../scripts/sync-dropbox";
 describe("sync-dropbox CLI credentials validation", () => {
   const scriptPath = resolve(__dirname, "../scripts/sync-dropbox.ts");
 
-  test("資格情報が未設定で --allow-skip がない場合は非ゼロ終了 (exit 1) すること", async () => {
-    const proc = Bun.spawn(["bun", "run", scriptPath, "--direction", "upload"], {
-      env: {
-        ...process.env,
-        DROPBOX_APP_KEY: "",
-        DROPBOX_APP_SECRET: "",
-        DROPBOX_REFRESH_TOKEN: "",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+  test.each([
+    {
+      name: "--allow-skip がない場合は非ゼロ終了 (exit 1) する",
+      extraArgs: [] as string[],
+      expectedExitCode: 1,
+      stream: "stderr" as const,
+      expectedMessage:
+        "DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN の環境変数を設定してください",
+    },
+    {
+      name: "--allow-skip が指定された場合は正常終了 (exit 0) する",
+      extraArgs: ["--allow-skip"],
+      expectedExitCode: 0,
+      stream: "stdout" as const,
+      expectedMessage: "同期をスキップします",
+    },
+  ])(
+    "資格情報が未設定で $name",
+    async ({ extraArgs, expectedExitCode, stream, expectedMessage }) => {
+      const proc = Bun.spawn(["bun", "run", scriptPath, "--direction", "upload", ...extraArgs], {
+        env: {
+          ...process.env,
+          DROPBOX_APP_KEY: "",
+          DROPBOX_APP_SECRET: "",
+          DROPBOX_REFRESH_TOKEN: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
 
-    const exitCode = await proc.exited;
-    const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+      const output = await new Response(proc[stream]).text();
 
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain(
-      "DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN の環境変数を設定してください",
-    );
-  });
-
-  test("資格情報が未設定でも --allow-skip が指定された場合は正常終了 (exit 0) すること", async () => {
-    const proc = Bun.spawn(["bun", "run", scriptPath, "--direction", "upload", "--allow-skip"], {
-      env: {
-        ...process.env,
-        DROPBOX_APP_KEY: "",
-        DROPBOX_APP_SECRET: "",
-        DROPBOX_REFRESH_TOKEN: "",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const exitCode = await proc.exited;
-    const stdout = await new Response(proc.stdout).text();
-
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("同期をスキップします");
-  });
+      expect(exitCode).toBe(expectedExitCode);
+      expect(output).toContain(expectedMessage);
+    },
+  );
 });
 
 describe("downloadMetricsFiles with legacy fallback", () => {

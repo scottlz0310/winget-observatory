@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 同じ形で入力だけが異なるテストを `test.each` に集約（Issue #18）。対象は `test/domain/progress.test.ts`（ラベル判定・パーセンタイル・書式）、`test/domain/dashboard.test.ts`（タイムスタンプ解釈・カレンダー距離・差分バッジ）、`test/redact.test.ts`、`test/dropbox.test.ts`、`test/sync-dropbox.test.ts`（資格情報検証）、`test/cli/progress.test.ts`・`test/cli/explore-depths.test.ts`（引数の拒否）。ケースごとに名前が付き、失敗時に原因の入力が分かる。アサーション数は変わらない（625）。1 件のシナリオを検証するテストは対象外
 - `src/cli/args.ts`: 各 CLI に複製されていた引数検証（値の取得・後続フラグの誤消費防止・整数範囲・基準 PR の環境変数解決）と、既定の基準 PR・リポジトリの定数を共通化。`progress` / `explore-depths` / `build-pages` に散在していたハードコードを置換し、`test/cli/args.test.ts` を追加（Issue #18）
 - `scripts/build-pages.ts`: `models/` の型（`ProgressSnapshot` / `DepthsSnapshot` / `ProgressHistoryRow`）と `domain` の `parseCsvRows` を再利用するよう変更し、独自の型定義・CSV パーサ・数値整形の重複を削減。数値が空欄の項目を `0` ではなく `-` と表示（Issue #18）
 - `src/cli/progress.ts`, `src/domain/progress.ts`, `src/models/progress.ts`, `src/api/github.ts`: 待ち行列の指標を再設計（Issue #18）。消化前線を「直近マージ PR」から「条件を満たす最古の未マージ PR」に変更して単調に進むようにし、実質待ちを「更新順で自 PR より前に並ぶ健康な PR の数」（指摘なく順番待ちをしている PR の待ち順位）に変更。履歴 CSV に算出基準を示す `QueueBasis` 列を追加し、旧定義の行（空欄）との前回比は出力しない

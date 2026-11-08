@@ -74,23 +74,19 @@ describe("CLI: progress parseArgs", () => {
     expect(opts.asJson).toBeTrue();
   });
 
-  test("不正な数値・範囲外の引数を拒否する", () => {
-    expect(() => parseArgs(["--target-pr", "abc"])).toThrow("無効な値");
-    expect(() => parseArgs(["--target-pr", "-5"])).toThrow();
-    expect(() => parseArgs(["--lookback-days", "0"])).toThrow("無効な値");
-    expect(() => parseArgs(["--lookback-days", "400"])).toThrow("無効な値");
-    expect(() => parseArgs(["--sample-size", "150"])).toThrow("無効な値");
-    expect(() => parseArgs(["--fetch-limit", "0"])).toThrow("無効な値");
-  });
-
-  test("引数値の欠落や後続フラグの誤消費を拒否する", () => {
-    expect(() => parseArgs(["--target-pr"])).toThrow("必要です");
-    expect(() => parseArgs(["--target-pr", "--no-log"])).toThrow("必要です");
-    expect(() => parseArgs(["--log-path", "--no-log"])).toThrow("必要です");
-  });
-
-  test("未知の引数を拒否する", () => {
-    expect(() => parseArgs(["--unknown-option"])).toThrow("未知のオプション");
+  test.each([
+    [["--target-pr", "abc"], "無効な値"],
+    [["--target-pr", "-5"], undefined],
+    [["--lookback-days", "0"], "無効な値"],
+    [["--lookback-days", "400"], "無効な値"],
+    [["--sample-size", "150"], "無効な値"],
+    [["--fetch-limit", "0"], "無効な値"],
+    [["--target-pr"], "必要です"],
+    [["--target-pr", "--no-log"], "必要です"],
+    [["--log-path", "--no-log"], "必要です"],
+    [["--unknown-option"], "未知のオプション"],
+  ])("不正な引数 %j を拒否する", (args, message) => {
+    expect(() => parseArgs(args)).toThrow(message);
   });
 });
 
