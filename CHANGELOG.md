@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/domain/chart.ts`, `scripts/build-pages.ts`: ダッシュボードに推移チャート（インライン SVG の折れ線）を追加（Issue #18）。「待ち件数の推移」（実質待ち・累積待ち）と、マージ時期の予想の節の「先頭の遅れの推移」。横軸は JST、縦軸の目盛りは 1・2・5 刻みのきりの良い値。観測が 2 件に満たないときは理由を表示。ライト/ダークは CSS 変数で追従し、外部ライブラリは使わない
 - `src/domain/forecast.ts`, `src/models/forecast.ts`, `scripts/build-pages.ts`: マージ時期の予想に、通算所要日数ベース（作成順の消化）の第 3 の予想を追加（Issue #18）。基準 PR の起票日に、直近のマージ実績の通算所要日数の中央値・75%点を足して予想日を出す。更新の入れ替わりの影響を受けないため、他の 2 つ（更新の古い順に処理される前提）とのずれから、どちらの前提が実態に近いかを見る手掛かりになる。統計が無い旧スナップショットでは算出不能と表示
 - `scripts/build-pages.ts`: ダッシュボードに、移植時に失われていた指標を復元（Issue #18）。日数統計カードに最大値と基準 PR の現在値・位置づけ（中央値までの残り、サンプルの何 % より待っているか）、採用数・除外数とサンプル不足の注記、追い越しの比較（判定付き）、直前のライバル PR（更新からの経過付き）、比較に使ったサンプル一覧（折りたたみ）、真の大底の行を追加。特急レーンは 5 件まで表示。旧スナップショット（新フィールドなし）でも描画できる
 - `src/domain/benchmark.ts`: 基準 PR をマージ済みサンプルと見比べる純粋関数を追加（Issue #18）。追い越しの判定（自分より後に作成・成立してマージ済みの件数）、中央値・75%点までの残り日数と「サンプルの何 % より待っているか」の位置づけ、およびその説明文
@@ -66,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `scripts/build-pages.ts`: マージ時期の予想の節の「先頭の遅れ」の表を、推移チャートに代わるため直近 10 件から 5 件に縮小（Issue #18）
 - `scripts/build-pages.ts`: ダッシュボード上部の到着予測（ETA）に、実質待ち件数（更新順の順位）の変化から算出するため、前にいた PR の更新による順位の入れ替わりを含み、実際の消化より速く出ることがある旨の注記を追加。マージ時期の予想の節に、3 つの予想の前提の違いを説明する注記を追加（Issue #18）
 - 同じ形で入力だけが異なるテストを `test.each` に集約（Issue #18）。対象は `test/domain/progress.test.ts`（ラベル判定・パーセンタイル・書式）、`test/domain/dashboard.test.ts`（タイムスタンプ解釈・カレンダー距離・差分バッジ）、`test/redact.test.ts`、`test/dropbox.test.ts`、`test/sync-dropbox.test.ts`（資格情報検証）、`test/cli/progress.test.ts`・`test/cli/explore-depths.test.ts`（引数の拒否）。ケースごとに名前が付き、失敗時に原因の入力が分かる。アサーション数は変わらない（625）。1 件のシナリオを検証するテストは対象外
 - `src/cli/args.ts`: 各 CLI に複製されていた引数検証（値の取得・後続フラグの誤消費防止・整数範囲・基準 PR の環境変数解決）と、既定の基準 PR・リポジトリの定数を共通化。`progress` / `explore-depths` / `build-pages` に散在していたハードコードを置換し、`test/cli/args.test.ts` を追加（Issue #18）
