@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `bunfig.toml`: `minimumReleaseAge = 259200`（3 日）を追加。公開から 3 日未満の版を新規に解決しない。lock file maintenance は Renovate の minimumReleaseAge を迂回するため、無人の自動マージに対する防御としてパッケージマネージャ側で止める
+
 - `src/domain/exit-breakdown.ts`, `src/models/exit-breakdown.ts`, `src/cli/progress.ts`, `src/domain/progress.ts`, `scripts/build-pages.ts`: 待ち行列からの離脱の内訳を追加（Issue #18）。実質待ち（更新順の順位）の減少を、マージ・未マージのクローズ・健康条件の変化など（推定）・更新による順位の入れ替わり（推定）に分解し、1 日あたりの件数と、減少のうち実際のマージが占める割合をダッシュボードに表示する。観測のたびに、基準 PR の起票以降にマージ・クローズされた、起票が基準 PR より前で必須ラベルが付いた PR の累積件数を検索で数え、履歴 CSV の `MergedOlder` / `ClosedOlder` 列へ記録する（旧い行は空欄のまま温存し、記録のある観測が 2 回以上たまるまで内訳は出さない）。観測の間隔が 6 時間未満、または累積件数が減っているなど記録が矛盾しているときは、内訳を出さず理由を示す。件数の取得に失敗したら、握りつぶさず中断する
 - `src/cli/progress.ts`, `src/domain/sample-cache.ts`, `src/models/sample-cache.ts`, `scripts/sync-dropbox.ts`, `.github/workflows/observe.yml`: マージ済み PR のサンプルキャッシュ（`merged-samples.jsonl`）を追加（Issue #18）。マージ済み PR の履歴は不変なので、計測結果を保存して再利用し、統計を期間内（30 日）のキャッシュ全件で計算する。1 回の実行で新規に取得するのは、新しくマージされた PR と未取得の古い PR（新しい順）を `--fetch-budget` 件まで。API の消費量を一定にしたまま、数日かけて統計の件数が 30 件から数百件へ増える。除外した PR も記録して再取得を避け、計測が途中で失敗しても取得済みの分は保存する。壊れたキャッシュは行番号つきで中断する。Dropbox の同期対象に追加し、ワークフローで `--cache-path` を指定
 - `src/api/github.ts`, `src/cli/progress.ts`: レート制限の残量（core と search）を取得する `getRateLimit` と、実行の最後（失敗時を含む）に残量を出す `[RateLimit]` ログを追加（Issue #18）。取得に失敗しても計測の成否には影響させず、警告として残す
