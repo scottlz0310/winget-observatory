@@ -21,6 +21,8 @@ export interface ProgressPrDetail {
   closedAt: string | null;
   labels: string[];
   commits: ProgressCommitSummary[];
+  author?: string;
+  authorAssociation?: string;
 }
 
 export interface ProgressTimelineEvent {
@@ -66,6 +68,8 @@ export interface MergedCandidateSample {
   totalDays: number;
   turnDays: number;
   days: number;
+  author?: string;
+  isFirstTimer?: boolean;
 }
 
 export interface ProgressPercentileMetrics {
@@ -121,6 +125,8 @@ export interface ProgressSnapshotSample {
   TotalDays: number;
   TurnDays: number;
   ReadyDays: number;
+  Author?: string;
+  IsFirstTimer?: boolean;
 }
 
 /** スナップショットに保存する直前ライバル PR 1 件 */
@@ -153,6 +159,12 @@ export interface SampleComparison {
   /** 基準 PR より古い PR 番号でマージ済み */
   OlderNumber: number;
   Verdict: OvertakeVerdict;
+  /** 初回提出者による追い越し（基準 PR より後に作成された初回提出者マージ） */
+  FirstTimerLaterCreated?: number;
+  /** 常連・特急レーンによる追い越し（基準 PR より後に作成された常連・手戻りマージ） */
+  RepeatOrExpressLaterCreated?: number;
+  /** 未判定（旧キャッシュ等で判定情報がない追い越し） */
+  UnknownLaterCreated?: number;
 }
 
 /**
@@ -219,4 +231,10 @@ export interface ProgressSnapshot {
   Comparison: SampleComparison | null;
   /** サンプルがないときは null */
   Guidance: ProgressGuidance | null;
+  /** 初回提出者コホートの通算所要日数中央値（サンプル不足時は null） */
+  FirstTimerMedianDays?: number | null;
+  /** 初回提出者コホートの通算所要日数75%点（サンプル不足時は null） */
+  FirstTimerP75Days?: number | null;
+  /** 初回提出者サンプルの採用件数 */
+  FirstTimerSampleCount?: number;
 }

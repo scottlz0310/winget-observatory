@@ -19,6 +19,8 @@ export interface CachedSampleEntry {
   TotalDays: number;
   TurnDays: number;
   ReadyDays: number;
+  Author?: string;
+  IsFirstTimer?: boolean;
 }
 
 /** 条件不成立などで統計から除いた PR 1 件。再取得を避けるために記録する */

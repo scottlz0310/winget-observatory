@@ -307,6 +307,12 @@ export class GitHubApiClient {
       ? prData.labels.map((l) => String((l as Record<string, unknown>).name))
       : [];
 
+    const userObj = prData.user as Record<string, unknown> | undefined;
+    const author = userObj?.login ? String(userObj.login) : undefined;
+    const authorAssociation = prData.author_association
+      ? String(prData.author_association)
+      : undefined;
+
     return {
       number: Number(prData.number),
       title: String(prData.title),
@@ -319,6 +325,8 @@ export class GitHubApiClient {
       closedAt: prData.closed_at ? String(prData.closed_at) : null,
       labels,
       commits,
+      author,
+      authorAssociation,
     };
   }
 

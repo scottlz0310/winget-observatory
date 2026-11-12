@@ -189,11 +189,34 @@ function renderStatCard(
       </div>`;
 }
 
+/** 初回提出者コホート実績カード（常連・特急レーンを除外した真の初回提出者） */
+function renderFirstTimerStatCard(progress: LatestProgress): string {
+  const count = progress.FirstTimerSampleCount ?? 0;
+  return `
+      <div class="card stat-card" style="border-left: 4px solid var(--primary);">
+        <div class="card-title">🌱 初回提出者コホート実績</div>
+        <div class="card-value" style="font-size: 1.15rem; display: flex; flex-wrap: wrap; column-gap: 0.75rem;">
+          <span style="white-space: nowrap;">P50: ${formatDaysStat(progress.FirstTimerMedianDays)}</span>
+          <span style="white-space: nowrap;">P75: ${formatDaysStat(progress.FirstTimerP75Days)}</span>
+        </div>
+        <div class="card-subtext">常連・特急レーンを除外した真の初回提出者（1コミット・累計マージ1件）の通算所要日数（${count} 件）</div>
+        <div class="card-subtext">基準 PR の現在: <strong>${escapeHtml(progress.TotalLifetimeDays)}</strong> 日</div>
+      </div>`;
+}
+
 /** 追い越しの比較（採用サンプル内で、基準 PR より後に作成・成立してマージされた件数） */
 function renderOvertakeSection(progress: LatestProgress | null): string {
   const c = progress?.Comparison;
   if (!c) return "";
   const noteColor = c.Verdict === "overtaken" ? "var(--danger)" : "var(--text-muted)";
+  const unknownDetail =
+    c.UnknownLaterCreated !== undefined && c.UnknownLaterCreated > 0
+      ? ` / 未判定: <strong>${c.UnknownLaterCreated}</strong> 件`
+      : "";
+  const overtakeDetail =
+    c.FirstTimerLaterCreated !== undefined && c.RepeatOrExpressLaterCreated !== undefined
+      ? `<div class="card-subtext" style="margin-top: 0.2rem;">うち初回提出者: <strong>${c.FirstTimerLaterCreated}</strong> 件 / 常連・特急レーン: <strong>${c.RepeatOrExpressLaterCreated}</strong> 件${unknownDetail}</div>`
+      : "";
   return `
     <h2 class="section-title">🏃 追い越しの比較（採用サンプル内）</h2>
     <p class="section-note">
@@ -204,7 +227,7 @@ function renderOvertakeSection(progress: LatestProgress | null): string {
         <tr><th>比較</th><th>件数</th></tr>
       </thead>
       <tbody>
-        <tr><td>自分より後に作成され、マージ済み（追い越し）</td><td><strong>${c.LaterCreated}</strong> 件</td></tr>
+        <tr><td>自分より後に作成され、マージ済み（追い越し）</td><td><strong>${c.LaterCreated}</strong> 件${overtakeDetail}</td></tr>
         <tr><td>自分より前に作成され、マージ済み</td><td>${c.EarlierCreated} 件</td></tr>
         <tr><td>自分より後に条件が整い（ReadyAt）、マージ済み</td><td>${c.LaterReady} 件</td></tr>
       </tbody>
@@ -270,6 +293,7 @@ function renderSamplesSection(progress: LatestProgress | null, repo: string): st
           <td>${sample.TurnDays.toFixed(1)} 日</td>
           <td>${sample.TotalDays.toFixed(1)} 日</td>
           <td>${sample.ReadyDays.toFixed(1)} 日</td>
+          <td>${sample.IsFirstTimer === true ? '<span style="color: var(--success); font-weight: 600;">初回</span>' : sample.IsFirstTimer === false ? '<span style="color: var(--text-muted);">常連</span>' : "-"}</td>
           <td>${escapeHtml(formatDateTimeWithDay(sample.LatestCommittedDate))}</td>
           <td>${escapeHtml(formatDateTimeWithDay(sample.MergedAt))}</td>
         </tr>`,
@@ -288,6 +312,7 @@ function renderSamplesSection(progress: LatestProgress | null, repo: string): st
             <th>レビュー待ち</th>
             <th>通算日数</th>
             <th>成立後</th>
+            <th>コホート</th>
             <th>最新コミット (JST)</th>
             <th>マージ (JST)</th>
           </tr>
@@ -940,7 +965,11 @@ function generateHtml(
       progress?.TotalLifetimeDays,
       progress?.Guidance?.Total,
       "PR 起票からマージ完了までの全期間の所要日数",
-    )}
+    )}${
+      progress?.FirstTimerMedianDays !== undefined && progress?.FirstTimerMedianDays !== null
+        ? renderFirstTimerStatCard(progress)
+        : ""
+    }
     </div>
 
     ${renderOvertakeSection(progress)}

@@ -44,6 +44,18 @@ describe("Domain: サンプルキャッシュの変換", () => {
     });
     expect(fromCachedSample(toCachedSample(sample))).toEqual(sample);
   });
+
+  test("Author と IsFirstTimer を含むサンプルも相互変換できる", () => {
+    const sampleWithFirstTimer: MergedCandidateSample = {
+      ...sample,
+      author: "firstTimerUser",
+      isFirstTimer: true,
+    };
+    const cached = toCachedSample(sampleWithFirstTimer);
+    expect(cached.Author).toBe("firstTimerUser");
+    expect(cached.IsFirstTimer).toBe(true);
+    expect(fromCachedSample(cached)).toEqual(sampleWithFirstTimer);
+  });
 });
 
 describe("Domain: parseSampleCache", () => {
@@ -99,6 +111,16 @@ describe("Domain: parseSampleCache", () => {
       "数値の項目が NaN 相当（null）",
       `${JSON.stringify(entry({ TotalDays: null }))}\n`,
       "TotalDays が数値ではありません",
+    ],
+    [
+      "Author が文字列ではない",
+      `${JSON.stringify(entry({ Author: 123 }))}\n`,
+      "Author が文字列ではありません",
+    ],
+    [
+      "IsFirstTimer が真偽値ではない",
+      `${JSON.stringify(entry({ IsFirstTimer: "true" }))}\n`,
+      "IsFirstTimer が真偽値ではありません",
     ],
   ])("壊れた行は握りつぶさず行番号つきで例外にする: %s", (_name, text, message) => {
     expect(() => parseSampleCache(text)).toThrow(message);

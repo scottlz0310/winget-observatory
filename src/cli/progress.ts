@@ -1,8 +1,14 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
 import { describeGuidance, describeOvertake } from "../domain/benchmark";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
+import {
+  buildAuthorMergedCountQuery,
+  extractSingleHitCandidateLogins,
+  isFirstTimerSampleCandidate,
+  parseAuthorMergedCounts,
+} from "../domain/first-timer";
 import {
   buildHealthyQueryParts,
   calculateProgressStats,
@@ -119,12 +125,10 @@ function readSampleCache(path: string): SampleCacheEntry[] {
   }
 }
 
-/** 末尾が改行で終わっていないファイルにも、行が連結しないよう追記する */
-function appendSampleCache(path: string, entries: SampleCacheEntry[]): void {
+/** キャッシュファイル全体を保存する（更新・属性補完を永続化する） */
+function saveSampleCache(path: string, entries: SampleCacheEntry[]): void {
   mkdirSync(dirname(path), { recursive: true });
-  const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
-  const needsBreak = existing.length > 0 && !existing.endsWith("\n");
-  appendFileSync(path, `${needsBreak ? "\n" : ""}${serializeSampleCacheEntries(entries)}`, "utf-8");
+  writeFileSync(path, serializeSampleCacheEntries(entries), "utf-8");
 }
 
 export function resolveDefaultDataDir(baseDir: string = import.meta.dirname): string {
@@ -334,10 +338,9 @@ export async function runProgressCli(
   const samples: MergedCandidateSample[] = [];
   let skipped = 0;
 
-  const cacheIndex = options.cachePath
-    ? indexSampleCache(readSampleCache(options.cachePath))
-    : new Map<number, SampleCacheEntry>();
-  const newEntries: SampleCacheEntry[] = [];
+  const rawCache = options.cachePath ? readSampleCache(options.cachePath) : [];
+  const cacheIndex = indexSampleCache(rawCache);
+  let cacheModified = false;
   let fetched = 0;
   let deferred = 0;
 
@@ -347,7 +350,13 @@ export async function runProgressCli(
       const cached = cacheIndex.get(cand.number);
       if (cached) {
         if (cached.Type === "sample") {
-          samples.push(fromCachedSample(cached));
+          const s = fromCachedSample(cached);
+          if (s.isFirstTimer === undefined && s.commitCount > 1) {
+            s.isFirstTimer = false;
+            cached.IsFirstTimer = false;
+            cacheModified = true;
+          }
+          samples.push(s);
         } else {
           skipped++;
         }
@@ -367,24 +376,28 @@ export async function runProgressCli(
         const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
         if (!readyAt) {
           skipped++;
-          newEntries.push({
+          const skippedEntry: SampleCacheEntry = {
             Type: "skipped",
             Number: cand.number,
             MergedAt: mergedAt.toISOString(),
             Reason: "no-ready",
-          });
+          };
+          cacheIndex.set(cand.number, skippedEntry);
+          cacheModified = true;
           continue;
         }
 
         const readyDays = (mergedAt.getTime() - readyAt.getTime()) / (1000 * 60 * 60 * 24);
         if (readyDays < 0) {
           skipped++;
-          newEntries.push({
+          const skippedEntry: SampleCacheEntry = {
             Type: "skipped",
             Number: cand.number,
             MergedAt: mergedAt.toISOString(),
             Reason: "negative-ready",
-          });
+          };
+          cacheIndex.set(cand.number, skippedEntry);
+          cacheModified = true;
           continue;
         }
 
@@ -401,6 +414,12 @@ export async function runProgressCli(
         const turnDays =
           (mergedAt.getTime() - candLatestCommittedDate.getTime()) / (1000 * 60 * 60 * 24);
 
+        const isCandidate = isFirstTimerSampleCandidate({
+          commitCount: candCommits.length,
+          timeline: candTimeline,
+          isDraft: Boolean(cand.is_draft),
+        });
+
         const sample: MergedCandidateSample = {
           number: cand.number,
           title: cand.title,
@@ -412,9 +431,13 @@ export async function runProgressCli(
           totalDays: Number(totalDays.toFixed(2)),
           turnDays: Number(turnDays.toFixed(2)),
           days: Number(readyDays.toFixed(2)),
+          author: candDetail.author,
+          ...(!isCandidate ? { isFirstTimer: false } : {}),
         };
         samples.push(sample);
-        newEntries.push(toCachedSample(sample));
+        const newCached = toCachedSample(sample);
+        cacheIndex.set(cand.number, newCached);
+        cacheModified = true;
       } catch (err: unknown) {
         // 一部だけ欠けた統計は誤った比較値になるため、握りつぶさず中断する
         const msg = err instanceof Error ? err.message : String(err);
@@ -423,15 +446,68 @@ export async function runProgressCli(
         });
       }
     }
+
+    // 初回提出者（1コミット・初期健康体・単発・累計マージ1件）の判定
+    // 1. バッチ内に複数回登場する author は常連として除外（isFirstTimer = false）
+    const authorCounts = new Map<string, number>();
+    for (const s of samples) {
+      if (s.author) {
+        authorCounts.set(s.author, (authorCounts.get(s.author) ?? 0) + 1);
+      }
+    }
+    for (const s of samples) {
+      if (s.author && (authorCounts.get(s.author) ?? 0) > 1) {
+        if (s.isFirstTimer !== false) {
+          s.isFirstTimer = false;
+          const cached = cacheIndex.get(s.number);
+          if (cached && cached.Type === "sample") {
+            cached.IsFirstTimer = false;
+            cacheModified = true;
+          }
+        }
+      }
+    }
+
+    // 2. 単発 author かつ 1 コミットの未判定候補の累計マージ数を GraphQL エイリアスで一括照会
+    const candidateAuthors = extractSingleHitCandidateLogins(samples);
+    if (candidateAuthors.length > 0) {
+      const CHUNK_SIZE = 30;
+      const authorMergedCounts = new Map<string, number>();
+      for (let i = 0; i < candidateAuthors.length; i += CHUNK_SIZE) {
+        const chunk = candidateAuthors.slice(i, i + CHUNK_SIZE);
+        const query = buildAuthorMergedCountQuery(options.repository, chunk);
+        if (query) {
+          const data = await client.graphql<Record<string, { issueCount?: number }>>(query);
+          const counts = parseAuthorMergedCounts(chunk, data);
+          for (const [author, count] of counts) {
+            authorMergedCounts.set(author, count);
+          }
+        }
+      }
+
+      for (const s of samples) {
+        if (s.author && authorMergedCounts.has(s.author)) {
+          const count = authorMergedCounts.get(s.author);
+          if (count !== undefined) {
+            s.isFirstTimer = count === 1;
+            const cached = cacheIndex.get(s.number);
+            if (cached && cached.Type === "sample") {
+              cached.IsFirstTimer = s.isFirstTimer;
+              cacheModified = true;
+            }
+          }
+        }
+      }
+    }
   } finally {
     // マージ済み PR の履歴は後から変わらないので、途中で失敗しても取得済みの分は保存し、次回の再取得を避ける
-    if (options.cachePath && newEntries.length > 0) {
-      appendSampleCache(options.cachePath, newEntries);
+    if (options.cachePath && cacheModified) {
+      saveSampleCache(options.cachePath, Array.from(cacheIndex.values()));
     }
   }
 
   log(
-    `サンプル         : 採用 ${samples.length} 件・除外 ${skipped} 件（キャッシュ ${samples.length + skipped - newEntries.length} 件を再利用、今回の新規取得 ${fetched} 件／予算 ${options.fetchBudget} 件）`,
+    `サンプル         : 採用 ${samples.length} 件・除外 ${skipped} 件（キャッシュ ${samples.length + skipped - fetched} 件を再利用、今回の新規取得 ${fetched} 件／予算 ${options.fetchBudget} 件）`,
   );
   if (deferred > 0) {
     log(
@@ -504,6 +580,10 @@ export async function runProgressCli(
   );
 
   const stats = calculateProgressStats(samples, skipped);
+  const firstTimerSamples = samples.filter((s) => s.isFirstTimer === true);
+  const firstTimerStats =
+    firstTimerSamples.length > 0 ? calculateProgressStats(firstTimerSamples) : null;
+  const firstTimerSampleCount = firstTimerSamples.length;
 
   const frontCreatedVal = formatDateTimeWithDay(front.createdAt);
 
@@ -530,6 +610,8 @@ export async function runProgressCli(
     samples,
     targetCreatedAt: created,
     targetReadyAt: targetReady,
+    firstTimerStats,
+    firstTimerSampleCount,
   });
 
   logRivals(queueInfo.rivals, log);
@@ -649,6 +731,11 @@ function logBenchmark(
     snapshot.TotalMaxDays,
     current.totalLifetimeDays,
   );
+  if (snapshot.FirstTimerMedianDays !== null && snapshot.FirstTimerMedianDays !== undefined) {
+    log(
+      `   [初回提出者コホート実績 (1コミット・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)] 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
+    );
+  }
   log("");
   block(
     "2. レビュー待ち (Turn Latency: 最新コミット→マージ)",
@@ -687,6 +774,16 @@ function logBenchmark(
   log("");
   log("【作成日・PR番号の比較（CreatedAt / PR番号）】");
   log(`  自分より後に作成されマージ済み   : ${comparison.LaterCreated} 件`);
+  if (
+    comparison.FirstTimerLaterCreated !== undefined &&
+    comparison.RepeatOrExpressLaterCreated !== undefined
+  ) {
+    log(`    うち初回提出者による追い越し   : ${comparison.FirstTimerLaterCreated} 件`);
+    log(`    うち常連・特急レーンによる追い越し: ${comparison.RepeatOrExpressLaterCreated} 件`);
+    if (comparison.UnknownLaterCreated !== undefined && comparison.UnknownLaterCreated > 0) {
+      log(`    うち未判定による追い越し       : ${comparison.UnknownLaterCreated} 件`);
+    }
+  }
   log(`  自分より前に作成されマージ済み   : ${comparison.EarlierCreated} 件`);
   log(`  自分より新しいPR番号 (>${options.targetPr}) : ${comparison.NewerNumber} 件`);
   log(`  自分より古いPR番号   (<${options.targetPr}) : ${comparison.OlderNumber} 件`);
@@ -696,8 +793,9 @@ function logBenchmark(
   log("参考サンプル（マージ日時順）:");
   for (const s of snapshot.Samples) {
     const relation = s.Relation === "older" ? "古い  " : "新しい";
+    const cohort = s.IsFirstTimer === true ? "初回" : s.IsFirstTimer === false ? "常連" : "    ";
     log(
-      `  #${s.Number} ${relation} ${s.CommitCount}コミット  レビュー待ち ${s.TurnDays.toFixed(1)}日 / 通算 ${s.TotalDays.toFixed(1)}日 / 成立後 ${s.ReadyDays.toFixed(1)}日  最新コミット ${formatDateTimeWithDay(s.LatestCommittedDate)}  マージ ${formatDateTimeWithDay(s.MergedAt)}`,
+      `  #${s.Number} ${relation} [${cohort}] ${s.CommitCount}コミット  レビュー待ち ${s.TurnDays.toFixed(1)}日 / 通算 ${s.TotalDays.toFixed(1)}日 / 成立後 ${s.ReadyDays.toFixed(1)}日  最新コミット ${formatDateTimeWithDay(s.LatestCommittedDate)}  マージ ${formatDateTimeWithDay(s.MergedAt)}`,
     );
   }
   log("※ 待機はラベルとDraftの履歴に基づきます。レビュー本文・チェック履歴は解析しません。");

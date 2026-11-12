@@ -31,6 +31,19 @@ describe("buildDashboard", () => {
       TurnP75Days: 6.8,
       ReadyMedianDays: 2.5,
       ReadyP75Days: 5.0,
+      FirstTimerMedianDays: 37.5,
+      FirstTimerP75Days: 39.0,
+      FirstTimerSampleCount: 5,
+      Comparison: {
+        LaterCreated: 10,
+        EarlierCreated: 20,
+        LaterReady: 5,
+        NewerNumber: 10,
+        OlderNumber: 20,
+        Verdict: "overtaken",
+        FirstTimerLaterCreated: 1,
+        RepeatOrExpressLaterCreated: 9,
+      },
     };
     writeFileSync(join(dataDir, "latest-progress.json"), JSON.stringify(dummyProgress), "utf-8");
 
@@ -110,6 +123,12 @@ describe("buildDashboard", () => {
       expect(html).toContain("通算所要日数 (Total Lifetime)");
       expect(html).toContain("30.5");
       expect(html).toContain("45");
+      expect(html).toContain("初回提出者コホート実績");
+      expect(html).toContain("37.5");
+      expect(html).toContain("39");
+      expect(html).toContain(
+        "うち初回提出者: <strong>1</strong> 件 / 常連・特急レーン: <strong>9</strong> 件",
+      );
 
       // site/data へのコピー確認
       expect(existsSync(join(outputDir, "data", "latest-progress.json"))).toBe(true);

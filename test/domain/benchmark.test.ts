@@ -52,6 +52,9 @@ describe("Domain: compareWithSamples（追い越しの判定）", () => {
         NewerNumber: 0,
         OlderNumber: 2,
         Verdict: "all-older",
+        FirstTimerLaterCreated: 0,
+        RepeatOrExpressLaterCreated: 0,
+        UnknownLaterCreated: 0,
       },
     },
     {
@@ -67,6 +70,9 @@ describe("Domain: compareWithSamples（追い越しの判定）", () => {
         NewerNumber: 1,
         OlderNumber: 1,
         Verdict: "mostly-older",
+        FirstTimerLaterCreated: 0,
+        RepeatOrExpressLaterCreated: 0,
+        UnknownLaterCreated: 1,
       },
     },
     {
@@ -83,6 +89,28 @@ describe("Domain: compareWithSamples（追い越しの判定）", () => {
         NewerNumber: 3,
         OlderNumber: 0,
         Verdict: "overtaken",
+        FirstTimerLaterCreated: 0,
+        RepeatOrExpressLaterCreated: 0,
+        UnknownLaterCreated: 3,
+      },
+    },
+    {
+      name: "初回提出者と常連・特急レーンの追い越しを分離集計する",
+      samples: [
+        sample(600, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z", { isFirstTimer: true }),
+        sample(601, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z", { isFirstTimer: false }),
+        sample(602, "2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z"),
+      ],
+      expected: {
+        LaterReady: 3,
+        LaterCreated: 3,
+        EarlierCreated: 0,
+        NewerNumber: 3,
+        OlderNumber: 0,
+        Verdict: "overtaken",
+        FirstTimerLaterCreated: 1,
+        RepeatOrExpressLaterCreated: 1,
+        UnknownLaterCreated: 1,
       },
     },
     {
@@ -95,6 +123,9 @@ describe("Domain: compareWithSamples（追い越しの判定）", () => {
         NewerNumber: 0,
         OlderNumber: 1,
         Verdict: "all-older",
+        FirstTimerLaterCreated: 0,
+        RepeatOrExpressLaterCreated: 0,
+        UnknownLaterCreated: 0,
       },
     },
   ])("$name", ({ samples, expected }) => {
@@ -167,18 +198,71 @@ describe("Domain: describe 系の説明文", () => {
   });
 
   test.each([
-    { verdict: "all-older", includes: "追い越されてはいません" },
-    { verdict: "mostly-older", includes: "大きく追い越されているわけではありません" },
-    { verdict: "overtaken", includes: "追い越しあり" },
-  ] as const)("追い越し判定 $verdict", ({ verdict, includes }) => {
-    const c = {
-      LaterReady: 0,
-      LaterCreated: 4,
-      EarlierCreated: 0,
-      NewerNumber: 0,
-      OlderNumber: 0,
-      Verdict: verdict,
-    };
+    {
+      c: {
+        LaterReady: 0,
+        LaterCreated: 0,
+        EarlierCreated: 4,
+        NewerNumber: 0,
+        OlderNumber: 4,
+        Verdict: "all-older" as const,
+      },
+      includes: "追い越されてはいません",
+    },
+    {
+      c: {
+        LaterReady: 1,
+        LaterCreated: 1,
+        EarlierCreated: 3,
+        NewerNumber: 1,
+        OlderNumber: 3,
+        Verdict: "mostly-older" as const,
+      },
+      includes: "大きく追い越されているわけではありません",
+    },
+    {
+      c: {
+        LaterReady: 4,
+        LaterCreated: 4,
+        EarlierCreated: 0,
+        NewerNumber: 4,
+        OlderNumber: 0,
+        Verdict: "overtaken" as const,
+        FirstTimerLaterCreated: 0,
+        RepeatOrExpressLaterCreated: 4,
+        UnknownLaterCreated: 0,
+      },
+      includes: "初回提出者による追い越しはありません",
+    },
+    {
+      c: {
+        LaterReady: 4,
+        LaterCreated: 4,
+        EarlierCreated: 0,
+        NewerNumber: 4,
+        OlderNumber: 0,
+        Verdict: "overtaken" as const,
+        FirstTimerLaterCreated: 0,
+        RepeatOrExpressLaterCreated: 3,
+        UnknownLaterCreated: 1,
+      },
+      includes: "確定した初回提出者による追い越しはありません",
+    },
+    {
+      c: {
+        LaterReady: 4,
+        LaterCreated: 4,
+        EarlierCreated: 0,
+        NewerNumber: 4,
+        OlderNumber: 0,
+        Verdict: "overtaken" as const,
+        FirstTimerLaterCreated: 1,
+        RepeatOrExpressLaterCreated: 3,
+        UnknownLaterCreated: 0,
+      },
+      includes: "うち初回提出者 1 件、常連・特急レーン 3 件",
+    },
+  ])("追い越し判定 $c.Verdict ($includes)", ({ c, includes }) => {
     expect(describeOvertake(c)).toContain(includes);
   });
 });

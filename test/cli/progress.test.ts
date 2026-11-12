@@ -10,6 +10,7 @@ import {
   resolveDefaultDataDir,
   runProgressCli,
 } from "../../src/cli/progress";
+import { parseSampleCache } from "../../src/domain/sample-cache";
 
 describe("CLI: progress parseArgs", () => {
   test("デフォルト値が正しく設定される", () => {
@@ -889,6 +890,579 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     expect(text).toContain("参考サンプル（マージ日時順）:");
     expect(text).toContain("採用サンプル     : 3 件");
     expect(text).toContain("サンプルが少ないため");
+  });
+
+  test("マージ済みサンプルの初回提出者を常連から分離し、GraphQL で累計マージ数を照会してキャッシュ・スナップショットに記録する", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-first-timer-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+    const snapshotPath = join(tmpDir, "latest-progress.json");
+
+    try {
+      let graphqlCalled = false;
+      let graphqlQuery = "";
+
+      const client = {
+        ...buildClient(),
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          if (num === 400) {
+            return {
+              number: 400,
+              title: "Merged PR 400",
+              url: "https://github.com/test/repo/pull/400",
+              state: "MERGED" as const,
+              isDraft: false,
+              createdAt: "2026-10-20T00:00:00Z",
+              updatedAt: "2026-10-24T00:00:00Z",
+              mergedAt: "2026-10-24T00:00:00Z",
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid400",
+                  messageHeadline: "feat",
+                  committedDate: "2026-10-20T00:00:00Z",
+                },
+              ],
+              author: "repeatUser",
+            };
+          }
+          if (num === 450) {
+            return {
+              number: 450,
+              title: "Merged PR 450",
+              url: "https://github.com/test/repo/pull/450",
+              state: "MERGED" as const,
+              isDraft: false,
+              createdAt: "2026-10-25T00:00:00Z",
+              updatedAt: "2026-10-26T00:00:00Z",
+              mergedAt: "2026-10-26T00:00:00Z",
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid450",
+                  messageHeadline: "feat",
+                  committedDate: "2026-10-25T00:00:00Z",
+                },
+              ],
+              author: "repeatUser", // 同一バッチ内で2回登場
+            };
+          }
+          if (num === 600) {
+            return {
+              number: 600,
+              title: "Merged PR 600",
+              url: "https://github.com/test/repo/pull/600",
+              state: "MERGED" as const,
+              isDraft: false,
+              createdAt: "2026-11-02T00:00:00Z",
+              updatedAt: "2026-11-03T00:00:00Z",
+              mergedAt: "2026-11-03T00:00:00Z",
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid600",
+                  messageHeadline: "feat",
+                  committedDate: "2026-11-02T00:00:00Z",
+                },
+              ],
+              author: "firstTimerUser", // 単発
+            };
+          }
+          throw new Error(`Unexpected PR #${num}`);
+        },
+        graphql: async (query: string) => {
+          graphqlCalled = true;
+          graphqlQuery = query;
+          return {
+            u_0: { issueCount: 1 },
+          };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          snapshotPath,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      expect(graphqlCalled).toBeTrue();
+      expect(graphqlQuery).toContain("firstTimerUser");
+      expect(graphqlQuery).not.toContain("repeatUser");
+
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      expect(snapshot?.FirstTimerMedianDays).not.toBeNull();
+
+      const samples = snapshot?.Samples ?? [];
+      const ftSample = samples.find((s) => s.Number === 600);
+      const repeatSample = samples.find((s) => s.Number === 400);
+
+      expect(ftSample?.IsFirstTimer).toBeTrue();
+      expect(repeatSample?.IsFirstTimer).toBeFalse();
+
+      // キャッシュファイルへの保存検証
+      expect(existsSync(cachePath)).toBeTrue();
+      const cacheEntries = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached600 = cacheEntries.find((e) => e.Number === 600);
+      expect(cached600?.Type).toBe("sample");
+      if (cached600?.Type === "sample") {
+        expect(cached600.Author).toBe("firstTimerUser");
+        expect(cached600.IsFirstTimer).toBeTrue();
+      }
+
+      const text = logs.join("\n");
+      expect(text).toContain("初回提出者コホート実績");
+      expect(text).toContain("うち初回提出者による追い越し   : 1 件");
+      expect(text).toContain("うち常連・特急レーンによる追い越し: 0 件");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("1コミット・累計マージ1件でも途中で阻害ラベル履歴があるPRは初期健康体から除外され isFirstTimer: false となる", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-blocked-history-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      let graphqlCalled = false;
+      const client = {
+        ...buildClient(),
+        getIssueTimeline: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return [
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "New-Package" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "Azure-Pipeline-Passed" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "Validation-Completed" },
+              },
+            ];
+          }
+          // PR 600: 途中で Error-TestFailure が付与され、その後解除された
+          return [
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "New-Package" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "Azure-Pipeline-Passed" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "Validation-Completed" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-02T01:00:00Z",
+              label: { name: "Error-TestFailure" },
+            },
+            {
+              event: "unlabeled",
+              created_at: "2026-10-30T01:00:00Z",
+              label: { name: "Error-TestFailure" },
+            },
+          ];
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          return {
+            number: num,
+            title: `Merged PR ${num}`,
+            url: `https://github.com/test/repo/pull/${num}`,
+            state: "MERGED" as const,
+            isDraft: false,
+            createdAt: "2026-10-01T00:00:00Z",
+            updatedAt: "2026-11-01T00:00:00Z",
+            mergedAt: "2026-11-01T00:00:00Z",
+            closedAt: null,
+            labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+            commits: [
+              { oid: `oid${num}`, messageHeadline: "feat", committedDate: "2026-10-01T00:00:00Z" },
+            ],
+            author: "userWithBlockedHistory",
+          };
+        },
+        graphql: async () => {
+          graphqlCalled = true;
+          return { u_0: { issueCount: 1 } };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli({ ...options, cachePath }, client, (m) =>
+        logs.push(m),
+      );
+
+      // 阻害履歴があるため候補から除外され、GraphQL 一括照会も行われない
+      expect(graphqlCalled).toBeFalse();
+      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+      const s600 = snapshot?.Samples.find((s) => s.Number === 600);
+      expect(s600?.IsFirstTimer).toBeFalse();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("1コミット・累計マージ1件でもDraft履歴（converted_to_draft や ready_for_review）があるPRは初期健康体から除外される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-draft-history-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      let graphqlCalled = false;
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 2,
+              items: [600, 601].map((n) => ({
+                number: n,
+                title: `Merged ${n}`,
+                html_url: `https://github.com/test/repo/pull/${n}`,
+                created_at: "2026-10-01T00:00:00Z",
+                updated_at: "2026-11-01T00:00:00Z",
+                labels,
+                is_draft: false,
+                pull_request: { merged_at: "2026-11-01T00:00:00Z" },
+              })),
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getIssueTimeline: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return [
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "New-Package" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "Azure-Pipeline-Passed" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "Validation-Completed" },
+              },
+            ];
+          }
+          if (num === 600) {
+            // 途中で converted_to_draft → ready_for_review
+            return [
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "New-Package" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "Azure-Pipeline-Passed" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "Validation-Completed" },
+              },
+              {
+                event: "converted_to_draft",
+                created_at: "2026-10-02T01:00:00Z",
+              },
+              {
+                event: "ready_for_review",
+                created_at: "2026-10-15T01:00:00Z",
+              },
+            ];
+          }
+          // PR 601: 最初から Draft で起票され、後に ready_for_review のみ発生
+          return [
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "New-Package" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "Azure-Pipeline-Passed" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "Validation-Completed" },
+            },
+            {
+              event: "ready_for_review",
+              created_at: "2026-10-10T01:00:00Z",
+            },
+          ];
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          return {
+            number: num,
+            title: `Merged PR ${num}`,
+            url: `https://github.com/test/repo/pull/${num}`,
+            state: "MERGED" as const,
+            isDraft: false,
+            createdAt: "2026-10-01T00:00:00Z",
+            updatedAt: "2026-11-01T00:00:00Z",
+            mergedAt: "2026-11-01T00:00:00Z",
+            closedAt: null,
+            labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+            commits: [
+              { oid: `oid${num}`, messageHeadline: "feat", committedDate: "2026-10-01T00:00:00Z" },
+            ],
+            author: `draftUser${num}`,
+          };
+        },
+        graphql: async () => {
+          graphqlCalled = true;
+          return { u_0: { issueCount: 1 } };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli({ ...options, cachePath }, client, (m) =>
+        logs.push(m),
+      );
+
+      // Draft 履歴があるため候補から除外され、GraphQL 一括照会も行われない
+      expect(graphqlCalled).toBeFalse();
+      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+      const s600 = snapshot?.Samples.find((s) => s.Number === 600);
+      expect(s600?.IsFirstTimer).toBeFalse();
+      const s601 = snapshot?.Samples.find((s) => s.Number === 601);
+      expect(s601?.IsFirstTimer).toBeFalse();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("旧形式キャッシュ（Author/IsFirstTimer欠落）が存在する場合に未判定として正しく分離され常連に誤合算されない", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-cache-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const legacyEntry1 = {
+        Type: "sample",
+        Number: 600,
+        Title: "Legacy PR 600",
+        CreatedAt: "2026-11-02T00:00:00.000Z",
+        LatestCommittedDate: "2026-11-02T00:00:00.000Z",
+        CommitCount: 1,
+        ReadyAt: "2026-11-02T01:00:00.000Z",
+        MergedAt: "2026-11-03T00:00:00.000Z",
+        TotalDays: 1,
+        TurnDays: 1,
+        ReadyDays: 0.96,
+      };
+      const legacyEntry2 = {
+        Type: "sample",
+        Number: 601,
+        Title: "Legacy PR 601",
+        CreatedAt: "2026-11-02T00:00:00.000Z",
+        LatestCommittedDate: "2026-11-02T00:00:00.000Z",
+        CommitCount: 1,
+        ReadyAt: "2026-11-02T01:00:00.000Z",
+        MergedAt: "2026-11-03T01:00:00.000Z",
+        TotalDays: 1,
+        TurnDays: 1,
+        ReadyDays: 0.96,
+      };
+      const legacyEntry3 = {
+        Type: "sample",
+        Number: 602,
+        Title: "Legacy PR 602",
+        CreatedAt: "2026-11-02T00:00:00.000Z",
+        LatestCommittedDate: "2026-11-02T00:00:00.000Z",
+        CommitCount: 1,
+        ReadyAt: "2026-11-02T01:00:00.000Z",
+        MergedAt: "2026-11-03T02:00:00.000Z",
+        TotalDays: 1,
+        TurnDays: 1,
+        ReadyDays: 0.96,
+      };
+      const legacyMultiCommit = {
+        Type: "sample",
+        Number: 450,
+        Title: "Legacy PR 450",
+        CreatedAt: "2026-10-25T00:00:00.000Z",
+        LatestCommittedDate: "2026-10-25T00:00:00.000Z",
+        CommitCount: 2,
+        ReadyAt: "2026-10-25T01:00:00.000Z",
+        MergedAt: "2026-10-26T00:00:00.000Z",
+        TotalDays: 1,
+        TurnDays: 1,
+        ReadyDays: 0.96,
+      };
+      writeFileSync(
+        cachePath,
+        `${JSON.stringify(legacyEntry1)}\n${JSON.stringify(legacyEntry2)}\n${JSON.stringify(legacyEntry3)}\n${JSON.stringify(legacyMultiCommit)}\n`,
+        "utf-8",
+      );
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 4,
+              items: [450, 600, 601, 602].map((n) => ({
+                number: n,
+                title: `Merged ${n}`,
+                html_url: `https://github.com/test/repo/pull/${n}`,
+                created_at: n === 450 ? "2026-10-25T00:00:00Z" : "2026-11-02T00:00:00Z",
+                updated_at: "2026-11-03T00:00:00Z",
+                labels: [
+                  { name: "New-Package" },
+                  { name: "Azure-Pipeline-Passed" },
+                  { name: "Validation-Completed" },
+                ],
+                is_draft: false,
+                pull_request: { merged_at: "2026-11-03T00:00:00Z" },
+              })),
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          throw new Error(`Unexpected PR #${num}`);
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        { ...options, cachePath, fetchBudget: 0 },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // PR 600, 601, 602 は自分より後に作成された未判定サンプル
+      expect(snapshot?.Comparison?.LaterCreated).toBe(3);
+      expect(snapshot?.Comparison?.FirstTimerLaterCreated).toBe(0);
+      expect(snapshot?.Comparison?.RepeatOrExpressLaterCreated).toBe(0); // 常連に誤合算されない！
+      expect(snapshot?.Comparison?.UnknownLaterCreated).toBe(3); // 未判定に計上される！
+
+      // PR 450 は commitCount > 1 のため IsFirstTimer: false に自動確定される
+      const s450 = snapshot?.Samples.find((s) => s.Number === 450);
+      expect(s450?.IsFirstTimer).toBeFalse();
+
+      const text = logs.join("\n");
+      expect(text).toContain("うち未判定による追い越し       : 3 件");
+      expect(text).not.toContain("すべて常連・特急レーンによるもので"); // 誤って常連のみと断定しない！
+      expect(text).toContain("確定した初回提出者による追い越しはありません）。");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   test("サンプルが 1 件もないときは比較不能と明示し、比較系は空にする", async () => {

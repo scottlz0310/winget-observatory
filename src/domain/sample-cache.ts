@@ -20,6 +20,8 @@ export function toCachedSample(sample: MergedCandidateSample): CachedSampleEntry
     TotalDays: sample.totalDays,
     TurnDays: sample.turnDays,
     ReadyDays: sample.days,
+    ...(sample.author !== undefined ? { Author: sample.author } : {}),
+    ...(sample.isFirstTimer !== undefined ? { IsFirstTimer: sample.isFirstTimer } : {}),
   };
 }
 
@@ -36,6 +38,8 @@ export function fromCachedSample(entry: CachedSampleEntry): MergedCandidateSampl
     totalDays: entry.TotalDays,
     turnDays: entry.TurnDays,
     days: entry.ReadyDays,
+    ...(entry.Author !== undefined ? { author: entry.Author } : {}),
+    ...(entry.IsFirstTimer !== undefined ? { isFirstTimer: entry.IsFirstTimer } : {}),
   };
 }
 
@@ -76,6 +80,12 @@ function validateEntry(parsed: unknown, lineNumber: number): SampleCacheEntry {
       if (typeof entry[key] !== "number" || !Number.isFinite(entry[key])) {
         return fail(`${key} が数値ではありません`);
       }
+    }
+    if (entry.Author !== undefined && typeof entry.Author !== "string") {
+      return fail("Author が文字列ではありません");
+    }
+    if (entry.IsFirstTimer !== undefined && typeof entry.IsFirstTimer !== "boolean") {
+      return fail("IsFirstTimer が真偽値ではありません");
     }
     return entry as unknown as SampleCacheEntry;
   }
