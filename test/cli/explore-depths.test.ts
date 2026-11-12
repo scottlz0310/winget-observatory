@@ -3,9 +3,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient } from "../../src/api/github";
-import { parseArgs, resolveDefaultDataDir, runExploreDepths } from "../../src/cli/explore-depths";
+import {
+  fetchFirstTimerBottom,
+  parseArgs,
+  resolveDefaultDataDir,
+  runExploreDepths,
+} from "../../src/cli/explore-depths";
 import { buildHealthyBaseQuery } from "../../src/domain/depths";
-import type { GitHubPrView, GitHubSearchItem } from "../../src/models/depths";
+import type { GitHubPrView, GitHubSearchItem, GraphQLPrNode } from "../../src/models/depths";
 
 describe("CLI: explore-depths", () => {
   test("parseArgs はコマンドライン引数と環境変数を正確に解釈する", () => {
@@ -188,6 +193,7 @@ describe("CLI: explore-depths", () => {
         searchQueries.push(query);
         return [];
       },
+      graphql: async () => ({ search: { nodes: [] } }),
     } as unknown as GitHubApiClient;
 
     try {
@@ -261,6 +267,7 @@ describe("CLI: explore-depths の放置の底", () => {
         calls.push({ query, sort, order, perPage });
         return [];
       },
+      graphql: async () => ({ search: { nodes: [] } }),
     } as unknown as GitHubApiClient;
 
     await runExploreDepths(
@@ -282,5 +289,157 @@ describe("CLI: explore-depths の放置の底", () => {
     // 健康条件は progress 側と同じ定義（阻害・調査中ラベルをすべて除外）を使う
     expect(stale?.query).toContain('-label:"Validation-SmartScreen"');
     expect(stale?.query).toContain('-label:"Testing"');
+  });
+});
+
+describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）走査", () => {
+  const createMockNode = (
+    number: number,
+    author: string,
+    association: string,
+    commits = 1,
+  ): GraphQLPrNode => ({
+    number,
+    title: `PR ${number} by ${author}`,
+    url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
+    createdAt: "2026-10-09T01:00:00Z",
+    updatedAt: "2026-10-09T02:00:00Z",
+    author: { login: author },
+    authorAssociation: association,
+    commits: { totalCount: commits },
+    labels: { nodes: [{ name: "New-Package" }] },
+  });
+
+  test("先頭50件が常連（CONTRIBUTOR）の場合に2ページ目を走査して候補を取得する", async () => {
+    const page1Nodes: GraphQLPrNode[] = Array.from({ length: 50 }, (_, i) =>
+      createMockNode(400000 + i, `contributor-${i}`, "CONTRIBUTOR"),
+    );
+    const page2Nodes: GraphQLPrNode[] = Array.from({ length: 10 }, (_, i) =>
+      createMockNode(400100 + i, `first-timer-${i}`, "NONE"),
+    );
+
+    const calls: { query: string; variables: Record<string, unknown> }[] = [];
+    const mockClient = {
+      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
+        calls.push({ query: _query, variables });
+        if (!variables.after) {
+          // 1ページ目
+          return {
+            search: {
+              pageInfo: { hasNextPage: true, endCursor: "cursor-page-1" },
+              nodes: page1Nodes,
+            },
+          } as unknown as T;
+        }
+        // 2ページ目
+        return {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: "cursor-page-2" },
+            nodes: page2Nodes,
+          },
+        } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const results = await fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
+
+    expect(calls.length).toBe(2);
+    expect(calls[0].variables.after).toBeUndefined();
+    expect(calls[1].variables.after).toBe("cursor-page-1");
+    expect(results.length).toBe(10);
+    expect(results[0].Number).toBe(400100);
+    expect(results[0].Author).toBe("first-timer-0");
+  });
+
+  test("採用件数が limit に達した時点で後続ページの走査を行わずに打ち切る", async () => {
+    // 1ページ目にすでに10件以上の初回提出者がいる場合
+    const page1Nodes: GraphQLPrNode[] = Array.from({ length: 50 }, (_, i) =>
+      createMockNode(400000 + i, `first-timer-${i}`, "NONE"),
+    );
+
+    const calls: { query: string; variables: Record<string, unknown> }[] = [];
+    const mockClient = {
+      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
+        calls.push({ query: _query, variables });
+        return {
+          search: {
+            pageInfo: { hasNextPage: true, endCursor: "cursor-page-1" },
+            nodes: page1Nodes,
+          },
+        } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const results = await fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
+
+    // 1ページ目で10件に達したため、2ページ目は呼ばれない
+    expect(calls.length).toBe(1);
+    expect(results.length).toBe(10);
+  });
+
+  test("GraphQL API が 503 等で失敗した場合はコンテキスト付き例外をスローする", async () => {
+    const mockClient = {
+      graphql: async () => {
+        throw new Error("GitHub GraphQL API error: HTTP 503 Service Unavailable");
+      },
+    } as unknown as GitHubApiClient;
+
+    await expect(
+      fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 10),
+    ).rejects.toThrow(
+      "初回提出者の底の GraphQL 取得に失敗しました: GitHub GraphQL API error: HTTP 503 Service Unavailable",
+    );
+  });
+
+  test("runExploreDepths は GraphQL 失敗時にスナップショットを保存せず例外を伝播する", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-depths-gql-fail-"));
+    const outputPath = join(tempDir, "latest-depths.json");
+    const historyPath = join(tempDir, "depths-history.jsonl");
+
+    const sampleItem: GitHubSearchItem = {
+      number: 12345,
+      title: "Sample item",
+      html_url: "https://github.com/microsoft/winget-pkgs/pull/12345",
+      created_at: "2026-10-01T10:00:00Z",
+      updated_at: "2026-11-01T10:00:00Z",
+    };
+
+    const mockClient = {
+      getPullRequest: async (_repo: string, prNumber: number): Promise<GitHubPrView> => ({
+        number: prNumber,
+        title: "Target PR title",
+        url: `https://github.com/microsoft/winget-pkgs/pull/${prNumber}`,
+        createdAt: "2026-10-15T00:00:00Z",
+        updatedAt: "2026-10-16T00:00:00Z",
+      }),
+      searchIssues: async (): Promise<GitHubSearchItem[]> => [sampleItem],
+      graphql: async () => {
+        throw new Error("GraphQL network failure 503");
+      },
+    } as unknown as GitHubApiClient;
+
+    try {
+      await expect(
+        runExploreDepths(
+          {
+            targetPr: 464302,
+            repository: "microsoft/winget-pkgs",
+            outputPath,
+            historyPath,
+            noTargetPr: false,
+            noHistory: false,
+            asJson: false,
+          },
+          mockClient,
+          () => {},
+        ),
+      ).rejects.toThrow("初回提出者の底の GraphQL 取得に失敗しました");
+
+      // 失敗時はファイルへの書き込みが行われないこと
+      expect(existsSync(outputPath)).toBeFalse();
+      expect(existsSync(historyPath)).toBeFalse();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

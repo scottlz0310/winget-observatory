@@ -9,6 +9,7 @@ import {
   formatGraphQLDepthsRow,
   formatJstDateTime,
   formatTargetPrInfo,
+  isFirstTimerCandidate,
   truncateTitle,
 } from "../../src/domain/depths";
 import type { GitHubPrView, GitHubSearchItem, GraphQLPrNode } from "../../src/models/depths";
@@ -203,6 +204,15 @@ describe("Domain: depths logic", () => {
         commits: { totalCount: 1 },
       },
     ];
+
+    test("isFirstTimerCandidate は適格条件を個別に判定する", () => {
+      expect(isFirstTimerCandidate(sampleNodes[0])).toBe(true);
+      expect(isFirstTimerCandidate(sampleNodes[1])).toBe(false); // CONTRIBUTOR
+      expect(isFirstTimerCandidate(sampleNodes[2])).toBe(false); // 2 commits
+      expect(isFirstTimerCandidate(sampleNodes[3])).toBe(false); // blocked label
+      expect(isFirstTimerCandidate(sampleNodes[4])).toBe(false); // author null
+      expect(isFirstTimerCandidate(sampleNodes[5])).toBe(true);
+    });
 
     test("filterFirstTimerCandidates は NONE かつ 1 コミットの健全な PR のみを抽出する", () => {
       const result = filterFirstTimerCandidates(sampleNodes);

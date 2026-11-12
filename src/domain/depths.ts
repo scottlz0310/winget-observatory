@@ -115,28 +115,31 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
 }
 
 /**
+ * GraphQL 検索ノードが「初回提出者（authorAssociation = NONE × 1コミット・除外ラベルなし）」の条件を満たすか判定する。
+ */
+export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
+  if (!node.author?.login) {
+    return false;
+  }
+  if (node.commits.totalCount !== 1) {
+    return false;
+  }
+  if (node.authorAssociation !== "NONE") {
+    return false;
+  }
+  const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
+  const hasBlockedPattern = labelNames.some((name) =>
+    BLOCKED_PATTERNS.some((pattern) => pattern.test(name)),
+  );
+  return !hasBlockedPattern;
+}
+
+/**
  * GraphQL 検索ノードから「初回提出者（authorAssociation = NONE × 1コミット・除外ラベルなし）」を抽出し、
  * DepthsRow 形式で返す。
  */
 export function filterFirstTimerCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
-  const filtered = nodes.filter((node) => {
-    if (!node.author?.login) {
-      return false;
-    }
-    if (node.commits.totalCount !== 1) {
-      return false;
-    }
-    if (node.authorAssociation !== "NONE") {
-      return false;
-    }
-    const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
-    const hasBlockedPattern = labelNames.some((name) =>
-      BLOCKED_PATTERNS.some((pattern) => pattern.test(name)),
-    );
-    return !hasBlockedPattern;
-  });
-
-  return filtered.slice(0, limit).map(formatGraphQLDepthsRow);
+  return nodes.filter(isFirstTimerCandidate).slice(0, limit).map(formatGraphQLDepthsRow);
 }
 
 /**
