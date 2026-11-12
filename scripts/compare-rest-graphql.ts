@@ -298,7 +298,7 @@ export async function runCompare(
 
   if (comparePrNumber) {
     const [restPrDetail, gqlPrDetailRaw, restTimeline, gqlTimelineNodes] = await Promise.all([
-      client.getPullRequestDetails(options.repository, comparePrNumber),
+      client.getPullRequestDetailsRest(options.repository, comparePrNumber),
       client.graphql<{ repository: { pullRequest: GraphQLPullRequestNode } }>(
         GRAPHQL_PR_DETAIL_QUERY,
         {

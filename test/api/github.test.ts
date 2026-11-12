@@ -98,7 +98,7 @@ describe("API: GitHubApiClient", () => {
     expect(capturedBody).toContain('"number":464302');
   });
 
-  test("getPullRequest は PR が存在しない場合 404 GitHubApiError をスローする", async () => {
+  test("getPullRequest は PR が存在しない場合（実 API の NOT_FOUND errors 応答）404 GitHubApiError をスローする", async () => {
     const mockFetch = async (): Promise<Response> => {
       return new Response(
         JSON.stringify({
@@ -107,6 +107,14 @@ describe("API: GitHubApiClient", () => {
               pullRequest: null,
             },
           },
+          errors: [
+            {
+              type: "NOT_FOUND",
+              path: ["repository", "pullRequest"],
+              locations: [{ line: 1, column: 63 }],
+              message: "Could not resolve to a PullRequest with the number of 9999999.",
+            },
+          ],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -117,11 +125,11 @@ describe("API: GitHubApiClient", () => {
       fetch: mockFetch,
     });
 
-    await expect(client.getPullRequest("microsoft/winget-pkgs", 999999)).rejects.toThrow(
+    await expect(client.getPullRequest("microsoft/winget-pkgs", 9999999)).rejects.toThrow(
       GitHubApiError,
     );
     try {
-      await client.getPullRequest("microsoft/winget-pkgs", 999999);
+      await client.getPullRequest("microsoft/winget-pkgs", 9999999);
     } catch (err: unknown) {
       expect(err).toBeInstanceOf(GitHubApiError);
       expect((err as GitHubApiError).status).toBe(404);
@@ -284,7 +292,7 @@ describe("API: GitHubApiClient", () => {
     expect(pr.commits[0].committedDate).toBe("2026-11-01T12:00:00Z");
   });
 
-  test("getPullRequestDetails は PR が存在しない場合 404 GitHubApiError をスローする", async () => {
+  test("getPullRequestDetails は PR が存在しない場合（実 API の NOT_FOUND errors 応答）404 GitHubApiError をスローする", async () => {
     const mockFetch = async (): Promise<Response> => {
       return new Response(
         JSON.stringify({
@@ -293,19 +301,79 @@ describe("API: GitHubApiClient", () => {
               pullRequest: null,
             },
           },
+          errors: [
+            {
+              type: "NOT_FOUND",
+              path: ["repository", "pullRequest"],
+              locations: [{ line: 1, column: 63 }],
+              message: "Could not resolve to a PullRequest with the number of 9999999.",
+            },
+          ],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     };
 
     const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
-    await expect(client.getPullRequestDetails("test/repo", 999)).rejects.toThrow(GitHubApiError);
+    await expect(client.getPullRequestDetails("test/repo", 9999999)).rejects.toThrow(
+      GitHubApiError,
+    );
     try {
-      await client.getPullRequestDetails("test/repo", 999);
+      await client.getPullRequestDetails("test/repo", 9999999);
     } catch (err: unknown) {
       expect(err).toBeInstanceOf(GitHubApiError);
       expect((err as GitHubApiError).status).toBe(404);
     }
+  });
+
+  test("getPullRequestDetailsRest は REST API から PR 情報とコミット一覧を取得して統合する", async () => {
+    let pullsCalled = false;
+    let commitsCalled = false;
+
+    const mockFetch = async (input: string | URL | Request): Promise<Response> => {
+      const url = String(input);
+      if (url.includes("/commits")) {
+        commitsCalled = true;
+        return new Response(
+          JSON.stringify([
+            {
+              sha: "restcommit123",
+              commit: {
+                message: "feat: rest commit headline",
+                committer: { date: "2026-11-01T12:00:00Z" },
+              },
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      pullsCalled = true;
+      return new Response(
+        JSON.stringify({
+          number: 500,
+          title: "REST PR 500",
+          html_url: "https://github.com/test/repo/pull/500",
+          state: "open",
+          draft: false,
+          created_at: "2026-11-01T10:00:00Z",
+          merged_at: null,
+          closed_at: null,
+          labels: [{ name: "New-Package" }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ fetch: mockFetch });
+    const pr = await client.getPullRequestDetailsRest("test/repo", 500);
+
+    expect(pullsCalled).toBe(true);
+    expect(commitsCalled).toBe(true);
+    expect(pr.number).toBe(500);
+    expect(pr.state).toBe("OPEN");
+    expect(pr.commits.length).toBe(1);
+    expect(pr.commits[0].oid).toBe("restcommit123");
+    expect(pr.commits[0].messageHeadline).toBe("feat: rest commit headline");
   });
 
   test("getIssueTimeline はページネーションして全イベントを取得する", async () => {

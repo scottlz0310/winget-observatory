@@ -676,5 +676,209 @@ describe("Scripts: compare-rest-graphql", () => {
       expect(report.prDetail?.diff.match).toBeTrue();
       expect(report.prDetail?.diff.diffs).toEqual([]);
     });
+
+    test("REST と GraphQL で意図的に異なる PR 詳細を返した場合に差分（match: false）を検出できる", async () => {
+      const fakeFetch = async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const urlStr = String(input);
+
+        // rate_limit (REST)
+        if (urlStr.includes("/rate_limit")) {
+          return new Response(
+            JSON.stringify({
+              resources: {
+                core: { limit: 5000, remaining: 4999, reset: 1_700_000_000 },
+                search: { limit: 30, remaining: 29, reset: 1_700_000_000 },
+              },
+            }),
+            { status: 200 },
+          );
+        }
+
+        // search issues (REST)
+        if (urlStr.includes("/search/issues")) {
+          return new Response(
+            JSON.stringify({
+              total_count: 1,
+              items: [
+                {
+                  number: 100,
+                  title: "Test PR",
+                  html_url: "https://github.com/owner/repo/pull/100",
+                  created_at: "2026-10-01T00:00:00Z",
+                  updated_at: "2026-10-02T00:00:00Z",
+                  labels: [{ name: "New-Package" }],
+                  draft: false,
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        // REST get PR details: REST 側はタイトル "REST Title", ラベル "REST-Label"
+        if (urlStr.includes("/repos/owner/repo/pulls/100/commits")) {
+          return new Response(
+            JSON.stringify([
+              {
+                sha: "restcommit1",
+                commit: {
+                  message: "commit 1",
+                  committer: { date: "2026-10-01T00:00:00Z" },
+                },
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+
+        if (urlStr.includes("/repos/owner/repo/pulls/100")) {
+          return new Response(
+            JSON.stringify({
+              number: 100,
+              title: "REST Title",
+              html_url: "https://github.com/owner/repo/pull/100",
+              state: "open",
+              draft: false,
+              created_at: "2026-10-01T00:00:00Z",
+              updated_at: "2026-10-02T00:00:00Z",
+              labels: [{ name: "REST-Label" }],
+              user: { login: "tester" },
+              author_association: "NONE",
+            }),
+            { status: 200 },
+          );
+        }
+
+        // REST timeline
+        if (urlStr.includes("/repos/owner/repo/issues/100/timeline")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+
+        // GraphQL
+        if (urlStr.includes("/graphql")) {
+          const body = JSON.parse(String(init?.body));
+          const query = String(body.query);
+
+          if (query.includes("CompareRateLimit") || query.includes("GetRateLimit")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  rateLimit: {
+                    limit: 5000,
+                    cost: 1,
+                    remaining: 4995,
+                    resetAt: "2026-10-01T00:00:00Z",
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+
+          if (query.includes("CompareSearch")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  search: {
+                    issueCount: 1,
+                    nodes: [
+                      {
+                        number: 100,
+                        title: "Test PR",
+                        url: "https://github.com/owner/repo/pull/100",
+                        createdAt: "2026-10-01T00:00:00Z",
+                        updatedAt: "2026-10-02T00:00:00Z",
+                        isDraft: false,
+                        mergedAt: null,
+                      },
+                    ],
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+
+          // GraphQL 側はタイトル "GraphQL Title", ラベル "GraphQL-Label"
+          if (query.includes("ComparePullRequest")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  repository: {
+                    pullRequest: {
+                      number: 100,
+                      title: "GraphQL Title",
+                      url: "https://github.com/owner/repo/pull/100",
+                      state: "OPEN",
+                      isDraft: false,
+                      createdAt: "2026-10-01T00:00:00Z",
+                      updatedAt: "2026-10-02T00:00:00Z",
+                      mergedAt: null,
+                      closedAt: null,
+                      author: { login: "tester" },
+                      authorAssociation: "NONE",
+                      labels: { nodes: [{ name: "GraphQL-Label" }] },
+                      commits: {
+                        nodes: [
+                          {
+                            commit: {
+                              oid: "gqlcommit1",
+                              messageHeadline: "commit 1",
+                              committedDate: "2026-10-01T00:00:00Z",
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+
+          if (query.includes("CompareTimeline")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  repository: {
+                    pullRequest: {
+                      timelineItems: {
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                        nodes: [],
+                      },
+                    },
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+        }
+
+        return new Response("Not Found", { status: 404 });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: fakeFetch,
+      });
+
+      const report = await runCompare(
+        {
+          repository: "owner/repo",
+          targetPr: 100,
+        },
+        client,
+      );
+
+      // REST と GraphQL で異なる値が返ったため、差分が検出されること
+      expect(report.prDetail?.diff.match).toBeFalse();
+      expect(report.prDetail?.diff.diffs.some((d) => d.field === "title")).toBeTrue();
+      expect(report.prDetail?.diff.diffs.some((d) => d.field === "labels")).toBeTrue();
+    });
   });
 });
