@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `workers/observe-trigger/`: Cloudflare Workers の Cron Trigger から GitHub Actions ワークフロー（`observe.yml`）を定時起動するトリガー Worker（`winget-observatory-trigger`）を新設（Issue #58）。Web Crypto API（RS256）を用いた GitHub App の JWT 署名、短期間有効な Installation Access Token（`actions: write`）の動的取得（または固定 ID 参照）、`workflow_dispatch` 呼び出し、誤アクセス防止のための 404 レスポンス、および単体テスト・Wrangler 設定・README を配備
+
+### Changed
+
+- `.github/workflows/observe.yml`: GitHub Actions 標準の `schedule`（cron）による遅延や間引きを解消するため、定期実行トリガーを Cloudflare Workers の Cron Trigger（`workers/observe-trigger`）からの `workflow_dispatch` 呼び出しへ移行し、ワークフロー内の `schedule:` 定義を廃止（Issue #58）。多重実行防止のための `concurrency`（`cancel-in-progress: false`）は継続して維持
+- `package.json`: `typecheck` スクリプトをルートおよび `workers/observe-trigger/` の両方を一括検証するよう更新（Issue #58）
+
+### Added
+
 - `src/api/github.ts`, `test/api/github.test.ts`: GitHub GraphQL API クライアントへの指数バックオフ付き自動リトライ実装を追加（Issue #56）。一時的なサーバーエラー（HTTP 502/503/504/429）および fetch の一時的なネットワークエラー（タイムアウト・接続切断・成功応答の本文受信中のストリーム切断等）に対して、指数バックオフ＋ジッター（初回 2,000ms → 4,000ms → 8,000ms + ジッター）で最大 3 回（計 4 回）まで自動リトライするよう改修。HTTP 429 応答時の `Retry-After` ヘッダーを待機時間の下限として尊重し指定期限前の再送を防止。401/403 や GraphQL 構文エラー・JSON パースエラー等は即座にエラーとし、リトライ発生時には標準エラー出力へ警告ログ（ステータスコード・試行回数・待機時間）を出力。単体テストにおいて 502 連続後の成功、上限回数超過での失敗、非リトライ対象ステータスでの即時失敗、Retry-After 下限待機、本文ストリーム切断からのリトライを網羅
 
 ### Fixed

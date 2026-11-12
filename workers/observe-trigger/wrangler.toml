@@ -1,0 +1,13 @@
+name = "winget-observatory-trigger"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+[triggers]
+crons = ["0 */4 * * *"]
+
+[vars]
+GITHUB_OWNER = "scottlz0310"
+GITHUB_REPO = "winget-observatory"
+GITHUB_WORKFLOW_ID = "observe.yml"
+GITHUB_REF = "main"
