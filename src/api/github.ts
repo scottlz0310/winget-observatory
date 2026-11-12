@@ -231,10 +231,51 @@ interface GraphQLTimelineItemsResponse {
   } | null;
 }
 
+/**
+ * 一時エラーとしてリトライ対象とする HTTP ステータスコード。
+ * 429: Too Many Requests（セカンダリレート制限等）
+ * 502: Bad Gateway
+ * 503: Service Unavailable
+ * 504: Gateway Timeout
+ */
+export const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 504]);
+
+export function isRetryableStatusCode(status: number): boolean {
+  return RETRYABLE_STATUS_CODES.has(status);
+}
+
+/**
+ * 指数バックオフ + ジッターの待機時間（ミリ秒）を計算する。
+ * attempt: 1 始まりのリトライ試行回数（1回目リトライ = 1, 2回目 = 2, 3回目 = 3...）
+ */
+export function calculateBackoffDelay(
+  attempt: number,
+  baseDelayMs = 2000,
+  maxJitterMs = 500,
+): number {
+  const exponential = baseDelayMs * 2 ** (attempt - 1);
+  const jitter = maxJitterMs > 0 ? Math.floor(Math.random() * maxJitterMs) : 0;
+  return exponential + jitter;
+}
+
+export interface GraphQLRetryOptions {
+  /** 最大リトライ回数（既定: 3。初回含め計 4 回試行） */
+  maxRetries?: number;
+  /** 初回リトライのベース待機時間（ミリ秒、既定: 2000） */
+  baseDelayMs?: number;
+  /** ジッターの最大幅（ミリ秒、既定: 500） */
+  maxJitterMs?: number;
+  /** 待機関数（既定: setTimeout による Promise） */
+  sleep?: (ms: number) => Promise<void>;
+  /** 警告ログ関数（既定: console.error） */
+  warnLog?: (message: string) => void;
+}
+
 export interface GitHubApiClientOptions {
   token?: string;
   baseUrl?: string;
   fetch?: FetchLike;
+  retry?: GraphQLRetryOptions;
 }
 
 export class GitHubApiError extends Error {
@@ -294,11 +335,26 @@ export class GitHubApiClient {
   private readonly token: string | undefined;
   private readonly baseUrl: string;
   private readonly fetchFn: FetchLike;
+  private readonly maxRetries: number;
+  private readonly baseDelayMs: number;
+  private readonly maxJitterMs: number;
+  private readonly sleepFn: (ms: number) => Promise<void>;
+  private readonly warnLogFn: (message: string) => void;
 
   constructor(options: GitHubApiClientOptions = {}) {
     this.token = options.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? undefined;
     this.baseUrl = options.baseUrl ?? "https://api.github.com";
     this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.maxRetries = options.retry?.maxRetries ?? 3;
+    this.baseDelayMs = options.retry?.baseDelayMs ?? 2000;
+    this.maxJitterMs = options.retry?.maxJitterMs ?? 500;
+    this.sleepFn =
+      options.retry?.sleep ??
+      ((ms: number) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
+    this.warnLogFn = options.retry?.warnLog ?? console.error;
   }
 
   get apiToken(): string | undefined {
@@ -580,6 +636,7 @@ export class GitHubApiClient {
 
   /**
    * GitHub GraphQL API を呼び出し、data フィールドを返す。
+   * 一時的なネットワークエラーや 502/503/504/429 では指数バックオフ付きで自動リトライする。
    *
    * @param query GraphQL クエリ文字列
    * @param variables クエリ変数（省略可）
@@ -599,42 +656,78 @@ export class GitHubApiClient {
       ...this.getHeaders(),
       "Content-Type": "application/json",
     };
+    const body = JSON.stringify({ query, variables });
 
-    const res = await this.fetchFn(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ query, variables }),
-    });
+    let lastError: Error | undefined;
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new GitHubApiError(
-        `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): ${errText}`,
-        res.status,
-      );
+    for (let attempt = 1; attempt <= this.maxRetries + 1; attempt++) {
+      let res: Response;
+      try {
+        res = await this.fetchFn(url, {
+          method: "POST",
+          headers,
+          body,
+        });
+      } catch (err: unknown) {
+        const networkError = err instanceof Error ? err : new Error(String(err));
+        lastError = networkError;
+
+        if (attempt <= this.maxRetries) {
+          const delay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
+          this.warnLogFn(
+            `[GitHub GraphQL] 一時的なネットワークエラーが発生しました (${networkError.message})。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
+          );
+          await this.sleepFn(delay);
+          continue;
+        }
+
+        throw networkError;
+      }
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        const apiError = new GitHubApiError(
+          `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): ${errText}`,
+          res.status,
+        );
+
+        if (isRetryableStatusCode(res.status) && attempt <= this.maxRetries) {
+          lastError = apiError;
+          const delay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
+          this.warnLogFn(
+            `[GitHub GraphQL] 一時エラーが発生しました (status: ${res.status})。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
+          );
+          await this.sleepFn(delay);
+          continue;
+        }
+
+        throw apiError;
+      }
+
+      const json = (await res.json()) as {
+        data?: T;
+        errors?: GraphQLErrorDetail[];
+      };
+
+      if (json.errors && json.errors.length > 0) {
+        const messages = json.errors.map((e) => e.message ?? "Unknown error").join("; ");
+        throw new GitHubGraphQLError(
+          `GitHub GraphQL API からエラーが返されました: ${messages}`,
+          res.status,
+          json.errors,
+        );
+      }
+
+      if (json.data === undefined) {
+        throw new GitHubApiError(
+          "GitHub GraphQL API の応答に data フィールドが含まれていません",
+          res.status,
+        );
+      }
+
+      return json.data;
     }
 
-    const json = (await res.json()) as {
-      data?: T;
-      errors?: GraphQLErrorDetail[];
-    };
-
-    if (json.errors && json.errors.length > 0) {
-      const messages = json.errors.map((e) => e.message ?? "Unknown error").join("; ");
-      throw new GitHubGraphQLError(
-        `GitHub GraphQL API からエラーが返されました: ${messages}`,
-        res.status,
-        json.errors,
-      );
-    }
-
-    if (json.data === undefined) {
-      throw new GitHubApiError(
-        "GitHub GraphQL API の応答に data フィールドが含まれていません",
-        res.status,
-      );
-    }
-
-    return json.data;
+    throw lastError ?? new GitHubApiError("GitHub GraphQL API 呼び出しに失敗しました", 500);
   }
 }

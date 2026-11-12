@@ -4,6 +4,9 @@ bun.lockb
 site/
 coverage/
 
+# Playwright MCP server artifacts
+.playwright-mcp/
+
 # Temporary & backup files
 *.tmp
 *.bak

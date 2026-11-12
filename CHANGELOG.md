@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/api/github.ts`, `test/api/github.test.ts`: GitHub GraphQL API クライアントへの指数バックオフ付き自動リトライ実装を追加（Issue #56）。一時的なサーバーエラー（HTTP 502/503/504/429）および fetch の一時的なネットワークエラー（タイムアウト・接続切断等）に対して、指数バックオフ＋ジッター（初回 2,000ms → 4,000ms → 8,000ms + ジッター）で最大 3 回（計 4 回）まで自動リトライするよう改修。401/403 や GraphQL 構文エラー等は即座にエラーとし、リトライ発生時には標準エラー出力へ警告ログ（ステータスコード・試行回数・待機時間）を出力。単体テストにおいて 502 連続後の成功、上限回数超過での失敗、非リトライ対象ステータスでの即時失敗、ネットワークエラーからのリトライを網羅
+
+### Fixed
+
+- `.github/workflows/observe.yml`: GitHub Actions ワークフローにおいて、`progress` 実行と `explore-depths` 実行をステップ分離し、`progress` 完了直後にサンプルキャッシュ（`data/merged-samples.jsonl` 等）を Dropbox へ即座に書き戻すステップを追加（Issue #56）。さらに後続の Dropbox 保存ステップに `if: always()` を付与し、後続処理の失敗時にもバックフィル済みキャッシュの消失を防ぐよう耐障害性を強化
+
 - `src/models/progress.ts`, `src/domain/progress.ts`, `src/cli/progress.ts`, `scripts/build-pages.ts`, `test/domain/progress.test.ts`, `test/cli/progress.test.ts`, `test/build-pages.test.ts`, `README.md`: マージ実績サンプル窓の拡大および初回提出者コホート向けハイブリッド集計（Phase 5）を導入（Issue #54）。全体実績は直近のキュー消化速度の変化に敏感に追従する 30 日窓（`--lookback-days`、既定 30 日）を維持しつつ、サンプル数が希少な初回提出者コホートは 90 日窓（`--first-timer-lookback-days`、既定 90 日）に拡大して独立集計するハイブリッド構成を実装。マージ済み PR 探索クエリおよびキャッシュ（`merged-samples.jsonl`）の蓄積範囲を `max(lookbackDays, firstTimerLookbackDays)` 日前に拡大し、90 日窓内で複数回登場する author を常連として高精度に除外・判定。取得予算（`fetchBudget`）で保留（deferred）された未計測候補が除外数に誤混入しないよう、実際に条件不成立と判定された候補のみを 30 日窓で厳密に集計するよう修正。`ProgressSnapshot` に `FirstTimerLookbackDays` フィールドを追加し、ダッシュボード（`build-pages.ts`）の「🎯 初回提出者（純粋FIFO）サマリー」カードおよび「🌱 初回提出者コホート実績」カードに集計期間（例:「過去 90 日間・採用 N 件」）を明記
 
 - `src/api/github.ts`, `src/cli/progress.ts`, `scripts/rest-client.ts`, `scripts/compare-rest-graphql.ts`, `test/architecture.test.ts`, `README.md`: GitHub API の GraphQL 一本化に向けた Phase 4（REST 経路の完全削除・GraphQL一本化の完了）を実施（Issue #48）。`src/api/github.ts` から REST 呼び出し（`/search/issues`・`/repos/...`・`/rate_limit`）を完全に撤廃し、`getRateLimit` を GraphQL `rateLimit` クエリのみに一本化。未使用になった REST メソッド（`searchIssuesRest`, `searchIssuesDetailedRest`, `getPullRequestDetailsRest`, `getIssueTimelineRest`）をプロダクションコード（`src/`）から削除し、比較検証用として独立した `scripts/rest-client.ts` へ分離。`src/cli/progress.ts` の `logRateLimit` を GraphQL レート制限枠の表示に一本化。`test/architecture.test.ts` に「`src/` 配下全体で GitHub REST API エンドポイントを直接参照しないこと」を静的解析で保証するアーキテクチャ境界テストを追加。`README.md` に GraphQL 一本化に伴う GitHub API アクセストークン（`GITHUB_TOKEN` / `GH_TOKEN`）の必須要件および未設定時の 401 エラー挙動を明記

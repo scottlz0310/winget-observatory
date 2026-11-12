@@ -49,13 +49,15 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Download latest history data from Dropbox
+        id: download_dropbox
         env:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
           DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
         run: bun run scripts/sync-dropbox.ts --direction download
 
-      - name: Run Winget Observatory Scripts
+      # 1. 進捗メトリクス計測（CSVログ追記 & JSONスナップショット生成 & サンプルキャッシュ蓄積）
+      - name: Run progress CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WINGET_TARGET_PR: ${{ inputs.target_pr || '464302' }}
@@ -64,7 +66,6 @@ jobs:
           echo "Target PR: $WINGET_TARGET_PR"
           echo "Repository: $WINGET_REPOSITORY"
 
-          # 1. 進捗メトリクス計測（CSVログ追記 & JSONスナップショット生成）
           echo "=== Running progress CLI ==="
           bun run src/cli/progress.ts \
             --target-pr "$WINGET_TARGET_PR" \
@@ -73,7 +74,21 @@ jobs:
             --snapshot-path "data/latest-progress.json" \
             --cache-path "data/merged-samples.jsonl"
 
-          # 2. キュー境界探索（JSONL追記 & 最新JSONスナップショット生成）
+      # progress で蓄積されたサンプルキャッシュ・進捗データを即座に Dropbox へ同期保存
+      - name: Save progress cache and metrics to Dropbox
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+        run: bun run scripts/sync-dropbox.ts --direction upload
+
+      # 2. キュー境界探索（JSONL追記 & 最新JSONスナップショット生成）
+      - name: Run explore-depths CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINGET_TARGET_PR: ${{ inputs.target_pr || '464302' }}
+          WINGET_REPOSITORY: ${{ inputs.repository || 'microsoft/winget-pkgs' }}
+        run: |
           echo "=== Running explore-depths CLI ==="
           bun run src/cli/explore-depths.ts \
             --target-pr "$WINGET_TARGET_PR" \
@@ -81,7 +96,10 @@ jobs:
             --history-path "data/depths-history.jsonl" \
             --output-path "data/latest-depths.json"
 
+      # explore-depths で更新された境界探索データも含め Dropbox へ保存。
+      # explore-depths が失敗した場合でも、ダウンロード済み／更新済みのキャッシュ・メトリクスを失わないよう always() で保証する。
       - name: Save updated metrics to Dropbox
+        if: always() && steps.download_dropbox.outcome == 'success'
         env:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}

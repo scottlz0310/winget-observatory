@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  calculateBackoffDelay,
   GitHubApiClient,
   GitHubApiError,
   GitHubGraphQLError,
   isPrNotFoundGraphQLError,
+  isRetryableStatusCode,
   parseRepository,
 } from "../../src/api/github";
 
@@ -864,14 +866,72 @@ describe("API: GitHubApiClient", () => {
       }
     });
 
-    test("HTTP エラー発生時にステータス付き GitHubApiError をスローする", async () => {
+    test("502 連続後にリトライして成功し警告ログを出力する", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
       const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts < 3) {
+          return new Response("Bad Gateway", { status: 502 });
+        }
+        return new Response(JSON.stringify({ data: { test: "success" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 10,
+          maxJitterMs: 5,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      const result = await client.graphql<{ test: string }>("query { test }");
+      expect(result).toEqual({ test: "success" });
+      expect(attempts).toBe(3);
+      expect(sleepDelays.length).toBe(2);
+      expect(warnLogs.length).toBe(2);
+      expect(warnLogs[0]).toContain("status: 502");
+      expect(warnLogs[0]).toContain("リトライ 1/3");
+      expect(warnLogs[1]).toContain("status: 502");
+      expect(warnLogs[1]).toContain("リトライ 2/3");
+    });
+
+    test("502 が連続してリトライ上限（最大3回、計4回試行）を超過した場合はエラーをスローする", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
         return new Response("Bad Gateway", { status: 502 });
       };
 
       const client = new GitHubApiClient({
         token: "dummy-token",
         fetch: mockFetch,
+        retry: {
+          maxRetries: 3,
+          baseDelayMs: 10,
+          maxJitterMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
       });
 
       try {
@@ -883,6 +943,156 @@ describe("API: GitHubApiClient", () => {
         expect((err as GitHubApiError).message).toContain("502");
         expect((err as GitHubApiError).message).toContain("Bad Gateway");
       }
+
+      expect(attempts).toBe(4);
+      expect(sleepDelays).toEqual([10, 20, 40]);
+      expect(warnLogs.length).toBe(3);
+      expect(warnLogs[0]).toContain("リトライ 1/3");
+      expect(warnLogs[1]).toContain("リトライ 2/3");
+      expect(warnLogs[2]).toContain("リトライ 3/3");
+    });
+
+    test.each([
+      [400, "Bad Request"],
+      [401, "Unauthorized"],
+      [403, "Forbidden"],
+      [404, "Not Found"],
+      [500, "Internal Server Error"],
+    ])(
+      "非リトライ対象ステータス (%i) はリトライせず即座にエラーをスローする",
+      async (status, statusText) => {
+        let attempts = 0;
+        const sleepDelays: number[] = [];
+        const warnLogs: string[] = [];
+
+        const mockFetch = async (): Promise<Response> => {
+          attempts++;
+          return new Response(statusText, { status });
+        };
+
+        const client = new GitHubApiClient({
+          token: "dummy-token",
+          fetch: mockFetch,
+          retry: {
+            baseDelayMs: 10,
+            sleep: async (ms) => {
+              sleepDelays.push(ms);
+            },
+            warnLog: (msg) => {
+              warnLogs.push(msg);
+            },
+          },
+        });
+
+        try {
+          await client.graphql("query { test }");
+          expect().fail("例外がスローされるべき");
+        } catch (err: unknown) {
+          expect(err).toBeInstanceOf(GitHubApiError);
+          expect((err as GitHubApiError).status).toBe(status);
+          expect((err as GitHubApiError).message).toContain(String(status));
+        }
+
+        expect(attempts).toBe(1);
+        expect(sleepDelays.length).toBe(0);
+        expect(warnLogs.length).toBe(0);
+      },
+    );
+
+    test("ネットワークエラー発生時にリトライして成功する", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts === 1) {
+          throw new Error("connect ECONNRESET");
+        }
+        return new Response(JSON.stringify({ data: { result: "ok" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 5,
+          maxJitterMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      const res = await client.graphql<{ result: string }>("query { result }");
+      expect(res).toEqual({ result: "ok" });
+      expect(attempts).toBe(2);
+      expect(sleepDelays).toEqual([5]);
+      expect(warnLogs.length).toBe(1);
+      expect(warnLogs[0]).toContain("connect ECONNRESET");
+      expect(warnLogs[0]).toContain("リトライ 1/3");
+    });
+
+    test("ネットワークエラーが継続して上限超過した場合は最後のエラーをスローする", async () => {
+      let attempts = 0;
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        throw new Error("connect ETIMEDOUT");
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 5,
+          maxJitterMs: 0,
+          sleep: async () => {},
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      await expect(client.graphql("query { test }")).rejects.toThrow("connect ETIMEDOUT");
+      expect(attempts).toBe(4);
+      expect(warnLogs.length).toBe(3);
+    });
+
+    test("GraphQL errors はリトライせず即座にエラーとする", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        return new Response(
+          JSON.stringify({
+            errors: [{ message: "Field 'invalid' doesn't exist on type 'Query'" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+        },
+      });
+
+      await expect(client.graphql("query { invalid }")).rejects.toThrow(GitHubGraphQLError);
+      expect(attempts).toBe(1);
+      expect(sleepDelays.length).toBe(0);
     });
 
     test("GraphQL errors が返された場合にメッセージ付き GitHubApiError をスローする", async () => {
@@ -1003,6 +1213,36 @@ describe("API: GitHubApiClient", () => {
     test("エラー配列が空または一般エラーの場合は false を返す", () => {
       expect(isPrNotFoundGraphQLError(new GitHubGraphQLError("empty", 200, []))).toBe(false);
       expect(isPrNotFoundGraphQLError(new Error("regular error"))).toBe(false);
+    });
+  });
+
+  describe("isRetryableStatusCode", () => {
+    test.each([429, 502, 503, 504])("リトライ対象ステータス %i は true を返す", (status) => {
+      expect(isRetryableStatusCode(status)).toBe(true);
+    });
+
+    test.each([200, 201, 400, 401, 403, 404, 422, 500])(
+      "非リトライ対象ステータス %i は false を返す",
+      (status) => {
+        expect(isRetryableStatusCode(status)).toBe(false);
+      },
+    );
+  });
+
+  describe("calculateBackoffDelay", () => {
+    test("ジッター 0 の場合、指数バックオフで 2000, 4000, 8000ms を返す", () => {
+      expect(calculateBackoffDelay(1, 2000, 0)).toBe(2000);
+      expect(calculateBackoffDelay(2, 2000, 0)).toBe(4000);
+      expect(calculateBackoffDelay(3, 2000, 0)).toBe(8000);
+    });
+
+    test("ジッターがある場合、ベース待機時間以上かつベース待機時間 + maxJitterMs 未満の値を返す", () => {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const base = 2000 * 2 ** (attempt - 1);
+        const delay = calculateBackoffDelay(attempt, 2000, 500);
+        expect(delay).toBeGreaterThanOrEqual(base);
+        expect(delay).toBeLessThan(base + 500);
+      }
     });
   });
 });
