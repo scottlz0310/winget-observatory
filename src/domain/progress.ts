@@ -427,6 +427,8 @@ export function createProgressSnapshot(params: {
   firstTimerStats?: ProgressStatsSummary | null;
   /** 初回提出者コホートの採用サンプル件数（任意） */
   firstTimerSampleCount?: number;
+  /** 初回提出者コホートの集計窓（日。任意） */
+  firstTimerLookbackDays?: number;
 }): ProgressSnapshot {
   const {
     now,
@@ -453,6 +455,7 @@ export function createProgressSnapshot(params: {
     targetReadyAt,
     firstTimerStats,
     firstTimerSampleCount,
+    firstTimerLookbackDays,
   } = params;
 
   return {
@@ -482,6 +485,7 @@ export function createProgressSnapshot(params: {
     TurnMaxDays: stats ? stats.turn.max : null,
     ReadyMaxDays: stats ? stats.ready.max : null,
     LookbackDays: lookbackDays,
+    FirstTimerLookbackDays: firstTimerLookbackDays ?? lookbackDays,
     SampleCount: stats ? stats.sampleCount : 0,
     SkippedCount: skippedCount,
     Rivals: rivals.map((r) => ({

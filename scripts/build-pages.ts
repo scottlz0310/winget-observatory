@@ -190,6 +190,7 @@ function renderFirstTimerHeroSummary(
   const p50 = progress?.FirstTimerMedianDays;
   const p75 = progress?.FirstTimerP75Days;
   const sampleCount = progress?.FirstTimerSampleCount ?? 0;
+  const firstTimerDays = progress?.FirstTimerLookbackDays ?? progress?.LookbackDays ?? 90;
 
   // 基準 PR の起票時刻
   const createdRaw = depths?.TargetPr?.CreatedAt || depths?.TargetPr?.CreatedAtJst;
@@ -262,7 +263,7 @@ function renderFirstTimerHeroSummary(
         <div class="card-title" style="color: var(--success); font-weight: 700; font-size: 1.05rem; margin-bottom: 0;">
           🎯 初回提出者（純粋FIFO）サマリー
         </div>
-        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">純粋FIFO待機列 準拠</span>
+        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間の純粋FIFO待機列 準拠</span>
       </div>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 0.5rem;">
         <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
@@ -273,7 +274,7 @@ function renderFirstTimerHeroSummary(
         <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
           <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">予想マージ日 (P75 75%点)</div>
           <div style="font-size: 1.25rem; font-weight: 700;">${escapeHtml(p75DateStr)} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">${p75EtaStr}</span></div>
-          <div class="card-subtext">通算実績: <strong>${p75 ?? "-"}</strong> 日（サンプル ${sampleCount} 件）</div>
+          <div class="card-subtext">通算実績: <strong>${p75 ?? "-"}</strong> 日（過去 ${firstTimerDays} 日間 / サンプル ${sampleCount} 件）</div>
         </div>
         <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
           <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">追い越し実態の分離内訳</div>
@@ -323,11 +324,12 @@ function renderFirstTimerCohortBlock(progress: LatestProgress | null): string {
     return "";
   }
   const count = progress.FirstTimerSampleCount ?? 0;
+  const firstTimerDays = progress.FirstTimerLookbackDays ?? progress.LookbackDays ?? 90;
   return `
     <div class="card" style="border-left: 5px solid var(--success); margin-bottom: 1.5rem; background: var(--card-bg);">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
         <div class="card-title" style="font-size: 1rem; font-weight: 700; color: var(--success); margin-bottom: 0;">🌱 初回提出者コホート実績（純粋FIFO待機列）</div>
-        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">採用 ${count} 件</span>
+        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間・採用 ${count} 件</span>
       </div>
       <p class="section-note" style="margin-bottom: 0.75rem;">
         常連の大量まとめマージや特急レーンを除外した「初回提出者（1コミット・累計マージ1件）」の通算所要日数です。ノイズがないため、所要日数が非常に狭いレンジ（約36〜39日）に収束します。
