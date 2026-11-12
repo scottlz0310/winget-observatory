@@ -57,6 +57,8 @@ export function formatDepthsRow(item: GitHubSearchItem): DepthsRow {
     タイトル: truncateTitle(item.title, 45),
     Title: item.title,
     Url: item.html_url,
+    Author: item.author,
+    AuthorAssociation: item.author_association,
   };
 }
 

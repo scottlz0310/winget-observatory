@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDashboard } from "../scripts/build-pages";
+import type { GitHubApiClient } from "../src/api/github";
+import { runExploreDepths } from "../src/cli/explore-depths";
 import { calculateProgressStats, createProgressSnapshot } from "../src/domain/progress";
 
 describe("buildDashboard", () => {
@@ -784,7 +786,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain("残り約 4.4 日");
       expect(html).toContain("後発マージ計 56 件");
       expect(html).toContain("常連・特急: <strong>56</strong> 件 / 初回: <strong>0</strong> 件");
-      expect(html).toContain("✨ 初回提出者による追い越し 0 件（完全な作成順で進行中）");
+      expect(html).toContain("✨ 採用サンプル内で確定した初回提出者の追い越し: 0 件");
 
       // 2. 統合チャート（4系列・2軸）
       expect(html).toContain('aria-label="待ち件数と底の遅れの推移（統合時系列チャート）"');
@@ -814,5 +816,124 @@ describe("buildDashboard: 過去実績との比較", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("runExploreDepths で探索された実際の StaleBottom データから、CONTRIBUTOR 行に常連除外バッジが描画される", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-explore-badge-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    const outputPath = join(dataDir, "latest-depths.json");
+    const historyPath = join(dataDir, "depths-history.jsonl");
+
+    const mockClient = {
+      getPullRequest: async () => ({
+        number: 123456,
+        title: "Target",
+        url: "https://github.com/microsoft/winget-pkgs/pull/123456",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-01T00:00:00Z",
+      }),
+      searchIssues: async () => [
+        {
+          number: 550001,
+          title: "PR by Frequent Contributor",
+          html_url: "https://github.com/microsoft/winget-pkgs/pull/550001",
+          created_at: "2026-09-10T00:00:00Z",
+          updated_at: "2026-09-10T00:00:00Z",
+          author: "frequent-contributor",
+          author_association: "CONTRIBUTOR",
+        },
+      ],
+      graphql: async () => ({
+        search: {
+          nodes: [],
+        },
+      }),
+    } as unknown as GitHubApiClient;
+
+    await runExploreDepths(
+      {
+        targetPr: 123456,
+        repository: "microsoft/winget-pkgs",
+        outputPath,
+        historyPath,
+        noTargetPr: false,
+        noHistory: false,
+        asJson: true,
+      },
+      mockClient,
+      () => {},
+    );
+
+    try {
+      const { htmlPath } = buildDashboard({ dataDir, outputDir });
+      const html = readFileSync(htmlPath, "utf-8");
+      // Search API で取得された CONTRIBUTOR の行に「常連除外」バッジが付与されていること
+      expect(html).toContain("550001");
+      expect(html).toContain("常連除外");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("renderFirstTimerHeroSummary: 未観測・旧形式・未判定ありのフォールバックが安全に処理される", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-summary-fallback-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    // ケース 1: Comparison が存在しない（未観測）
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({ TargetPr: 123456 }),
+      "utf-8",
+    );
+    let html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+    expect(html).toContain("追い越しの観測データなし");
+    expect(html).not.toContain("完全な作成順で進行中");
+
+    // ケース 2: 旧形式スナップショット（LaterCreated のみあり、コホート別内訳なし）
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        TargetPr: 123456,
+        Comparison: {
+          LaterCreated: 15,
+          EarlierCreated: 30,
+        },
+      }),
+      "utf-8",
+    );
+    html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+    expect(html).toContain("後発マージ計 15 件");
+    expect(html).toContain("初回/常連の内訳は未分類（旧データ）");
+    expect(html).not.toContain("常連・特急: <strong>15</strong> 件"); // 勝手に常連に計上しない
+    expect(html).not.toContain("完全な作成順で進行中");
+
+    // ケース 3: 未判定あり（FirstTimerLaterCreated: 0, UnknownLaterCreated: 7）
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        TargetPr: 123456,
+        Comparison: {
+          LaterCreated: 20,
+          EarlierCreated: 30,
+          FirstTimerLaterCreated: 0,
+          RepeatOrExpressLaterCreated: 13,
+          UnknownLaterCreated: 7,
+        },
+      }),
+      "utf-8",
+    );
+    html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+    expect(html).toContain(
+      "常連・特急: <strong>13</strong> 件 / 初回: <strong>0</strong> 件 / 未判定: <strong>7</strong> 件",
+    );
+    expect(html).toContain("採用サンプル内で確定した初回追い越し 0 件（未判定 7 件）");
+    expect(html).not.toContain("完全な作成順で進行中");
+
+    rmSync(tempDir, { recursive: true, force: true });
   });
 });

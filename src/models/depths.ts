@@ -7,6 +7,8 @@ export interface GitHubSearchItem {
   html_url: string;
   created_at: string;
   updated_at: string;
+  author?: string;
+  author_association?: string;
 }
 
 /**

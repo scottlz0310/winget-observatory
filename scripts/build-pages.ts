@@ -220,15 +220,41 @@ function renderFirstTimerHeroSummary(
   }
 
   const c = progress?.Comparison;
-  const firstTimerOvertake = c?.FirstTimerLaterCreated ?? 0;
-  const repeatOvertake = c?.RepeatOrExpressLaterCreated ?? c?.LaterCreated ?? 0;
-  const unknownOvertake = c?.UnknownLaterCreated ?? 0;
-  const totalOvertake = c?.LaterCreated ?? firstTimerOvertake + repeatOvertake;
+  const hasCohortBreakdown =
+    c?.FirstTimerLaterCreated !== undefined && c?.RepeatOrExpressLaterCreated !== undefined;
 
-  const overtakeNote =
-    firstTimerOvertake === 0
-      ? `<span style="color: var(--success); font-weight: 600;">✨ 初回提出者による追い越し 0 件（完全な作成順で進行中）</span>`
-      : `<span>初回提出者による追い越し ${firstTimerOvertake} 件</span>`;
+  let overtakeHeadline = "-";
+  let overtakeBreakdownHtml = "";
+  let overtakeNoteHtml = "";
+
+  if (!c || c.LaterCreated === undefined) {
+    overtakeHeadline = `<div style="font-size: 1.15rem; color: var(--text-muted);">-</div>`;
+    overtakeBreakdownHtml = `<div class="card-subtext" style="color: var(--text-muted);">追い越しの観測データなし</div>`;
+  } else if (!hasCohortBreakdown) {
+    // 旧形式スナップショット（コホート別内訳なし）
+    overtakeHeadline = `<div style="font-size: 1.15rem; font-weight: 700;">後発マージ計 ${c.LaterCreated} 件</div>`;
+    overtakeBreakdownHtml = `<div class="card-subtext" style="color: var(--text-muted);">初回/常連の内訳は未分類（旧データ）</div>`;
+    overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">※ 次回の観測から初回提出者と常連が分離されます</div>`;
+  } else {
+    // コホート別内訳あり
+    const firstTimerOvertake = c.FirstTimerLaterCreated ?? 0;
+    const repeatOvertake = c.RepeatOrExpressLaterCreated ?? 0;
+    const unknownOvertake = c.UnknownLaterCreated ?? 0;
+    const totalOvertake = c.LaterCreated;
+
+    overtakeHeadline = `<div style="font-size: 1.15rem; font-weight: 700;">後発マージ計 ${totalOvertake} 件</div>`;
+    const unknownDetail =
+      unknownOvertake > 0 ? ` / 未判定: <strong>${unknownOvertake}</strong> 件` : "";
+    overtakeBreakdownHtml = `<div class="card-subtext" style="margin-top: 0.2rem;">常連・特急: <strong>${repeatOvertake}</strong> 件 / 初回: <strong>${firstTimerOvertake}</strong> 件${unknownDetail}</div>`;
+
+    if (firstTimerOvertake === 0 && unknownOvertake === 0) {
+      overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--success); font-weight: 600; margin-top: 0.25rem;">✨ 採用サンプル内で確定した初回提出者の追い越し: 0 件</div>`;
+    } else if (firstTimerOvertake === 0 && unknownOvertake > 0) {
+      overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">採用サンプル内で確定した初回追い越し 0 件（未判定 ${unknownOvertake} 件）</div>`;
+    } else {
+      overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--warning); margin-top: 0.25rem;">採用サンプル内で確定した初回追い越し ${firstTimerOvertake} 件</div>`;
+    }
+  }
 
   return `
     <section class="card first-timer-hero" style="border: 2px solid var(--success); margin-bottom: 1.5rem; background: linear-gradient(to bottom right, var(--card-bg), rgba(22, 163, 74, 0.04));">
@@ -251,11 +277,9 @@ function renderFirstTimerHeroSummary(
         </div>
         <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
           <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">追い越し実態の分離内訳</div>
-          <div style="font-size: 1.15rem; font-weight: 700;">後発マージ計 ${totalOvertake} 件</div>
-          <div class="card-subtext" style="margin-top: 0.2rem;">
-            常連・特急: <strong>${repeatOvertake}</strong> 件 / 初回: <strong>${firstTimerOvertake}</strong> 件${unknownOvertake > 0 ? ` / 未判定: ${unknownOvertake} 件` : ""}
-          </div>
-          <div style="font-size: 0.75rem; margin-top: 0.25rem;">${overtakeNote}</div>
+          ${overtakeHeadline}
+          ${overtakeBreakdownHtml}
+          ${overtakeNoteHtml}
         </div>
       </div>
       <div class="card-subtext" style="margin-top: 0.5rem;">
