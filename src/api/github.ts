@@ -381,4 +381,63 @@ export class GitHubApiClient {
 
     return allEvents;
   }
+
+  /**
+   * GitHub GraphQL API を呼び出し、data フィールドを返す。
+   *
+   * @param query GraphQL クエリ文字列
+   * @param variables クエリ変数（省略可）
+   * @returns レスポンスの data フィールド
+   * @throws {GitHubApiError} トークン未設定、HTTPエラー、GraphQL errors、または data 欠落の場合
+   */
+  async graphql<T = unknown>(query: string, variables?: Record<string, unknown>): Promise<T> {
+    if (!this.token) {
+      throw new GitHubApiError(
+        "GitHub GraphQL API の呼び出しにはトークン (GITHUB_TOKEN または GH_TOKEN) が必要です",
+        401,
+      );
+    }
+
+    const url = `${this.baseUrl}/graphql`;
+    const headers = {
+      ...this.getHeaders(),
+      "Content-Type": "application/json",
+    };
+
+    const res = await this.fetchFn(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query, variables }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new GitHubApiError(
+        `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): ${errText}`,
+        res.status,
+      );
+    }
+
+    const json = (await res.json()) as {
+      data?: T;
+      errors?: Array<{ message?: string }>;
+    };
+
+    if (json.errors && json.errors.length > 0) {
+      const messages = json.errors.map((e) => e.message ?? "Unknown error").join("; ");
+      throw new GitHubApiError(
+        `GitHub GraphQL API からエラーが返されました: ${messages}`,
+        res.status,
+      );
+    }
+
+    if (json.data === undefined) {
+      throw new GitHubApiError(
+        "GitHub GraphQL API の応答に data フィールドが含まれていません",
+        res.status,
+      );
+    }
+
+    return json.data;
+  }
 }
