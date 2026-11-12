@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `src/cli/explore-depths.ts`: 初回提出者の底（First-Timer Bottom）の GraphQL クエリ走査において、50件固定取得による候補取りこぼしを防ぐためページネーション（`pageInfo`）を導入し、採用件数（10件）または走査完了まで走査するよう修正。また GraphQL 通信・認証エラーの握りつぶしを撤廃し、コンテキスト付き例外を伝播させて不完全なデータの保存を防止
+- `src/cli/explore-depths.ts`: 初回提出者の底（First-Timer Bottom）の GraphQL クエリ走査において、固定件数による候補取りこぼしを防ぐためページネーション（`pageInfo`）を導入し、採用件数（10件）または検索結果の終端まで走査するよう修正。走査上限に達して未走査の PR が残る場合は候補なしと誤認させず例外で中断し、GraphQL 通信・認証エラーの握りつぶしも撤廃して不完全なデータの保存を防止
 - `src/domain/dashboard.ts`, `scripts/build-pages.ts`: ダッシュボードの履歴処理を `selectComparableHistory` に切り出して是正（Issue #18）。基準 PR が異なる行、待ち件数の算出基準（`QueueBasis`）が現行と異なる旧定義の行を速度・前回比・推移表から除外し、数値が空欄の行を `0` 件として扱って速度や ETA を歪めていた問題を解消。ラベル表記も「実質待ち件数（更新順の順位）」「作成順の累積」に修正
 - `scripts/build-pages.ts`: 進捗・境界スナップショットおよび履歴 CSV の読み込み失敗を `console.warn` で握りつぶして空のダッシュボードを公開していた問題を修正し、ファイルパス付きで中断（exit 1）するよう変更（Issue #18）
 - `src/cli/explore-depths.ts`: 基準 PR の取得失敗時に基準 PR 無しのスナップショットを履歴 JSONL へ追記して続行していた問題を修正し、中断するよう変更。エントリポイントの引数エラーも他 CLI と同じ書式で報告（Issue #18）

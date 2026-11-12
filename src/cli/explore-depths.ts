@@ -27,11 +27,11 @@ import {
 /** 遭難の底（更新が最も古い健康な PR）として取得・表示する件数 */
 export const STALE_BOTTOM_LIMIT = 10;
 
-/** 初回提出者の底を走査する際の 1 ページあたりの取得件数 */
-export const FIRST_TIMER_PAGE_SIZE = 50;
+/** 初回提出者の底を走査する際の 1 ページあたりの取得件数（GraphQL search の上限値） */
+export const FIRST_TIMER_PAGE_SIZE = 100;
 
-/** 初回提出者の底を走査する際の最大走査ノード数（先頭 200 件まで探索） */
-export const FIRST_TIMER_MAX_NODES = 200;
+/** 初回提出者の底を走査する際の探索安全上限（終端に達する前の過剰走査を防止するガード） */
+export const FIRST_TIMER_MAX_NODES = 1000;
 
 export const FIRST_TIMER_GRAPHQL_QUERY = `query($query: String!, $first: Int!, $after: String) {
   search(query: $query, type: ISSUE, first: $first, after: $after) {
@@ -91,7 +91,13 @@ export async function fetchFirstTimerBottom(
   let traversedCount = 0;
   const collectedRows: DepthsRow[] = [];
 
-  while (hasNext && collectedRows.length < limit && traversedCount < maxTraverseNodes) {
+  while (hasNext && collectedRows.length < limit) {
+    if (traversedCount >= maxTraverseNodes) {
+      throw new Error(
+        `初回提出者の底の探索上限 (${maxTraverseNodes}件) に達しましたが、未走査の PR が残っています (採用件数: ${collectedRows.length}/${limit}件)。不完全な結果を避けるため中断します。`,
+      );
+    }
+
     const fetchCount = Math.min(FIRST_TIMER_PAGE_SIZE, maxTraverseNodes - traversedCount);
     try {
       const gqlRes: GraphQLSearchFirstTimerResponse =

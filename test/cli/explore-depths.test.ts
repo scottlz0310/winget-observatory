@@ -351,6 +351,111 @@ describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）�
     expect(results[0].Author).toBe("first-timer-0");
   });
 
+  test("先頭200件が CONTRIBUTOR で201〜210件目に初回提出者がいる場合、200件境界を越えて走査して取得する", async () => {
+    // 210件モック: 1〜100件目 CONTRIBUTOR, 101〜200件目 CONTRIBUTOR, 201〜210件目 NONE
+    const page1Nodes: GraphQLPrNode[] = Array.from({ length: 100 }, (_, i) =>
+      createMockNode(400000 + i, `contributor-p1-${i}`, "CONTRIBUTOR"),
+    );
+    const page2Nodes: GraphQLPrNode[] = Array.from({ length: 100 }, (_, i) =>
+      createMockNode(400100 + i, `contributor-p2-${i}`, "CONTRIBUTOR"),
+    );
+    const page3Nodes: GraphQLPrNode[] = Array.from({ length: 10 }, (_, i) =>
+      createMockNode(400200 + i, `first-timer-${i}`, "NONE"),
+    );
+
+    const calls: { query: string; variables: Record<string, unknown> }[] = [];
+    const mockClient = {
+      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
+        calls.push({ query: _query, variables });
+        if (!variables.after) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+              nodes: page1Nodes,
+            },
+          } as unknown as T;
+        }
+        if (variables.after === "cursor-1") {
+          return {
+            search: {
+              pageInfo: { hasNextPage: true, endCursor: "cursor-2" },
+              nodes: page2Nodes,
+            },
+          } as unknown as T;
+        }
+        return {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: "cursor-3" },
+            nodes: page3Nodes,
+          },
+        } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const results = await fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
+
+    // 200件境界を越えて3回目のリクエストが走り、10件取得できたこと
+    expect(calls.length).toBe(3);
+    expect(results.length).toBe(10);
+    expect(results[0].Number).toBe(400200);
+    expect(results[0].Author).toBe("first-timer-0");
+  });
+
+  test("探索上限（maxTraverseNodes）に達したが未走査PRが残っている場合は候補なしと誤認させず例外で中断する", async () => {
+    // 200件上限で全件 CONTRIBUTOR かつ hasNextPage: true の場合
+    const page1Nodes: GraphQLPrNode[] = Array.from({ length: 100 }, (_, i) =>
+      createMockNode(400000 + i, `contributor-p1-${i}`, "CONTRIBUTOR"),
+    );
+    const page2Nodes: GraphQLPrNode[] = Array.from({ length: 100 }, (_, i) =>
+      createMockNode(400100 + i, `contributor-p2-${i}`, "CONTRIBUTOR"),
+    );
+
+    const mockClient = {
+      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
+        if (!variables.after) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+              nodes: page1Nodes,
+            },
+          } as unknown as T;
+        }
+        return {
+          search: {
+            pageInfo: { hasNextPage: true, endCursor: "cursor-2" },
+            nodes: page2Nodes,
+          },
+        } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    await expect(
+      fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 10, 200),
+    ).rejects.toThrow(
+      "初回提出者の底の探索上限 (200件) に達しましたが、未走査の PR が残っています",
+    );
+  });
+
+  test("検索結果の終端（hasNextPage: false）まで走査し終えた場合は候補が0件でも正当な結果として返す", async () => {
+    const pageNodes: GraphQLPrNode[] = Array.from({ length: 50 }, (_, i) =>
+      createMockNode(400000 + i, `contributor-${i}`, "CONTRIBUTOR"),
+    );
+
+    const mockClient = {
+      graphql: async <T>(): Promise<T> => {
+        return {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: "cursor-end" },
+            nodes: pageNodes,
+          },
+        } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const results = await fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
+    expect(results).toEqual([]);
+  });
+
   test("採用件数が limit に達した時点で後続ページの走査を行わずに打ち切る", async () => {
     // 1ページ目にすでに10件以上の初回提出者がいる場合
     const page1Nodes: GraphQLPrNode[] = Array.from({ length: 50 }, (_, i) =>
