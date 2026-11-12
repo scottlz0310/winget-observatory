@@ -34,7 +34,30 @@ export interface TargetPrInfo {
 }
 
 /**
- * 各底（Healthy, Absolute, Stale, Express）の 1 行データ
+ * GraphQL API の PullRequest 検索ノード
+ */
+export interface GraphQLPrNode {
+  number: number;
+  title: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+  author?: {
+    login: string;
+  } | null;
+  authorAssociation: string;
+  commits: {
+    totalCount: number;
+  };
+  labels?: {
+    nodes?: Array<{
+      name: string;
+    }>;
+  } | null;
+}
+
+/**
+ * 各底（Healthy, Absolute, Stale, FirstTimer, Express）の 1 行データ
  */
 export interface DepthsRow {
   PR: string;
@@ -46,6 +69,8 @@ export interface DepthsRow {
   タイトル: string;
   Title: string;
   Url: string;
+  Author?: string;
+  AuthorAssociation?: string;
 }
 
 /**
@@ -58,7 +83,10 @@ export interface DepthsSnapshot {
   TargetPr: TargetPrInfo | null;
   HealthyBottom: DepthsRow[];
   AbsoluteBottom: DepthsRow[];
+  /** 優等生の底（旧称: 遭難の底。健康体の中で更新日時が最も古い PR） */
   StaleBottom: DepthsRow[];
+  /** 初回提出者の底（優等生の底から常連を除外した初回提出者・1コミットの PR） */
+  FirstTimerBottom?: DepthsRow[];
   ExpressLane: DepthsRow[];
 }
 

@@ -58,6 +58,23 @@ describe("CLI: explore-depths", () => {
         searchQueries.push(query);
         return [sampleItem];
       },
+      graphql: async (): Promise<{ search: { nodes: unknown[] } }> => ({
+        search: {
+          nodes: [
+            {
+              number: 450001,
+              title: "First Timer Sample",
+              url: "https://github.com/microsoft/winget-pkgs/pull/450001",
+              createdAt: "2026-10-09T01:00:00Z",
+              updatedAt: "2026-10-09T02:00:00Z",
+              author: { login: "first-timer-user" },
+              authorAssociation: "NONE",
+              commits: { totalCount: 1 },
+              labels: { nodes: [{ name: "New-Package" }] },
+            },
+          ],
+        },
+      }),
     } as unknown as GitHubApiClient;
 
     try {
@@ -81,6 +98,8 @@ describe("CLI: explore-depths", () => {
       expect(snapshot.HealthyBottom.length).toBe(1);
       expect(snapshot.AbsoluteBottom.length).toBe(1);
       expect(snapshot.StaleBottom.length).toBe(1);
+      expect(snapshot.FirstTimerBottom?.length).toBe(1);
+      expect(snapshot.FirstTimerBottom?.[0].Author).toBe("first-timer-user");
       expect(snapshot.ExpressLane.length).toBe(1);
 
       // 4 つのクエリが発行されたこと（Healthy, Absolute, Stale, Express）

@@ -1,5 +1,5 @@
 /**
- * 遭難の底の推移から基準 PR のマージ時期を予想するモデル。
+ * 優等生の底の推移から基準 PR のマージ時期を予想するモデル。
  * 外部 I/O を行わない純粋関数群であり、src/models の型定義のみに依存する。
  */
 
@@ -43,8 +43,8 @@ export function parseDepthsHistory(text: string): DepthsSnapshot[] {
 }
 
 /**
- * スナップショット列から、遭難の底の先頭（更新が最古の健康な PR）の観測列を時刻昇順で取り出す。
- * 遭難の底が空の観測、日時が不正な観測は除く。
+ * スナップショット列から、優等生の底の先頭（更新が最古の健康な PR）の観測列を時刻昇順で取り出す。
+ * 優等生の底が空の観測、日時が不正な観測は除く。
  */
 export function extractStaleFrontierSamples(snapshots: DepthsSnapshot[]): StaleFrontierSample[] {
   const samples: StaleFrontierSample[] = [];

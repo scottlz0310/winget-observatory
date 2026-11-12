@@ -6,6 +6,7 @@ import {
   buildExpressQuery,
   buildHealthyBaseQuery,
   createDepthsSnapshot,
+  filterFirstTimerCandidates,
   formatDepthsRow,
   formatTargetPrInfo,
 } from "../domain/depths";
@@ -13,6 +14,7 @@ import type {
   DepthsRow,
   DepthsSnapshot,
   ExploreDepthsOptions,
+  GraphQLPrNode,
   TargetPrInfo,
 } from "../models/depths";
 import {
@@ -125,11 +127,54 @@ export async function runExploreDepths(
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
-  // 3. 遭難の底（Stale Bottom）: 指摘なく健康になり、そのまま順番を待っている PR の先頭
+  // 3. 優等生の底（Stale Bottom）: 指摘なく健康になり、そのまま順番を待っている PR の先頭
   const staleItems = await client.searchIssues(healthyBase, "updated", "asc", STALE_BOTTOM_LIMIT);
   const staleBottom = staleItems.map(formatDepthsRow);
 
-  // 4. 特急レーン（Express Lane）
+  // 4. 初回提出者の底（First-Timer Bottom）: 優等生の底から常連を除外した、純粋な初回提出者の先頭
+  let firstTimerBottom: DepthsRow[] | undefined;
+  try {
+    const gqlQuery = `query($query: String!, $first: Int!) {
+      search(query: $query, type: ISSUE, first: $first) {
+        nodes {
+          ... on PullRequest {
+            number
+            title
+            url
+            createdAt
+            updatedAt
+            author {
+              login
+            }
+            authorAssociation
+            commits {
+              totalCount
+            }
+            labels(first: 30) {
+              nodes {
+                name
+              }
+            }
+          }
+        }
+      }
+    }`;
+    const openGqlQuery = `${healthyBase} sort:updated-asc`;
+    const gqlRes = await client.graphql<{
+      search?: {
+        nodes?: GraphQLPrNode[];
+      };
+    }>(gqlQuery, { query: openGqlQuery, first: 50 });
+    const nodes = gqlRes.search?.nodes ?? [];
+    firstTimerBottom = filterFirstTimerCandidates(nodes, STALE_BOTTOM_LIMIT);
+  } catch (err: unknown) {
+    if (!options.asJson) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`  ※ 初回提出者の底の取得をスキップしました: ${msg}`);
+    }
+  }
+
+  // 5. 特急レーン（Express Lane）
   let expressBottom: DepthsRow[] = [];
   if (hasTarget && targetCreatedAtIso) {
     const expressQuery = buildExpressQuery(options.repository, targetCreatedAtIso);
@@ -148,13 +193,24 @@ export async function runExploreDepths(
     printRowTable(absoluteBottom);
     log("");
 
-    log("【3. 遭難の底 (Stale Bottom)】");
-    log("説明: 健康体の中で更新日時(updated)が最も古い、指摘なく順番待ちを続けているPR");
+    log("【3. 優等生の底 (Stale Bottom / Healthy Oldest)】");
+    log(
+      "説明: 健康体の中で更新日時(updated)が最も古い、指摘なく順番待ちを続けているPR (旧称: 遭難の底)",
+    );
     printRowTable(staleBottom);
     log("");
 
+    if (firstTimerBottom) {
+      log("【4. 初回提出者の底 (First-Timer Bottom)】");
+      log(
+        "説明: 優等生の底から常連を除外した、純粋な初回提出者（authorAssociation = NONE × 1コミット）の順番待ち先頭",
+      );
+      printRowTable(firstTimerBottom);
+      log("");
+    }
+
     if (hasTarget && targetInfo) {
-      log("【4. 特急レーン・追い越し (Express Lane)】");
+      log("【5. 特急レーン・追い越し (Express Lane)】");
       log(`説明: あなたのPR作成日(${targetInfo.CreatedAtJst})以降に作成され、すでにマージされたPR`);
       if (expressBottom.length > 0) {
         printRowTable(expressBottom);
@@ -172,6 +228,7 @@ export async function runExploreDepths(
     healthyBottom,
     absoluteBottom,
     staleBottom,
+    firstTimerBottom,
     expressLane: expressBottom,
   });
 

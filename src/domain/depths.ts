@@ -3,10 +3,11 @@ import type {
   DepthsSnapshot,
   GitHubPrView,
   GitHubSearchItem,
+  GraphQLPrNode,
   TargetPrInfo,
 } from "../models/depths";
 
-import { buildHealthyQueryParts } from "./progress";
+import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./progress";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -95,6 +96,50 @@ export function buildExpressQuery(repository: string, targetCreatedIso: string):
 }
 
 /**
+ * GraphQL 検索ノードを DepthsRow 出力形式へ変換する。
+ */
+export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
+  return {
+    PR: `#${node.number}`,
+    Number: node.number,
+    作成日時: formatJstDateTime(node.createdAt, false),
+    更新日時: formatJstDateTime(node.updatedAt, false),
+    CreatedAt: node.createdAt,
+    UpdatedAt: node.updatedAt,
+    タイトル: truncateTitle(node.title, 45),
+    Title: node.title,
+    Url: node.url,
+    Author: node.author?.login,
+    AuthorAssociation: node.authorAssociation,
+  };
+}
+
+/**
+ * GraphQL 検索ノードから「初回提出者（authorAssociation = NONE × 1コミット・除外ラベルなし）」を抽出し、
+ * DepthsRow 形式で返す。
+ */
+export function filterFirstTimerCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
+  const filtered = nodes.filter((node) => {
+    if (!node.author?.login) {
+      return false;
+    }
+    if (node.commits.totalCount !== 1) {
+      return false;
+    }
+    if (node.authorAssociation !== "NONE") {
+      return false;
+    }
+    const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
+    const hasBlockedPattern = labelNames.some((name) =>
+      BLOCKED_PATTERNS.some((pattern) => pattern.test(name)),
+    );
+    return !hasBlockedPattern;
+  });
+
+  return filtered.slice(0, limit).map(formatGraphQLDepthsRow);
+}
+
+/**
  * 各底の行リストとメタデータから DepthsSnapshot を組み立てる。
  */
 export function createDepthsSnapshot(params: {
@@ -104,6 +149,7 @@ export function createDepthsSnapshot(params: {
   healthyBottom: DepthsRow[];
   absoluteBottom: DepthsRow[];
   staleBottom: DepthsRow[];
+  firstTimerBottom?: DepthsRow[];
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
@@ -114,6 +160,7 @@ export function createDepthsSnapshot(params: {
     HealthyBottom: params.healthyBottom,
     AbsoluteBottom: params.absoluteBottom,
     StaleBottom: params.staleBottom,
+    ...(params.firstTimerBottom ? { FirstTimerBottom: params.firstTimerBottom } : {}),
     ExpressLane: params.expressLane,
   };
 }

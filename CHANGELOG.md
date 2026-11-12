@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/cli/explore-depths.ts`, `src/domain/depths.ts`, `src/models/depths.ts`, `scripts/build-pages.ts`: 深度探索において「遭難の底」を「優等生の底」に改名し、新セクション「初回提出者の底（First-Timer Bottom）」を並列追加。GraphQL API を使用して更新順の健康体から常連コントリビューター（`authorAssociation !== NONE` または複数コミット）を除外し、純粋な初回提出者（1コミット・初期健康体）の順番待ち先頭を特定・表示できるように対応
 - `src/api/github.ts`: GitHub GraphQL API クライアントメソッド `graphql<T>(query, variables)` を追加。トークン未設定時の 401 例外、HTTP エラー時のステータス付き例外、GraphQL errors 返却時のメッセージ付き例外、およびレスポンスの data フィールド抽出をサポート
 - `bunfig.toml`: `minimumReleaseAge = 259200`（3 日）を追加。公開から 3 日未満の版を新規に解決しない。lock file maintenance は Renovate の minimumReleaseAge を迂回するため、無人の自動マージに対する防御としてパッケージマネージャ側で止める
 
