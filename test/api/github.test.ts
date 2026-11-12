@@ -474,7 +474,229 @@ describe("API: GitHubApiClient", () => {
     expect(pr.commits[0].messageHeadline).toBe("feat: rest commit headline");
   });
 
-  test("getIssueTimeline はページネーションして全イベントを取得する", async () => {
+  test("getIssueTimeline は GraphQL 経由でページネーションして全イベントを取得する", async () => {
+    let callCount = 0;
+    const requestedCursors: (string | null | undefined)[] = [];
+
+    const mockFetch = async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      callCount++;
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { owner: string; name: string; number: number; after?: string | null };
+      };
+      requestedCursors.push(body.variables.after);
+
+      if (callCount === 1) {
+        expect(body.variables.owner).toBe("test");
+        expect(body.variables.name).toBe("repo");
+        expect(body.variables.number).toBe(300);
+        expect(body.variables.after).toBeNull();
+        return new Response(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  timelineItems: {
+                    pageInfo: {
+                      hasNextPage: true,
+                      endCursor: "cursor-page-1",
+                    },
+                    nodes: [
+                      {
+                        __typename: "LabeledEvent",
+                        createdAt: "2026-11-01T10:00:00Z",
+                        label: { name: "New-Package" },
+                      },
+                      {
+                        __typename: "ConvertToDraftEvent",
+                        createdAt: "2026-11-01T10:30:00Z",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      expect(body.variables.after).toBe("cursor-page-1");
+      return new Response(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                timelineItems: {
+                  pageInfo: {
+                    hasNextPage: false,
+                    endCursor: null,
+                  },
+                  nodes: [
+                    {
+                      __typename: "ReadyForReviewEvent",
+                      createdAt: "2026-11-01T11:00:00Z",
+                    },
+                    {
+                      __typename: "LabeledEvent",
+                      createdAt: "2026-11-01T11:30:00Z",
+                      label: { name: "Validation-Completed" },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const events = await client.getIssueTimeline("test/repo", 300);
+
+    expect(callCount).toBe(2);
+    expect(requestedCursors).toEqual([null, "cursor-page-1"]);
+    expect(events.length).toBe(4);
+    expect(events[0]).toEqual({
+      event: "labeled",
+      created_at: "2026-11-01T10:00:00Z",
+      label: { name: "New-Package" },
+    });
+    expect(events[1]).toEqual({
+      event: "converted_to_draft",
+      created_at: "2026-11-01T10:30:00Z",
+    });
+    expect(events[2]).toEqual({
+      event: "ready_for_review",
+      created_at: "2026-11-01T11:00:00Z",
+    });
+    expect(events[3]).toEqual({
+      event: "labeled",
+      created_at: "2026-11-01T11:30:00Z",
+      label: { name: "Validation-Completed" },
+    });
+  });
+
+  test("getIssueTimeline は maxPages に達したら走査を打ち切る", async () => {
+    let callCount = 0;
+    const mockFetch = async (): Promise<Response> => {
+      callCount++;
+      return new Response(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                timelineItems: {
+                  pageInfo: {
+                    hasNextPage: true,
+                    endCursor: `cursor-${callCount}`,
+                  },
+                  nodes: [
+                    {
+                      __typename: "LabeledEvent",
+                      createdAt: "2026-11-01T10:00:00Z",
+                      label: { name: "Test" },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const events = await client.getIssueTimeline("test/repo", 300, 1);
+
+    expect(callCount).toBe(1);
+    expect(events.length).toBe(1);
+  });
+
+  test("getIssueTimeline は NOT_FOUND GraphQL エラー発生時に 404 GitHubApiError をスローする", async () => {
+    const mockFetch = async (): Promise<Response> => {
+      return new Response(
+        JSON.stringify({
+          data: { repository: null },
+          errors: [
+            {
+              type: "NOT_FOUND",
+              path: ["repository", "pullRequest"],
+              message: "Could not resolve to a PullRequest with the number of 999.",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    try {
+      await client.getIssueTimeline("test/repo", 999);
+      expect().fail("例外が発生するべきです");
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(404);
+      expect((err as GitHubApiError).message).toContain("#999, status 404");
+    }
+  });
+
+  test("getIssueTimeline は pullRequest が null の場合に 404 GitHubApiError をスローする", async () => {
+    const mockFetch = async (): Promise<Response> => {
+      return new Response(
+        JSON.stringify({
+          data: { repository: { pullRequest: null } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    try {
+      await client.getIssueTimeline("test/repo", 999);
+      expect().fail("例外が発生するべきです");
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(404);
+    }
+  });
+
+  test("getIssueTimeline は FORBIDDEN / INTERNAL エラー時に 404 へ変換せず元のエラーを保持する", async () => {
+    const mockFetch = async (): Promise<Response> => {
+      return new Response(
+        JSON.stringify({
+          data: { repository: null },
+          errors: [
+            {
+              type: "FORBIDDEN",
+              path: ["repository", "pullRequest"],
+              message: "Resource not accessible by integration",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    try {
+      await client.getIssueTimeline("test/repo", 300);
+      expect().fail("例外が発生するべきです");
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(GitHubGraphQLError);
+      expect((err as GitHubGraphQLError).status).toBe(200);
+      expect((err as GitHubGraphQLError).message).toContain(
+        "Resource not accessible by integration",
+      );
+    }
+  });
+
+  test("getIssueTimelineRest は REST API を呼び出してページネーションして全イベントを取得する", async () => {
     let callCount = 0;
     const mockFetch = async (): Promise<Response> => {
       callCount++;
@@ -509,12 +731,30 @@ describe("API: GitHubApiClient", () => {
     };
 
     const client = new GitHubApiClient({ fetch: mockFetch });
-    const events = await client.getIssueTimeline("test/repo", 300);
+    const events = await client.getIssueTimelineRest("test/repo", 300);
 
     expect(callCount).toBe(2);
     expect(events.length).toBe(2);
     expect(events[0].label?.name).toBe("New-Package");
     expect(events[1].label?.name).toBe("Validation-Completed");
+  });
+
+  test("getIssueTimelineRest は HTTP エラー時に例外をスローする", async () => {
+    const mockFetch = async (): Promise<Response> => {
+      return new Response("Not Found", { status: 404 });
+    };
+
+    const client = new GitHubApiClient({ fetch: mockFetch });
+    try {
+      await client.getIssueTimelineRest("test/repo", 999);
+      expect().fail("例外が発生するべきです");
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(404);
+      expect((err as GitHubApiError).message).toContain(
+        "GitHub Timeline (REST) 取得に失敗しました",
+      );
+    }
   });
 
   test("getPullRequestDetails は GraphQL エラー発生時に例外をスローする", async () => {

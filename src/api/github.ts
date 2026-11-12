@@ -6,10 +6,15 @@ import type {
 } from "../models/progress";
 import {
   adaptGraphQLRateLimitBucket,
+  adaptGraphQLTimelineItems,
   adaptGraphQLToPrDetail,
   adaptGraphQLToPrView,
 } from "./graphql-adapters";
-import type { GraphQLPullRequestNode, GraphQLRateLimitData } from "./graphql-types";
+import type {
+  GraphQLPullRequestNode,
+  GraphQLRateLimitData,
+  GraphQLTimelineItemNode,
+} from "./graphql-types";
 
 export interface GitHubDetailedSearchItem {
   number: number;
@@ -128,6 +133,65 @@ query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!) {
   }
 }
 `;
+
+export const GET_PULL_REQUEST_TIMELINE_QUERY = `
+query GetPullRequestTimeline($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      timelineItems(
+        first: 100
+        after: $after
+        itemTypes: [
+          LABELED_EVENT
+          UNLABELED_EVENT
+          CONVERT_TO_DRAFT_EVENT
+          READY_FOR_REVIEW_EVENT
+        ]
+      ) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          __typename
+          ... on LabeledEvent {
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on UnlabeledEvent {
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on ConvertToDraftEvent {
+            createdAt
+          }
+          ... on ReadyForReviewEvent {
+            createdAt
+          }
+        }
+      }
+    }
+  }
+}
+`;
+
+interface GraphQLTimelineItemsResponse {
+  repository?: {
+    pullRequest?: {
+      timelineItems?: {
+        pageInfo?: {
+          hasNextPage: boolean;
+          endCursor: string | null;
+        };
+        nodes?: GraphQLTimelineItemNode[];
+      };
+    } | null;
+  } | null;
+}
 
 export interface GitHubApiClientOptions {
   token?: string;
@@ -521,9 +585,67 @@ export class GitHubApiClient {
   }
 
   /**
-   * Issue / PR のタイムラインイベント一覧をページネーションして取得する。
+   * Issue / PR のタイムラインイベント一覧をページネーションして取得する（GraphQL repository.pullRequest.timelineItems 経由）。
+   * 最大 maxPages（既定 10 ページ = 最大 1,000 件）まで自動走査し、
+   * LabeledEvent, UnlabeledEvent, ConvertToDraftEvent, ReadyForReviewEvent を取得して ProgressTimelineEvent[] に変換する。
    */
   async getIssueTimeline(
+    repository: string,
+    issueNumber: number,
+    maxPages = 10,
+  ): Promise<ProgressTimelineEvent[]> {
+    const { owner, name } = parseRepository(repository);
+    const allEvents: ProgressTimelineEvent[] = [];
+    let after: string | null = null;
+    let pageCount = 0;
+
+    try {
+      while (pageCount < maxPages) {
+        pageCount++;
+        const resData: GraphQLTimelineItemsResponse =
+          await this.graphql<GraphQLTimelineItemsResponse>(GET_PULL_REQUEST_TIMELINE_QUERY, {
+            owner,
+            name,
+            number: issueNumber,
+            after,
+          });
+
+        const prNode = resData.repository?.pullRequest;
+        if (!prNode) {
+          throw new GitHubApiError(
+            `GitHub Timeline 取得に失敗しました (#${issueNumber}, status 404): Not Found`,
+            404,
+          );
+        }
+
+        const connection = prNode.timelineItems;
+        if (Array.isArray(connection?.nodes)) {
+          const adapted = adaptGraphQLTimelineItems(connection.nodes);
+          allEvents.push(...adapted);
+        }
+
+        if (!connection?.pageInfo?.hasNextPage || !connection.pageInfo.endCursor) {
+          break;
+        }
+        after = connection.pageInfo.endCursor;
+      }
+
+      return allEvents;
+    } catch (err: unknown) {
+      if (isPrNotFoundGraphQLError(err)) {
+        throw new GitHubApiError(
+          `GitHub Timeline 取得に失敗しました (#${issueNumber}, status 404): Not Found`,
+          404,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * REST API を直接呼び出してタイムラインイベント一覧を取得する（比較検証・移行診断専用）。
+   */
+  async getIssueTimelineRest(
     repository: string,
     issueNumber: number,
     maxPages = 10,
@@ -543,7 +665,7 @@ export class GitHubApiClient {
       if (!res.ok) {
         const errText = await res.text().catch(() => "");
         throw new GitHubApiError(
-          `GitHub Timeline 取得に失敗しました (#${issueNumber}, status ${res.status}): ${errText}`,
+          `GitHub Timeline (REST) 取得に失敗しました (#${issueNumber}, status ${res.status}): ${errText}`,
           res.status,
         );
       }

@@ -307,7 +307,7 @@ export async function runCompare(
           number: comparePrNumber,
         },
       ),
-      client.getIssueTimeline(options.repository, comparePrNumber),
+      client.getIssueTimelineRest(options.repository, comparePrNumber),
       fetchGraphQLTimeline(client, owner, name, comparePrNumber),
     ]);
 
