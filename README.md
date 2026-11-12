@@ -39,7 +39,7 @@ bun run progress --target-pr 464302 --log-path "data/progress-history.csv" --sna
 
 **主なオプション:** `--target-pr` / `--repository`（別名 `--repo`）/ `--lookback-days`（既定 30）/ `--fetch-budget`（既定 100、1 回の実行で新規に取得するマージ済み PR の上限）/ `--fetch-limit`（既定 1000）/ `--log-path` / `--snapshot-path` / `--cache-path`（マージ済みサンプルのキャッシュ。省略時はキャッシュを使わず、取得予算の件数だけで統計を計算）/ `--as-json`（スナップショットを標準出力へ）/ `--no-log`（履歴 CSV **と** スナップショットの保存を行わない）
 
-**マージ済みサンプルのキャッシュ:** マージ済み PR の履歴（起票・コミット・条件成立・マージの時刻）は後から変わらないため、`--cache-path`（定期実行では `data/merged-samples.jsonl`）に計測結果を保存して再利用します。統計は、期間内（`--lookback-days`、既定 30 日）にマージされたキャッシュ全件で計算し、1 回の実行で新たに取得するのは、新しくマージされた PR と、未取得の古い PR を新しい順に `--fetch-budget` 件までです。そのため、API の消費量（サンプル 1 件あたりコア API 約 3 件）は 1 回あたり一定のまま、数日かけて統計の件数が増えていきます。条件不成立で除外した PR も記録し、再取得しません。キャッシュが壊れているときは、統計を歪めないよう中断します。実行の最後に、レート制限の残量（`GITHUB_TOKEN` は 1 時間あたり 1,000 件・リポジトリ単位）を `[RateLimit]` として出力します。
+**マージ済みサンプルのキャッシュ:** マージ済み PR の履歴（起票・コミット・条件成立・マージの時刻）は後から変わらないため、`--cache-path`（定期実行では `data/merged-samples.jsonl`）に計測結果を保存して再利用します。統計は、期間内（`--lookback-days`、既定 30 日）にマージされたキャッシュ全件で計算し、1 回の実行で新たに取得するのは、新しくマージされた PR と、未取得の古い PR を新しい順に `--fetch-budget` 件までです。そのため、API の消費量は 1 回あたり一定のまま、数日かけて統計の件数が増えていきます。条件不成立で除外した PR も記録し、再取得しません。キャッシュが壊れているときは、統計を歪めないよう中断します。実行の最後に、GraphQL レート制限の残量（通常 1 時間あたり 5,000 pt、Actions の `GITHUB_TOKEN` は 1,000 pt）を `[RateLimit]` として出力します。
 
 基準 PR が観測対象外（クローズ済み・Draft・必須ラベル不足・阻害ラベルあり）の場合は、履歴もスナップショットも記録せずに終了します（GitHub Actions 上では warning を出力）。
 
@@ -107,14 +107,22 @@ GitHub Actions ワークフロー（[.github/workflows/observe.yml](.github/work
 
 スクリプトはパラメータ引数のほか、環境変数による既定値の上書きに対応しています。
 
-| 環境変数                     | 説明                        | デフォルト値                |
-| ---------------------------- | --------------------------- | --------------------------- |
-| `WINGET_TARGET_PR`           | 観測対象の PR 番号          | `464302`                    |
-| `WINGET_REPOSITORY`          | 対象リポジトリ              | `microsoft/winget-pkgs`     |
-| `WINGET_LOG_PATH`            | 履歴 CSV 保存先パス         | `data/progress-history.csv` |
-| `WINGET_DEPTHS_HISTORY_PATH` | キュー境界 JSONL 保存先パス | `data/depths-history.jsonl` |
-| `WINGET_SNAPSHOT_PATH`       | 最新進捗 JSON 保存先パス    | `data/latest-progress.json` |
-| `WINGET_DEPTHS_OUTPUT_PATH`  | 最新境界 JSON 保存先パス    | `data/latest-depths.json`   |
+| 環境変数                     | 説明                                    | デフォルト値                |
+| ---------------------------- | --------------------------------------- | --------------------------- |
+| `GITHUB_TOKEN` / `GH_TOKEN`  | GitHub API アクセストークン（**必須**） | なし                        |
+| `WINGET_TARGET_PR`           | 観測対象の PR 番号                      | `464302`                    |
+| `WINGET_REPOSITORY`          | 対象リポジトリ                          | `microsoft/winget-pkgs`     |
+| `WINGET_LOG_PATH`            | 履歴 CSV 保存先パス                     | `data/progress-history.csv` |
+| `WINGET_DEPTHS_HISTORY_PATH` | キュー境界 JSONL 保存先パス             | `data/depths-history.jsonl` |
+| `WINGET_SNAPSHOT_PATH`       | 最新進捗 JSON 保存先パス                | `data/latest-progress.json` |
+| `WINGET_DEPTHS_OUTPUT_PATH`  | 最新境界 JSON 保存先パス                | `data/latest-depths.json`   |
+
+### GitHub API 認証について
+
+本プロジェクトの GitHub API 通信はすべて **GraphQL API に一本化**されています。そのため、ローカル実行および CI のいずれにおいても有効なトークン（`GITHUB_TOKEN` または `GH_TOKEN`）の設定が**必須**です。未設定時は 401 の `GitHubApiError`（「GitHub GraphQL API の呼び出しにはトークンが必要」）が発生して実行が中断されます。
+
+- **必要な権限:** 公開リポジトリの読み取り権限（`public_repo` または fine-grained token の `read:pull_requests`、`read:issues`、`read:discussion` 等）。
+- **CI 環境:** GitHub Actions 上では自動付与される `secrets.GITHUB_TOKEN` がワークフロー（`observe.yml` 等）に設定されています。
 
 ---
 

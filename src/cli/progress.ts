@@ -836,11 +836,7 @@ export async function logRateLimit(
     const rate = await client.getRateLimit();
     const fmt = (name: string, b: { limit: number; remaining: number; resetAt: string | null }) =>
       `${name}: 残り ${b.remaining} / ${b.limit}（使用 ${b.limit - b.remaining}）${b.resetAt ? ` リセット ${b.resetAt}` : ""}`;
-    if (rate.graphql) {
-      log(`[RateLimit] ${fmt("GraphQL", rate.graphql)} / ${fmt("search", rate.search)}`);
-    } else {
-      log(`[RateLimit] ${fmt("core", rate.core)} / ${fmt("search", rate.search)}`);
-    }
+    log(`[RateLimit] ${fmt("GraphQL", rate.graphql)}`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log(`::warning::レート制限の残量を取得できませんでした: ${message}`);
