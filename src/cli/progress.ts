@@ -51,6 +51,8 @@ export interface ProgressCliOptions {
   targetPr: number;
   repository: string;
   lookbackDays: number;
+  /** 初回提出者コホートの集計窓（日。省略時は 90） */
+  firstTimerLookbackDays?: number;
   /** 1 回の実行で新規に取得するマージ済み PR の上限（キャッシュ済みの分は数えない） */
   fetchBudget: number;
   fetchLimit: number;
@@ -66,6 +68,7 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
   let targetPr = resolveDefaultTargetPr();
   let repository = process.env.WINGET_REPOSITORY ?? DEFAULT_REPOSITORY;
   let lookbackDays = 30;
+  let firstTimerLookbackDays = 90;
   let fetchBudget = 100;
   let fetchLimit = 1000;
   let logPath: string | undefined = process.env.WINGET_LOG_PATH;
@@ -82,6 +85,13 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
       repository = readOptionValue(argv, i++, "リポジトリ名 (owner/repo) の値");
     } else if (arg === "--lookback-days") {
       lookbackDays = parseBoundedInt(readOptionValue(argv, i++), "lookback-days", 1, 365);
+    } else if (arg === "--first-timer-lookback-days") {
+      firstTimerLookbackDays = parseBoundedInt(
+        readOptionValue(argv, i++),
+        "first-timer-lookback-days",
+        1,
+        365,
+      );
     } else if (arg === "--fetch-budget") {
       fetchBudget = parseBoundedInt(readOptionValue(argv, i++), "fetch-budget", 1, 100);
     } else if (arg === "--fetch-limit") {
@@ -105,6 +115,7 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
     targetPr,
     repository,
     lookbackDays,
+    firstTimerLookbackDays,
     fetchBudget,
     fetchLimit,
     logPath,
@@ -242,8 +253,10 @@ export async function runProgressCli(
     }
   }
 
-  // 過去マージ済み PR のサンプリング
-  const sinceDate = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
+  // 過去マージ済み PR のサンプリング（全体用と初回提出者用で探索窓が異なるため、大きい方を基準に広めに取得する）
+  const firstTimerLookbackDays = options.firstTimerLookbackDays ?? 90;
+  const maxLookbackDays = Math.max(options.lookbackDays, firstTimerLookbackDays);
+  const sinceDate = new Date(now.getTime() - maxLookbackDays * 24 * 60 * 60 * 1000);
   const sinceIso = sinceDate.toISOString();
 
   const baseParts = buildHealthyQueryParts(options.repository);
@@ -342,6 +355,7 @@ export async function runProgressCli(
   );
 
   const samples: MergedCandidateSample[] = [];
+  const skippedCandidates: { number: number; mergedAt: Date }[] = [];
   let skipped = 0;
 
   const rawCache = options.cachePath ? readSampleCache(options.cachePath) : [];
@@ -365,6 +379,7 @@ export async function runProgressCli(
           samples.push(s);
         } else {
           skipped++;
+          skippedCandidates.push({ number: cand.number, mergedAt: new Date(cached.MergedAt) });
         }
         continue;
       }
@@ -382,6 +397,7 @@ export async function runProgressCli(
         const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
         if (!readyAt) {
           skipped++;
+          skippedCandidates.push({ number: cand.number, mergedAt });
           const skippedEntry: SampleCacheEntry = {
             Type: "skipped",
             Number: cand.number,
@@ -396,6 +412,7 @@ export async function runProgressCli(
         const readyDays = (mergedAt.getTime() - readyAt.getTime()) / (1000 * 60 * 60 * 24);
         if (readyDays < 0) {
           skipped++;
+          skippedCandidates.push({ number: cand.number, mergedAt });
           const skippedEntry: SampleCacheEntry = {
             Type: "skipped",
             Number: cand.number,
@@ -585,8 +602,22 @@ export async function runProgressCli(
     `離脱の累積         : 基準 PR の起票以降に、起票が前の PR がマージ ${mergedOlder} 件・未マージでクローズ ${closedOlder} 件`,
   );
 
-  const stats = calculateProgressStats(samples, skipped);
-  const firstTimerSamples = samples.filter((s) => s.isFirstTimer === true);
+  // 全体実績（既定 30 日窓）と初回提出者コホート（既定 90 日窓）でサンプルを分離して統計計算
+  const overallSince = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
+  const overallSamples = samples.filter(
+    (s) => new Date(s.mergedAt).getTime() >= overallSince.getTime(),
+  );
+  const overallSkipped = skippedCandidates.filter(
+    (s) => s.mergedAt.getTime() >= overallSince.getTime(),
+  ).length;
+
+  const stats = calculateProgressStats(overallSamples, overallSkipped);
+
+  const firstTimerSince = new Date(now.getTime() - firstTimerLookbackDays * 24 * 60 * 60 * 1000);
+  const firstTimerCandidateSamples = samples.filter(
+    (s) => new Date(s.mergedAt).getTime() >= firstTimerSince.getTime(),
+  );
+  const firstTimerSamples = firstTimerCandidateSamples.filter((s) => s.isFirstTimer === true);
   const firstTimerStats =
     firstTimerSamples.length > 0 ? calculateProgressStats(firstTimerSamples) : null;
   const firstTimerSampleCount = firstTimerSamples.length;
@@ -611,13 +642,14 @@ export async function runProgressCli(
     commitCount,
     stats,
     lookbackDays: options.lookbackDays,
-    skippedCount: skipped,
+    skippedCount: overallSkipped,
     rivals,
-    samples,
+    samples: overallSamples,
     targetCreatedAt: created,
     targetReadyAt: targetReady,
     firstTimerStats,
     firstTimerSampleCount,
+    firstTimerLookbackDays,
   });
 
   logRivals(queueInfo.rivals, log);
@@ -738,8 +770,9 @@ function logBenchmark(
     current.totalLifetimeDays,
   );
   if (snapshot.FirstTimerMedianDays !== null && snapshot.FirstTimerMedianDays !== undefined) {
+    const ftDays = snapshot.FirstTimerLookbackDays ?? options.firstTimerLookbackDays;
     log(
-      `   [初回提出者コホート実績 (1コミット・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)] 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
+      `   [初回提出者コホート実績 (過去 ${ftDays} 日間・1コミット・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)] 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
     );
   }
   log("");

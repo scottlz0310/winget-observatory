@@ -37,9 +37,9 @@ bun run progress --target-pr 464302
 bun run progress --target-pr 464302 --log-path "data/progress-history.csv" --snapshot-path "data/latest-progress.json"
 ```
 
-**主なオプション:** `--target-pr` / `--repository`（別名 `--repo`）/ `--lookback-days`（既定 30）/ `--fetch-budget`（既定 100、1 回の実行で新規に取得するマージ済み PR の上限）/ `--fetch-limit`（既定 1000）/ `--log-path` / `--snapshot-path` / `--cache-path`（マージ済みサンプルのキャッシュ。省略時はキャッシュを使わず、取得予算の件数だけで統計を計算）/ `--as-json`（スナップショットを標準出力へ）/ `--no-log`（履歴 CSV **と** スナップショットの保存を行わない）
+**主なオプション:** `--target-pr` / `--repository`（別名 `--repo`）/ `--lookback-days`（全体実績の集計窓、既定 30 日）/ `--first-timer-lookback-days`（初回提出者コホートの集計窓、既定 90 日）/ `--fetch-budget`（既定 100、1 回の実行で新規に取得するマージ済み PR の上限）/ `--fetch-limit`（既定 1000）/ `--log-path` / `--snapshot-path` / `--cache-path`（マージ済みサンプルのキャッシュ。省略時はキャッシュを使わず、取得予算の件数だけで統計を計算）/ `--as-json`（スナップショットを標準出力へ）/ `--no-log`（履歴 CSV **と** スナップショットの保存を行わない）
 
-**マージ済みサンプルのキャッシュ:** マージ済み PR の履歴（起票・コミット・条件成立・マージの時刻）は後から変わらないため、`--cache-path`（定期実行では `data/merged-samples.jsonl`）に計測結果を保存して再利用します。統計は、期間内（`--lookback-days`、既定 30 日）にマージされたキャッシュ全件で計算し、1 回の実行で新たに取得するのは、新しくマージされた PR と、未取得の古い PR を新しい順に `--fetch-budget` 件までです。そのため、API の消費量は 1 回あたり一定のまま、数日かけて統計の件数が増えていきます。条件不成立で除外した PR も記録し、再取得しません。キャッシュが壊れているときは、統計を歪めないよう中断します。実行の最後に、GraphQL レート制限の残量（通常 1 時間あたり 5,000 pt、Actions の `GITHUB_TOKEN` は 1,000 pt）を `[RateLimit]` として出力します。
+**マージ済みサンプルのキャッシュとハイブリッド集計窓:** マージ済み PR の履歴（起票・コミット・条件成立・マージの時刻）は後から変わらないため、`--cache-path`（定期実行では `data/merged-samples.jsonl`）に計測結果を保存して再利用します。全体実績は直近のキュー消化速度を反映する 30 日窓（`--lookback-days`）、サンプル数が希少な初回提出者コホートは統計の安定性を高める 90 日窓（`--first-timer-lookback-days`）で独立してフィルタ・集計するハイブリッド構成を採用しています。探索・キャッシュ蓄積は大きい方の窓（90 日）を基準に行われるため、API 消費を最小限に抑えつつ十分なサンプル数を確保できます。1 回の実行で新たに取得するのは、新しくマージされた PR と、未取得の古い PR を新しい順に `--fetch-budget` 件までです。条件不成立で除外した PR も記録し、再取得しません。キャッシュが壊れているときは、統計を歪めないよう中断します。実行の最後に、GraphQL レート制限の残量（通常 1 時間あたり 5,000 pt、Actions の `GITHUB_TOKEN` は 1,000 pt）を `[RateLimit]` として出力します。
 
 基準 PR が観測対象外（クローズ済み・Draft・必須ラベル不足・阻害ラベルあり）の場合は、履歴もスナップショットも記録せずに終了します（GitHub Actions 上では warning を出力）。
 

@@ -219,6 +219,8 @@ export interface ProgressSnapshot {
   ReadyMaxDays: number | null;
   /** 比較に使った期間（日） */
   LookbackDays: number;
+  /** 初回提出者コホートの集計に使った期間（日）。省略時は LookbackDays または 30 */
+  FirstTimerLookbackDays?: number;
   /** 統計に採用したサンプル数 */
   SampleCount: number;
   /** 条件不成立などで除外した候補数 */

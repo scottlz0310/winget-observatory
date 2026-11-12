@@ -936,4 +936,48 @@ describe("buildDashboard: 過去実績との比較", () => {
 
     rmSync(tempDir, { recursive: true, force: true });
   });
+
+  test("renderFirstTimerHeroSummary & renderFirstTimerCohortBlock: FirstTimerLookbackDays が集計期間バッジに反映される", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-ft-lookback-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    // FirstTimerLookbackDays: 90 が指定された場合
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        TargetPr: 123456,
+        LookbackDays: 30,
+        FirstTimerLookbackDays: 90,
+        FirstTimerMedianDays: 37.0,
+        FirstTimerP75Days: 39.0,
+        FirstTimerSampleCount: 8,
+      }),
+      "utf-8",
+    );
+    let html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+    expect(html).toContain("過去 90 日間の純粋FIFO待機列 準拠");
+    expect(html).toContain("（過去 90 日間 / サンプル 8 件）");
+    expect(html).toContain("過去 90 日間・採用 8 件");
+
+    // FirstTimerLookbackDays 未指定で LookbackDays: 45 の場合
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        TargetPr: 123456,
+        LookbackDays: 45,
+        FirstTimerMedianDays: 37.0,
+        FirstTimerP75Days: 39.0,
+        FirstTimerSampleCount: 4,
+      }),
+      "utf-8",
+    );
+    html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+    expect(html).toContain("過去 45 日間の純粋FIFO待機列 準拠");
+    expect(html).toContain("（過去 45 日間 / サンプル 4 件）");
+    expect(html).toContain("過去 45 日間・採用 4 件");
+
+    rmSync(tempDir, { recursive: true, force: true });
+  });
 });

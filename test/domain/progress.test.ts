@@ -391,9 +391,51 @@ ${Object.values(oldRow).join(",")}
     expect(snapshot.SampleCount).toBe(0);
     expect(snapshot.SkippedCount).toBe(4);
     expect(snapshot.LookbackDays).toBe(14);
+    expect(snapshot.FirstTimerLookbackDays).toBe(14);
     expect(snapshot.Samples).toEqual([]);
     expect(snapshot.Comparison).toBeNull();
     expect(snapshot.Guidance).toBeNull();
     expect(snapshot.TotalMaxDays).toBeNull();
+  });
+
+  test("FirstTimerLookbackDays が明示指定された場合にスナップショットに記録される", () => {
+    const snapshot = createProgressSnapshot({
+      now: new Date("2026-11-07T11:30:00Z"),
+      repository: "microsoft/winget-pkgs",
+      targetPr: 464302,
+      prTitle: "Test PR",
+      prUrl: "https://github.com/microsoft/winget-pkgs/pull/464302",
+      prState: "OPEN",
+      frontNumber: 1,
+      frontCreatedAt: "2026-11-06 12:00",
+      activeAhead: 1,
+      totalAhead: 1,
+      behind: 0,
+      totalLifetimeDays: 1,
+      turnLatencyDays: 1,
+      waitDays: 1,
+      commitCount: 1,
+      stats: null,
+      lookbackDays: 30,
+      firstTimerLookbackDays: 90,
+      firstTimerStats: {
+        sampleCount: 5,
+        skippedCount: 0,
+        total: { median: 37.0, p75: 39.0, max: 45.0 },
+        turn: { median: 37.0, p75: 39.0, max: 45.0 },
+        ready: { median: 37.0, p75: 39.0, max: 45.0 },
+      },
+      firstTimerSampleCount: 5,
+      skippedCount: 0,
+      rivals: [],
+      samples: [],
+      targetCreatedAt: new Date("2026-11-05T00:00:00Z"),
+      targetReadyAt: new Date("2026-11-05T01:00:00Z"),
+    });
+    expect(snapshot.LookbackDays).toBe(30);
+    expect(snapshot.FirstTimerLookbackDays).toBe(90);
+    expect(snapshot.FirstTimerMedianDays).toBe(37.0);
+    expect(snapshot.FirstTimerP75Days).toBe(39.0);
+    expect(snapshot.FirstTimerSampleCount).toBe(5);
   });
 });
