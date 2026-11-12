@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/api/github.ts`: GitHub GraphQL API クライアントメソッド `graphql<T>(query, variables)` を追加。トークン未設定時の 401 例外、HTTP エラー時のステータス付き例外、GraphQL errors 返却時のメッセージ付き例外、およびレスポンスの data フィールド抽出をサポート
 - `bunfig.toml`: `minimumReleaseAge = 259200`（3 日）を追加。公開から 3 日未満の版を新規に解決しない。lock file maintenance は Renovate の minimumReleaseAge を迂回するため、無人の自動マージに対する防御としてパッケージマネージャ側で止める
 
 - `src/domain/exit-breakdown.ts`, `src/models/exit-breakdown.ts`, `src/cli/progress.ts`, `src/domain/progress.ts`, `scripts/build-pages.ts`: 待ち行列からの離脱の内訳を追加（Issue #18）。実質待ち（更新順の順位）の減少を、マージ・未マージのクローズ・健康条件の変化など（推定）・更新による順位の入れ替わり（推定）に分解し、1 日あたりの件数と、減少のうち実際のマージが占める割合をダッシュボードに表示する。観測のたびに、基準 PR の起票以降にマージ・クローズされた、起票が基準 PR より前で必須ラベルが付いた PR の累積件数を検索で数え、履歴 CSV の `MergedOlder` / `ClosedOlder` 列へ記録する（旧い行は空欄のまま温存し、記録のある観測が 2 回以上たまるまで内訳は出さない）。観測の間隔が 6 時間未満、または累積件数が減っているなど記録が矛盾しているときは、内訳を出さず理由を示す。件数の取得に失敗したら、握りつぶさず中断する

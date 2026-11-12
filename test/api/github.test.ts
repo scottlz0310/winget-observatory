@@ -111,13 +111,31 @@ describe("API: GitHubApiClient", () => {
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     };
 
-    const client = new GitHubApiClient({
-      token: undefined,
-      fetch: mockFetch,
-    });
+    const origGithubToken = process.env.GITHUB_TOKEN;
+    const origGhToken = process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
 
-    await client.searchIssues("test");
-    expect(capturedHeaders.Authorization).toBeUndefined();
+    try {
+      const client = new GitHubApiClient({
+        token: undefined,
+        fetch: mockFetch,
+      });
+
+      await client.searchIssues("test");
+      expect(capturedHeaders.Authorization).toBeUndefined();
+    } finally {
+      if (origGithubToken !== undefined) {
+        process.env.GITHUB_TOKEN = origGithubToken;
+      } else {
+        delete process.env.GITHUB_TOKEN;
+      }
+      if (origGhToken !== undefined) {
+        process.env.GH_TOKEN = origGhToken;
+      } else {
+        delete process.env.GH_TOKEN;
+      }
+    }
   });
 
   test("searchIssuesDetailed は totalCount と items を返す", async () => {
@@ -272,5 +290,169 @@ describe("API: GitHubApiClient", () => {
     const client = new GitHubApiClient({ fetch: mockFetch });
     await client.searchIssuesDetailed("test", "created", "asc", 30, 3);
     expect(capturedUrl).toContain("page=3");
+  });
+
+  describe("graphql", () => {
+    test("正しい URL, POST メソッド, JSON ボディ, ヘッダーで呼び出し data を返す", async () => {
+      let capturedUrl = "";
+      let capturedMethod = "";
+      let capturedHeaders: Record<string, string> = {};
+      let capturedBody = "";
+
+      const mockFetch = async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        capturedUrl = String(input);
+        capturedMethod = init?.method ?? "";
+        capturedHeaders = (init?.headers as Record<string, string>) ?? {};
+        capturedBody = String(init?.body ?? "");
+
+        return new Response(
+          JSON.stringify({
+            data: {
+              search: {
+                issueCount: 42,
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      const client = new GitHubApiClient({
+        token: "gql-test-token",
+        fetch: mockFetch,
+      });
+
+      const query = "query($q: String!) { search(query: $q) { issueCount } }";
+      const variables = { q: "repo:microsoft/winget-pkgs is:pr" };
+
+      interface SearchData {
+        search: { issueCount: number };
+      }
+
+      const data = await client.graphql<SearchData>(query, variables);
+
+      expect(capturedUrl).toBe("https://api.github.com/graphql");
+      expect(capturedMethod).toBe("POST");
+      expect(capturedHeaders.Authorization).toBe("Bearer gql-test-token");
+      expect(capturedHeaders["Content-Type"]).toBe("application/json");
+      expect(capturedHeaders.Accept).toBe("application/vnd.github+json");
+      expect(JSON.parse(capturedBody)).toEqual({ query, variables });
+      expect(data.search.issueCount).toBe(42);
+    });
+
+    test("トークンが未設定の場合は 401 の GitHubApiError をスローする", async () => {
+      const origGithubToken = process.env.GITHUB_TOKEN;
+      const origGhToken = process.env.GH_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GH_TOKEN;
+
+      try {
+        const clientUndefinedToken = new GitHubApiClient({
+          token: undefined,
+          fetch: async () => new Response("{}", { status: 200 }),
+        });
+
+        const clientEmptyToken = new GitHubApiClient({
+          token: "",
+          fetch: async () => new Response("{}", { status: 200 }),
+        });
+
+        for (const client of [clientUndefinedToken, clientEmptyToken]) {
+          await expect(client.graphql("query { viewer { login } }")).rejects.toThrow(
+            GitHubApiError,
+          );
+
+          try {
+            await client.graphql("query { viewer { login } }");
+          } catch (err: unknown) {
+            expect(err).toBeInstanceOf(GitHubApiError);
+            expect((err as GitHubApiError).status).toBe(401);
+            expect((err as GitHubApiError).message).toContain("トークン");
+          }
+        }
+      } finally {
+        if (origGithubToken !== undefined) {
+          process.env.GITHUB_TOKEN = origGithubToken;
+        } else {
+          delete process.env.GITHUB_TOKEN;
+        }
+        if (origGhToken !== undefined) {
+          process.env.GH_TOKEN = origGhToken;
+        } else {
+          delete process.env.GH_TOKEN;
+        }
+      }
+    });
+
+    test("HTTP エラー発生時にステータス付き GitHubApiError をスローする", async () => {
+      const mockFetch = async (): Promise<Response> => {
+        return new Response("Bad Gateway", { status: 502 });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+      });
+
+      try {
+        await client.graphql("query { test }");
+        expect().fail("例外がスローされるべき");
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(GitHubApiError);
+        expect((err as GitHubApiError).status).toBe(502);
+        expect((err as GitHubApiError).message).toContain("502");
+        expect((err as GitHubApiError).message).toContain("Bad Gateway");
+      }
+    });
+
+    test("GraphQL errors が返された場合にメッセージ付き GitHubApiError をスローする", async () => {
+      const mockFetch = async (): Promise<Response> => {
+        return new Response(
+          JSON.stringify({
+            errors: [
+              { message: "Field 'invalid' doesn't exist on type 'Query'" },
+              { message: "Syntax error" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+      });
+
+      try {
+        await client.graphql("query { invalid }");
+        expect().fail("例外がスローされるべき");
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(GitHubApiError);
+        expect((err as GitHubApiError).message).toContain(
+          "Field 'invalid' doesn't exist on type 'Query'; Syntax error",
+        );
+      }
+    });
+
+    test("data フィールドが含まれていない場合に例外をスローする", async () => {
+      const mockFetch = async (): Promise<Response> => {
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+      });
+
+      await expect(client.graphql("query { test }")).rejects.toThrow(
+        "data フィールドが含まれていません",
+      );
+    });
   });
 });
