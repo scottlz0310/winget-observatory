@@ -7,7 +7,7 @@
   "scripts": {
     "check": "biome check .",
     "check:fix": "biome check --write .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p workers/observe-trigger/tsconfig.json",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "prepare": "lefthook install",
