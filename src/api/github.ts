@@ -164,16 +164,22 @@ export class GitHubGraphQLError extends GitHubApiError {
 }
 
 /**
- * GraphQL の errors に PullRequest の NOT_FOUND が含まれているかを判定する。
+ * GraphQL の errors が PullRequest の不存在（NOT_FOUND）に起因するかを厳密に判定する。
+ * path で対象が pullRequest であることを確認し、FORBIDDEN や INTERNAL などの
+ * 認可・サーバー障害エラーを誤って 404 に変換しないよう不存在エラーのみに限定する。
  */
 export function isPrNotFoundGraphQLError(err: unknown): boolean {
   if (err instanceof GitHubGraphQLError) {
-    return err.errors.some(
-      (e) =>
+    if (err.errors.length === 0) {
+      return false;
+    }
+    return err.errors.every((e) => {
+      const isNotFound =
         e.type === "NOT_FOUND" ||
-        e.path?.includes("pullRequest") ||
-        Boolean(e.message?.includes("Could not resolve to a PullRequest")),
-    );
+        Boolean(e.message?.includes("Could not resolve to a PullRequest"));
+      const isPrPath = e.path ? e.path.includes("pullRequest") : true;
+      return isNotFound && isPrPath;
+    });
   }
   return false;
 }

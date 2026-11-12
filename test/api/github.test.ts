@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { GitHubApiClient, GitHubApiError, parseRepository } from "../../src/api/github";
+import {
+  GitHubApiClient,
+  GitHubApiError,
+  GitHubGraphQLError,
+  isPrNotFoundGraphQLError,
+  parseRepository,
+} from "../../src/api/github";
 
 describe("API: GitHubApiClient", () => {
   test("searchIssues は正しくエンコードされた URL とヘッダーでリクエストを行う", async () => {
@@ -135,6 +141,55 @@ describe("API: GitHubApiClient", () => {
       expect((err as GitHubApiError).status).toBe(404);
     }
   });
+
+  test.each([
+    [
+      "FORBIDDEN",
+      "Resource not accessible by integration",
+      {
+        type: "FORBIDDEN",
+        path: ["repository", "pullRequest"],
+        message: "Resource not accessible by integration",
+      },
+    ],
+    [
+      "INTERNAL",
+      "An unexpected error occurred",
+      {
+        type: "INTERNAL",
+        path: ["repository", "pullRequest"],
+        message: "An unexpected error occurred",
+      },
+    ],
+  ])(
+    "getPullRequest は同じ path の %s エラーを 404 に誤変換せず元のエラーを保持する",
+    async (_type, msg, errorObj) => {
+      const mockFetch = async (): Promise<Response> => {
+        return new Response(
+          JSON.stringify({
+            errors: [errorObj],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      const client = new GitHubApiClient({
+        token: "sample-token",
+        fetch: mockFetch,
+      });
+
+      await expect(client.getPullRequest("microsoft/winget-pkgs", 100)).rejects.toThrow(
+        GitHubApiError,
+      );
+      try {
+        await client.getPullRequest("microsoft/winget-pkgs", 100);
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(GitHubApiError);
+        expect((err as GitHubApiError).status).toBe(200);
+        expect((err as GitHubApiError).message).toContain(msg);
+      }
+    },
+  );
 
   test("API エラー発生時に GitHubApiError をスローする", async () => {
     const mockFetch = async (): Promise<Response> => {
@@ -325,6 +380,49 @@ describe("API: GitHubApiClient", () => {
       expect((err as GitHubApiError).status).toBe(404);
     }
   });
+
+  test.each([
+    [
+      "FORBIDDEN",
+      "Resource not accessible by integration",
+      {
+        type: "FORBIDDEN",
+        path: ["repository", "pullRequest"],
+        message: "Resource not accessible by integration",
+      },
+    ],
+    [
+      "INTERNAL",
+      "An unexpected error occurred",
+      {
+        type: "INTERNAL",
+        path: ["repository", "pullRequest"],
+        message: "An unexpected error occurred",
+      },
+    ],
+  ])(
+    "getPullRequestDetails は同じ path の %s エラーを 404 に誤変換せず元のエラーを保持する",
+    async (_type, msg, errorObj) => {
+      const mockFetch = async (): Promise<Response> => {
+        return new Response(
+          JSON.stringify({
+            errors: [errorObj],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+      await expect(client.getPullRequestDetails("test/repo", 100)).rejects.toThrow(GitHubApiError);
+      try {
+        await client.getPullRequestDetails("test/repo", 100);
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(GitHubApiError);
+        expect((err as GitHubApiError).status).toBe(200);
+        expect((err as GitHubApiError).message).toContain(msg);
+      }
+    },
+  );
 
   test("getPullRequestDetailsRest は REST API から PR 情報とコミット一覧を取得して統合する", async () => {
     let pullsCalled = false;
@@ -632,5 +730,53 @@ describe("API: GitHubApiClient", () => {
         }
       },
     );
+  });
+
+  describe("isPrNotFoundGraphQLError", () => {
+    test("NOT_FOUND かつ path に pullRequest を含む場合は true を返す", () => {
+      const err = new GitHubGraphQLError("not found", 200, [
+        {
+          type: "NOT_FOUND",
+          path: ["repository", "pullRequest"],
+          message: "Could not resolve to a PullRequest with the number of 9999999.",
+        },
+      ]);
+      expect(isPrNotFoundGraphQLError(err)).toBe(true);
+    });
+
+    test("Could not resolve to a PullRequest メッセージを含む場合は type 未指定でも true を返す", () => {
+      const err = new GitHubGraphQLError("not found", 200, [
+        {
+          path: ["repository", "pullRequest"],
+          message: "Could not resolve to a PullRequest with the number of 9999999.",
+        },
+      ]);
+      expect(isPrNotFoundGraphQLError(err)).toBe(true);
+    });
+
+    test("FORBIDDEN や INTERNAL など認可・障害エラーが含まれる場合は false を返す", () => {
+      const forbiddenErr = new GitHubGraphQLError("forbidden", 200, [
+        {
+          type: "FORBIDDEN",
+          path: ["repository", "pullRequest"],
+          message: "Resource not accessible by integration",
+        },
+      ]);
+      expect(isPrNotFoundGraphQLError(forbiddenErr)).toBe(false);
+
+      const internalErr = new GitHubGraphQLError("internal", 200, [
+        {
+          type: "INTERNAL",
+          path: ["repository", "pullRequest"],
+          message: "Something went wrong",
+        },
+      ]);
+      expect(isPrNotFoundGraphQLError(internalErr)).toBe(false);
+    });
+
+    test("エラー配列が空または一般エラーの場合は false を返す", () => {
+      expect(isPrNotFoundGraphQLError(new GitHubGraphQLError("empty", 200, []))).toBe(false);
+      expect(isPrNotFoundGraphQLError(new Error("regular error"))).toBe(false);
+    });
   });
 });
