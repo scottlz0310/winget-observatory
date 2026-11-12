@@ -111,13 +111,31 @@ describe("API: GitHubApiClient", () => {
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     };
 
-    const client = new GitHubApiClient({
-      token: undefined,
-      fetch: mockFetch,
-    });
+    const origGithubToken = process.env.GITHUB_TOKEN;
+    const origGhToken = process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
 
-    await client.searchIssues("test");
-    expect(capturedHeaders.Authorization).toBeUndefined();
+    try {
+      const client = new GitHubApiClient({
+        token: undefined,
+        fetch: mockFetch,
+      });
+
+      await client.searchIssues("test");
+      expect(capturedHeaders.Authorization).toBeUndefined();
+    } finally {
+      if (origGithubToken !== undefined) {
+        process.env.GITHUB_TOKEN = origGithubToken;
+      } else {
+        delete process.env.GITHUB_TOKEN;
+      }
+      if (origGhToken !== undefined) {
+        process.env.GH_TOKEN = origGhToken;
+      } else {
+        delete process.env.GH_TOKEN;
+      }
+    }
   });
 
   test("searchIssuesDetailed は totalCount と items を返す", async () => {
@@ -326,26 +344,45 @@ describe("API: GitHubApiClient", () => {
     });
 
     test("トークンが未設定の場合は 401 の GitHubApiError をスローする", async () => {
-      // process.env を汚染しないよう token を明示的に未定義または空文字で検証
-      const clientUndefinedToken = new GitHubApiClient({
-        token: undefined,
-        fetch: async () => new Response("{}", { status: 200 }),
-      });
+      const origGithubToken = process.env.GITHUB_TOKEN;
+      const origGhToken = process.env.GH_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GH_TOKEN;
 
-      const clientEmptyToken = new GitHubApiClient({
-        token: "",
-        fetch: async () => new Response("{}", { status: 200 }),
-      });
+      try {
+        const clientUndefinedToken = new GitHubApiClient({
+          token: undefined,
+          fetch: async () => new Response("{}", { status: 200 }),
+        });
 
-      for (const client of [clientUndefinedToken, clientEmptyToken]) {
-        await expect(client.graphql("query { viewer { login } }")).rejects.toThrow(GitHubApiError);
+        const clientEmptyToken = new GitHubApiClient({
+          token: "",
+          fetch: async () => new Response("{}", { status: 200 }),
+        });
 
-        try {
-          await client.graphql("query { viewer { login } }");
-        } catch (err: unknown) {
-          expect(err).toBeInstanceOf(GitHubApiError);
-          expect((err as GitHubApiError).status).toBe(401);
-          expect((err as GitHubApiError).message).toContain("トークン");
+        for (const client of [clientUndefinedToken, clientEmptyToken]) {
+          await expect(client.graphql("query { viewer { login } }")).rejects.toThrow(
+            GitHubApiError,
+          );
+
+          try {
+            await client.graphql("query { viewer { login } }");
+          } catch (err: unknown) {
+            expect(err).toBeInstanceOf(GitHubApiError);
+            expect((err as GitHubApiError).status).toBe(401);
+            expect((err as GitHubApiError).message).toContain("トークン");
+          }
+        }
+      } finally {
+        if (origGithubToken !== undefined) {
+          process.env.GITHUB_TOKEN = origGithubToken;
+        } else {
+          delete process.env.GITHUB_TOKEN;
+        }
+        if (origGhToken !== undefined) {
+          process.env.GH_TOKEN = origGhToken;
+        } else {
+          delete process.env.GH_TOKEN;
         }
       }
     });
