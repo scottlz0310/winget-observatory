@@ -4,6 +4,11 @@ import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
 import { describeGuidance, describeOvertake } from "../domain/benchmark";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
 import {
+  buildAuthorMergedCountQuery,
+  extractSingleHitCandidateLogins,
+  parseAuthorMergedCounts,
+} from "../domain/first-timer";
+import {
   buildHealthyQueryParts,
   calculateProgressStats,
   createProgressSnapshot,
@@ -412,6 +417,8 @@ export async function runProgressCli(
           totalDays: Number(totalDays.toFixed(2)),
           turnDays: Number(turnDays.toFixed(2)),
           days: Number(readyDays.toFixed(2)),
+          author: candDetail.author,
+          ...(candCommits.length > 1 ? { isFirstTimer: false } : {}),
         };
         samples.push(sample);
         newEntries.push(toCachedSample(sample));
@@ -421,6 +428,58 @@ export async function runProgressCli(
         throw new Error(`マージ済み PR #${cand.number} のサンプル計測に失敗しました: ${msg}`, {
           cause: err,
         });
+      }
+    }
+
+    // 初回提出者（1コミット・単発・累計マージ1件）の判定
+    // 1. バッチ内に複数回登場する author は常連として除外（isFirstTimer = false）
+    const authorCounts = new Map<string, number>();
+    for (const s of samples) {
+      if (s.author) {
+        authorCounts.set(s.author, (authorCounts.get(s.author) ?? 0) + 1);
+      }
+    }
+    for (const s of samples) {
+      if (s.author && (authorCounts.get(s.author) ?? 0) > 1) {
+        s.isFirstTimer = false;
+      }
+    }
+
+    // 2. 単発 author かつ 1 コミットの未判定候補の累計マージ数を GraphQL エイリアスで一括照会
+    const candidateAuthors = extractSingleHitCandidateLogins(samples);
+    if (candidateAuthors.length > 0) {
+      const CHUNK_SIZE = 30;
+      const authorMergedCounts = new Map<string, number>();
+      for (let i = 0; i < candidateAuthors.length; i += CHUNK_SIZE) {
+        const chunk = candidateAuthors.slice(i, i + CHUNK_SIZE);
+        const query = buildAuthorMergedCountQuery(options.repository, chunk);
+        if (query) {
+          const data = await client.graphql<Record<string, { issueCount?: number }>>(query);
+          const counts = parseAuthorMergedCounts(chunk, data);
+          for (const [author, count] of counts) {
+            authorMergedCounts.set(author, count);
+          }
+        }
+      }
+
+      for (const s of samples) {
+        if (s.author && authorMergedCounts.has(s.author)) {
+          const count = authorMergedCounts.get(s.author);
+          if (count !== undefined) {
+            s.isFirstTimer = count === 1;
+          }
+        }
+      }
+    }
+
+    // 今回新規取得したキャッシュエントリ（newEntries）に isFirstTimer の判定結果を同期
+    const sampleMap = new Map<number, MergedCandidateSample>(samples.map((s) => [s.number, s]));
+    for (const entry of newEntries) {
+      if (entry.Type === "sample") {
+        const s = sampleMap.get(entry.Number);
+        if (s && s.isFirstTimer !== undefined) {
+          entry.IsFirstTimer = s.isFirstTimer;
+        }
       }
     }
   } finally {
@@ -504,6 +563,10 @@ export async function runProgressCli(
   );
 
   const stats = calculateProgressStats(samples, skipped);
+  const firstTimerSamples = samples.filter((s) => s.isFirstTimer === true);
+  const firstTimerStats =
+    firstTimerSamples.length > 0 ? calculateProgressStats(firstTimerSamples) : null;
+  const firstTimerSampleCount = firstTimerSamples.length;
 
   const frontCreatedVal = formatDateTimeWithDay(front.createdAt);
 
@@ -530,6 +593,8 @@ export async function runProgressCli(
     samples,
     targetCreatedAt: created,
     targetReadyAt: targetReady,
+    firstTimerStats,
+    firstTimerSampleCount,
   });
 
   logRivals(queueInfo.rivals, log);
@@ -649,6 +714,11 @@ function logBenchmark(
     snapshot.TotalMaxDays,
     current.totalLifetimeDays,
   );
+  if (snapshot.FirstTimerMedianDays !== null && snapshot.FirstTimerMedianDays !== undefined) {
+    log(
+      `   [初回提出者コホート実績 (1コミット・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)] 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
+    );
+  }
   log("");
   block(
     "2. レビュー待ち (Turn Latency: 最新コミット→マージ)",
@@ -687,6 +757,13 @@ function logBenchmark(
   log("");
   log("【作成日・PR番号の比較（CreatedAt / PR番号）】");
   log(`  自分より後に作成されマージ済み   : ${comparison.LaterCreated} 件`);
+  if (
+    comparison.FirstTimerLaterCreated !== undefined &&
+    comparison.RepeatOrExpressLaterCreated !== undefined
+  ) {
+    log(`    うち初回提出者による追い越し   : ${comparison.FirstTimerLaterCreated} 件`);
+    log(`    うち常連・特急レーンによる追い越し: ${comparison.RepeatOrExpressLaterCreated} 件`);
+  }
   log(`  自分より前に作成されマージ済み   : ${comparison.EarlierCreated} 件`);
   log(`  自分より新しいPR番号 (>${options.targetPr}) : ${comparison.NewerNumber} 件`);
   log(`  自分より古いPR番号   (<${options.targetPr}) : ${comparison.OlderNumber} 件`);
@@ -696,8 +773,9 @@ function logBenchmark(
   log("参考サンプル（マージ日時順）:");
   for (const s of snapshot.Samples) {
     const relation = s.Relation === "older" ? "古い  " : "新しい";
+    const cohort = s.IsFirstTimer === true ? "初回" : s.IsFirstTimer === false ? "常連" : "    ";
     log(
-      `  #${s.Number} ${relation} ${s.CommitCount}コミット  レビュー待ち ${s.TurnDays.toFixed(1)}日 / 通算 ${s.TotalDays.toFixed(1)}日 / 成立後 ${s.ReadyDays.toFixed(1)}日  最新コミット ${formatDateTimeWithDay(s.LatestCommittedDate)}  マージ ${formatDateTimeWithDay(s.MergedAt)}`,
+      `  #${s.Number} ${relation} [${cohort}] ${s.CommitCount}コミット  レビュー待ち ${s.TurnDays.toFixed(1)}日 / 通算 ${s.TotalDays.toFixed(1)}日 / 成立後 ${s.ReadyDays.toFixed(1)}日  最新コミット ${formatDateTimeWithDay(s.LatestCommittedDate)}  マージ ${formatDateTimeWithDay(s.MergedAt)}`,
     );
   }
   log("※ 待機はラベルとDraftの履歴に基づきます。レビュー本文・チェック履歴は解析しません。");

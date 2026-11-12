@@ -10,6 +10,7 @@ import {
   resolveDefaultDataDir,
   runProgressCli,
 } from "../../src/cli/progress";
+import { parseSampleCache } from "../../src/domain/sample-cache";
 
 describe("CLI: progress parseArgs", () => {
   test("デフォルト値が正しく設定される", () => {
@@ -889,6 +890,160 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     expect(text).toContain("参考サンプル（マージ日時順）:");
     expect(text).toContain("採用サンプル     : 3 件");
     expect(text).toContain("サンプルが少ないため");
+  });
+
+  test("マージ済みサンプルの初回提出者を常連から分離し、GraphQL で累計マージ数を照会してキャッシュ・スナップショットに記録する", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-first-timer-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+    const snapshotPath = join(tmpDir, "latest-progress.json");
+
+    try {
+      let graphqlCalled = false;
+      let graphqlQuery = "";
+
+      const client = {
+        ...buildClient(),
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          if (num === 400) {
+            return {
+              number: 400,
+              title: "Merged PR 400",
+              url: "https://github.com/test/repo/pull/400",
+              state: "MERGED" as const,
+              isDraft: false,
+              createdAt: "2026-10-20T00:00:00Z",
+              updatedAt: "2026-10-24T00:00:00Z",
+              mergedAt: "2026-10-24T00:00:00Z",
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid400",
+                  messageHeadline: "feat",
+                  committedDate: "2026-10-20T00:00:00Z",
+                },
+              ],
+              author: "repeatUser",
+            };
+          }
+          if (num === 450) {
+            return {
+              number: 450,
+              title: "Merged PR 450",
+              url: "https://github.com/test/repo/pull/450",
+              state: "MERGED" as const,
+              isDraft: false,
+              createdAt: "2026-10-25T00:00:00Z",
+              updatedAt: "2026-10-26T00:00:00Z",
+              mergedAt: "2026-10-26T00:00:00Z",
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid450",
+                  messageHeadline: "feat",
+                  committedDate: "2026-10-25T00:00:00Z",
+                },
+              ],
+              author: "repeatUser", // 同一バッチ内で2回登場
+            };
+          }
+          if (num === 600) {
+            return {
+              number: 600,
+              title: "Merged PR 600",
+              url: "https://github.com/test/repo/pull/600",
+              state: "MERGED" as const,
+              isDraft: false,
+              createdAt: "2026-11-02T00:00:00Z",
+              updatedAt: "2026-11-03T00:00:00Z",
+              mergedAt: "2026-11-03T00:00:00Z",
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid600",
+                  messageHeadline: "feat",
+                  committedDate: "2026-11-02T00:00:00Z",
+                },
+              ],
+              author: "firstTimerUser", // 単発
+            };
+          }
+          throw new Error(`Unexpected PR #${num}`);
+        },
+        graphql: async (query: string) => {
+          graphqlCalled = true;
+          graphqlQuery = query;
+          return {
+            u_0: { issueCount: 1 },
+          };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          snapshotPath,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      expect(graphqlCalled).toBeTrue();
+      expect(graphqlQuery).toContain("firstTimerUser");
+      expect(graphqlQuery).not.toContain("repeatUser");
+
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      expect(snapshot?.FirstTimerMedianDays).not.toBeNull();
+
+      const samples = snapshot?.Samples ?? [];
+      const ftSample = samples.find((s) => s.Number === 600);
+      const repeatSample = samples.find((s) => s.Number === 400);
+
+      expect(ftSample?.IsFirstTimer).toBeTrue();
+      expect(repeatSample?.IsFirstTimer).toBeFalse();
+
+      // キャッシュファイルへの保存検証
+      expect(existsSync(cachePath)).toBeTrue();
+      const cacheEntries = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached600 = cacheEntries.find((e) => e.Number === 600);
+      expect(cached600?.Type).toBe("sample");
+      if (cached600?.Type === "sample") {
+        expect(cached600.Author).toBe("firstTimerUser");
+        expect(cached600.IsFirstTimer).toBeTrue();
+      }
+
+      const text = logs.join("\n");
+      expect(text).toContain("初回提出者コホート実績");
+      expect(text).toContain("うち初回提出者による追い越し   : 1 件");
+      expect(text).toContain("うち常連・特急レーンによる追い越し: 0 件");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   test("サンプルが 1 件もないときは比較不能と明示し、比較系は空にする", async () => {

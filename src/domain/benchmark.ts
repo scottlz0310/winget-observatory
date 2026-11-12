@@ -41,6 +41,8 @@ export function toSnapshotSamples(
     TotalDays: s.totalDays,
     TurnDays: s.turnDays,
     ReadyDays: s.days,
+    ...(s.author !== undefined ? { Author: s.author } : {}),
+    ...(s.isFirstTimer !== undefined ? { IsFirstTimer: s.isFirstTimer } : {}),
   }));
 }
 
@@ -56,7 +58,10 @@ export function compareWithSamples(
   const readyMs = target.readyAt.getTime();
 
   const laterReady = samples.filter((s) => Date.parse(s.readyAt) > readyMs).length;
-  const laterCreated = samples.filter((s) => Date.parse(s.createdAt) > createdMs).length;
+  const laterCreatedSamples = samples.filter((s) => Date.parse(s.createdAt) > createdMs);
+  const laterCreated = laterCreatedSamples.length;
+  const firstTimerLaterCreated = laterCreatedSamples.filter((s) => s.isFirstTimer === true).length;
+  const repeatOrExpressLaterCreated = laterCreated - firstTimerLaterCreated;
   const newerNumber = samples.filter((s) => s.number > target.number).length;
   const olderNumber = samples.filter((s) => s.number < target.number).length;
 
@@ -74,6 +79,8 @@ export function compareWithSamples(
     NewerNumber: newerNumber,
     OlderNumber: olderNumber,
     Verdict: verdict,
+    FirstTimerLaterCreated: firstTimerLaterCreated,
+    RepeatOrExpressLaterCreated: repeatOrExpressLaterCreated,
   };
 }
 
@@ -153,7 +160,13 @@ export function describeOvertake(comparison: SampleComparison): string {
       return "マージされたPRはすべて自分より前に作成された（古いPR番号の）ものです。古いPRのバックログを順次消化している状況で、追い越されてはいません。";
     case "mostly-older":
       return "マージされたPRのほぼ全てが自分より前に作成されたものです。大きく追い越されているわけではありません。";
-    case "overtaken":
-      return `自分より後に作成されたPRが ${comparison.LaterCreated} 件マージ済みです（追い越しあり）。`;
+    case "overtaken": {
+      const ftCount = comparison.FirstTimerLaterCreated ?? 0;
+      const repeatCount = comparison.RepeatOrExpressLaterCreated ?? comparison.LaterCreated;
+      if (ftCount === 0) {
+        return `自分より後に作成されたPRが ${comparison.LaterCreated} 件マージ済みです（すべて常連・特急レーンによるもので、初回提出者による追い越しはありません）。`;
+      }
+      return `自分より後に作成されたPRが ${comparison.LaterCreated} 件マージ済みです（うち初回提出者 ${ftCount} 件、常連・特急レーン ${repeatCount} 件）。`;
+    }
   }
 }

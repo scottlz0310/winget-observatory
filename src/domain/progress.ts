@@ -423,6 +423,10 @@ export function createProgressSnapshot(params: {
   targetCreatedAt: Date;
   /** 基準 PR の条件成立日時（ReadyAt） */
   targetReadyAt: Date;
+  /** 初回提出者コホートの統計サマリ（任意） */
+  firstTimerStats?: ProgressStatsSummary | null;
+  /** 初回提出者コホートの採用サンプル件数（任意） */
+  firstTimerSampleCount?: number;
 }): ProgressSnapshot {
   const {
     now,
@@ -447,6 +451,8 @@ export function createProgressSnapshot(params: {
     samples,
     targetCreatedAt,
     targetReadyAt,
+    firstTimerStats,
+    firstTimerSampleCount,
   } = params;
 
   return {
@@ -500,5 +506,9 @@ export function createProgressSnapshot(params: {
           readyDays: waitDays,
         })
       : null,
+    FirstTimerMedianDays: firstTimerStats ? firstTimerStats.total.median : null,
+    FirstTimerP75Days: firstTimerStats ? firstTimerStats.total.p75 : null,
+    FirstTimerSampleCount:
+      firstTimerSampleCount ?? (firstTimerStats ? firstTimerStats.sampleCount : 0),
   };
 }
