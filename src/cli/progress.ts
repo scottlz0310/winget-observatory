@@ -819,7 +819,7 @@ export function reportSkippedObservation(
 }
 
 /**
- * レート制限の残量を診断ログとして出す。呼び出し自体は制限を消費しない。
+ * レート制限の残量を診断ログとして出す。
  * 診断のための補助なので、取得に失敗しても計測の成否には影響させず、警告として見える形で残す。
  */
 export async function logRateLimit(
@@ -827,10 +827,14 @@ export async function logRateLimit(
   log: (msg: string) => void = console.log,
 ): Promise<void> {
   try {
-    const { core, search } = await client.getRateLimit();
+    const rate = await client.getRateLimit();
     const fmt = (name: string, b: { limit: number; remaining: number; resetAt: string | null }) =>
       `${name}: 残り ${b.remaining} / ${b.limit}（使用 ${b.limit - b.remaining}）${b.resetAt ? ` リセット ${b.resetAt}` : ""}`;
-    log(`[RateLimit] ${fmt("core", core)} / ${fmt("search", search)}`);
+    if (rate.graphql) {
+      log(`[RateLimit] ${fmt("GraphQL", rate.graphql)} / ${fmt("search", rate.search)}`);
+    } else {
+      log(`[RateLimit] ${fmt("core", rate.core)} / ${fmt("search", rate.search)}`);
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log(`::warning::レート制限の残量を取得できませんでした: ${message}`);

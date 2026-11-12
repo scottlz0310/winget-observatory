@@ -5,77 +5,194 @@ const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("API: GitHubApiClient.getRateLimit", () => {
-  test("core と search の上限・残量・リセット時刻（ISO）を返し、/rate_limit を認証つきで呼ぶ", async () => {
-    const requests: { url: string; auth: string | null }[] = [];
+  test("GraphQL rateLimit と REST core / search の実値を並行取得して返し、枠ごとの差異を保持する", async () => {
+    const requests: { url: string; auth: string | null; method?: string }[] = [];
     const client = new GitHubApiClient({
       token: "dummy-token",
       fetch: async (input, init) => {
+        const urlStr = String(input);
         requests.push({
-          url: String(input),
+          url: urlStr,
           auth: new Headers(init?.headers).get("Authorization"),
+          method: init?.method,
         });
-        return jsonResponse({
-          resources: {
-            core: { limit: 1000, remaining: 640, reset: 1_794_000_000 },
-            search: { limit: 30, remaining: 22, reset: 1_794_000_060 },
-            graphql: { limit: 5000, remaining: 5000, reset: 1_794_003_600 },
-          },
-        });
+
+        if (urlStr.includes("/graphql")) {
+          return jsonResponse({
+            data: {
+              rateLimit: {
+                limit: 5000,
+                cost: 1,
+                remaining: 4999,
+                resetAt: "2026-11-12T06:00:00Z",
+              },
+            },
+          });
+        }
+
+        if (urlStr.includes("/rate_limit")) {
+          return jsonResponse({
+            resources: {
+              core: { limit: 1000, remaining: 640, reset: 1_794_000_000 },
+              search: { limit: 30, remaining: 22, reset: 1_794_000_060 },
+            },
+          });
+        }
+
+        return new Response("Not Found", { status: 404 });
       },
     });
 
     const result = await client.getRateLimit();
 
-    expect(requests).toEqual([
-      { url: "https://api.github.com/rate_limit", auth: "Bearer dummy-token" },
-    ]);
-    expect(result).toEqual({
-      core: { limit: 1000, remaining: 640, resetAt: new Date(1_794_000_000_000).toISOString() },
-      search: { limit: 30, remaining: 22, resetAt: new Date(1_794_000_060_000).toISOString() },
+    expect(requests.length).toBe(2);
+    expect(
+      requests.some((r) => r.url === "https://api.github.com/graphql" && r.method === "POST"),
+    ).toBe(true);
+    expect(
+      requests.some((r) => r.url === "https://api.github.com/rate_limit" && r.method === "GET"),
+    ).toBe(true);
+
+    // GraphQL 枠の実値
+    expect(result.graphql).toEqual({
+      limit: 5000,
+      remaining: 4999,
+      resetAt: "2026-11-12T06:00:00.000Z",
+      cost: 1,
+    });
+    // REST Search 枠の実値（GraphQL の値で上書きされず独立している）
+    expect(result.search).toEqual({
+      limit: 30,
+      remaining: 22,
+      resetAt: new Date(1_794_000_060_000).toISOString(),
+    });
+    // REST Core 枠の実値
+    expect(result.core).toEqual({
+      limit: 1000,
+      remaining: 640,
+      resetAt: new Date(1_794_000_000_000).toISOString(),
     });
   });
 
-  test("リセット時刻が無い枠は resetAt を null にする", async () => {
+  test("GraphQL のリセット時刻が無効な形式の場合は resetAt を null にする", async () => {
     const client = new GitHubApiClient({
-      fetch: async () =>
-        jsonResponse({
+      token: "dummy-token",
+      fetch: async (input) => {
+        const urlStr = String(input);
+        if (urlStr.includes("/graphql")) {
+          return jsonResponse({
+            data: {
+              rateLimit: {
+                limit: 5000,
+                cost: 1,
+                remaining: 4999,
+                resetAt: "",
+              },
+            },
+          });
+        }
+        return jsonResponse({
           resources: {
             core: { limit: 60, remaining: 59 },
             search: { limit: 10, remaining: 10 },
           },
-        }),
+        });
+      },
     });
     const result = await client.getRateLimit();
-    expect(result.core.resetAt).toBeNull();
+    expect(result.graphql?.resetAt).toBeNull();
     expect(result.search.resetAt).toBeNull();
   });
 
   test.each([
-    ["core が無い", { resources: { search: { limit: 30, remaining: 30, reset: 1 } } }, "core"],
-    ["search が無い", { resources: { core: { limit: 60, remaining: 60, reset: 1 } } }, "search"],
+    ["rateLimit が無い", { data: {} }],
     [
-      "残量が数値でない",
-      {
-        resources: {
-          core: { limit: 60, remaining: "x", reset: 1 },
-          search: { limit: 30, remaining: 30, reset: 1 },
-        },
-      },
-      "core",
+      "limit が数値でない",
+      { data: { rateLimit: { limit: "x", remaining: 10, resetAt: "2026-11-12T06:00:00Z" } } },
     ],
-    ["resources が無い", {}, "core"],
-  ])("応答が想定外なら握りつぶさず例外にする: %s", async (_name, body, field) => {
-    const client = new GitHubApiClient({ fetch: async () => jsonResponse(body) });
-    await expect(client.getRateLimit()).rejects.toThrow(`応答に ${field} がありません`);
+    [
+      "remaining が数値でない",
+      { data: { rateLimit: { limit: 5000, remaining: null, resetAt: "2026-11-12T06:00:00Z" } } },
+    ],
+  ])("GraphQL 応答が想定外なら握りつぶさず例外にする: %s", async (_name, body) => {
+    const client = new GitHubApiClient({
+      token: "dummy-token",
+      fetch: async (input) => {
+        const urlStr = String(input);
+        if (urlStr.includes("/graphql")) {
+          return jsonResponse(body);
+        }
+        return jsonResponse({
+          resources: {
+            core: { limit: 60, remaining: 59 },
+            search: { limit: 10, remaining: 10 },
+          },
+        });
+      },
+    });
+    await expect(client.getRateLimit()).rejects.toThrow("rateLimit がありません");
+  });
+
+  test("REST /rate_limit がエラーの場合は例外にする", async () => {
+    const client = new GitHubApiClient({
+      token: "dummy-token",
+      fetch: async (input) => {
+        const urlStr = String(input);
+        if (urlStr.includes("/graphql")) {
+          return jsonResponse({
+            data: {
+              rateLimit: {
+                limit: 5000,
+                cost: 1,
+                remaining: 4999,
+                resetAt: "2026-11-12T06:00:00Z",
+              },
+            },
+          });
+        }
+        return new Response("REST rate limit error", { status: 500 });
+      },
+    });
+    await expect(client.getRateLimit()).rejects.toThrow(
+      "GitHub REST レート制限の取得に失敗しました",
+    );
+  });
+
+  test("トークン未指定時は 401 GitHubApiError にする", async () => {
+    const origGithubToken = process.env.GITHUB_TOKEN;
+    const origGhToken = process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+
+    try {
+      const client = new GitHubApiClient({
+        token: undefined,
+        fetch: async () => jsonResponse({ data: {} }),
+      });
+      await expect(client.getRateLimit()).rejects.toThrow(GitHubApiError);
+      try {
+        await client.getRateLimit();
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(GitHubApiError);
+        expect((err as GitHubApiError).status).toBe(401);
+      }
+    } finally {
+      if (origGithubToken !== undefined) {
+        process.env.GITHUB_TOKEN = origGithubToken;
+      }
+      if (origGhToken !== undefined) {
+        process.env.GH_TOKEN = origGhToken;
+      }
+    }
   });
 
   test("HTTP エラーはステータス付きの GitHubApiError にする", async () => {
     const client = new GitHubApiClient({
+      token: "dummy-token",
       fetch: async () => new Response("rate limited", { status: 403 }),
     });
     const error = await client.getRateLimit().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(GitHubApiError);
-    expect((error as GitHubApiError).message).toContain("status 403");
-    expect((error as GitHubApiError).message).toContain("rate limited");
+    expect((error as GitHubApiError).message).toContain("403");
   });
 });

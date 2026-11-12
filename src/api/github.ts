@@ -4,6 +4,12 @@ import type {
   ProgressPrDetail,
   ProgressTimelineEvent,
 } from "../models/progress";
+import {
+  adaptGraphQLRateLimitBucket,
+  adaptGraphQLToPrDetail,
+  adaptGraphQLToPrView,
+} from "./graphql-adapters";
+import type { GraphQLPullRequestNode, GraphQLRateLimitData } from "./graphql-types";
 
 export interface GitHubDetailedSearchItem {
   number: number;
@@ -26,7 +32,7 @@ export interface GitHubDetailedSearchResult {
 /** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-/** レート制限の 1 枠（core / search）の残量 */
+/** レート制限の 1 枠（core / search / graphql）の残量 */
 export interface GitHubRateLimitBucket {
   limit: number;
   remaining: number;
@@ -34,10 +40,94 @@ export interface GitHubRateLimitBucket {
   resetAt: string | null;
 }
 
+export interface GraphQLRateLimitBucket extends GitHubRateLimitBucket {
+  cost?: number;
+}
+
 export interface GitHubRateLimit {
+  /** GraphQL レート制限枠 */
+  graphql?: GraphQLRateLimitBucket;
+  /** REST core 枠の実値 */
   core: GitHubRateLimitBucket;
+  /** REST search 枠の実値 */
   search: GitHubRateLimitBucket;
 }
+
+/**
+ * リポジトリ識別文字列（"owner/name"）をパースする。
+ */
+export function parseRepository(repository: string): { owner: string; name: string } {
+  const parts = repository.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new GitHubApiError(
+      `リポジトリ名の形式が不正です: "${repository}" (owner/repo 形式を指定してください)`,
+      400,
+    );
+  }
+  return { owner: parts[0], name: parts[1] };
+}
+
+export const GET_RATE_LIMIT_QUERY = `
+query GetRateLimit {
+  rateLimit {
+    limit
+    cost
+    remaining
+    resetAt
+  }
+}
+`;
+
+export const GET_PULL_REQUEST_VIEW_QUERY = `
+query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      createdAt
+      updatedAt
+    }
+  }
+}
+`;
+
+export const GET_PULL_REQUEST_DETAILS_QUERY = `
+query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      state
+      isDraft
+      createdAt
+      updatedAt
+      mergedAt
+      closedAt
+      author {
+        login
+      }
+      authorAssociation
+      labels(first: 100) {
+        nodes {
+          name
+        }
+      }
+      commits(first: 100) {
+        totalCount
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            committedDate
+          }
+        }
+      }
+    }
+  }
+}
+`;
 
 export interface GitHubApiClientOptions {
   token?: string;
@@ -53,6 +143,45 @@ export class GitHubApiError extends Error {
     super(message);
     this.name = "GitHubApiError";
   }
+}
+
+export interface GraphQLErrorDetail {
+  message?: string;
+  type?: string;
+  path?: Array<string | number>;
+  locations?: Array<{ line: number; column: number }>;
+}
+
+export class GitHubGraphQLError extends GitHubApiError {
+  constructor(
+    message: string,
+    status: number,
+    readonly errors: GraphQLErrorDetail[] = [],
+  ) {
+    super(message, status);
+    this.name = "GitHubGraphQLError";
+  }
+}
+
+/**
+ * GraphQL の errors が PullRequest の不存在（NOT_FOUND）に起因するかを厳密に判定する。
+ * path で対象が pullRequest であることを確認し、FORBIDDEN や INTERNAL などの
+ * 認可・サーバー障害エラーを誤って 404 に変換しないよう不存在エラーのみに限定する。
+ */
+export function isPrNotFoundGraphQLError(err: unknown): boolean {
+  if (err instanceof GitHubGraphQLError) {
+    if (err.errors.length === 0) {
+      return false;
+    }
+    return err.errors.every((e) => {
+      const isNotFound =
+        e.type === "NOT_FOUND" ||
+        Boolean(e.message?.includes("Could not resolve to a PullRequest"));
+      const isPrPath = e.path ? e.path.includes("pullRequest") : true;
+      return isNotFound && isPrPath;
+    });
+  }
+  return false;
 }
 
 /**
@@ -127,31 +256,43 @@ export class GitHubApiClient {
   }
 
   /**
-   * レート制限の残量を取得する。このエンドポイントの呼び出し自体は、制限を消費しない。
-   * core（通常の REST）と search（検索 API）は別枠なので、それぞれ返す。
+   * レート制限の残量を取得する。
+   * GraphQL の rateLimit クエリ（1pt消費）と REST /rate_limit（0pt消費）を並行取得し、
+   * GraphQL 枠および REST core / search 枠の真の残量を返す。
    */
   async getRateLimit(): Promise<GitHubRateLimit> {
-    const res = await this.fetchFn(`${this.baseUrl}/rate_limit`, {
-      method: "GET",
-      headers: this.getHeaders(),
-    });
+    const [gqlData, restRes] = await Promise.all([
+      this.graphql<{ rateLimit?: GraphQLRateLimitData }>(GET_RATE_LIMIT_QUERY),
+      this.fetchFn(`${this.baseUrl}/rate_limit`, {
+        method: "GET",
+        headers: this.getHeaders(),
+      }),
+    ]);
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
+    if (
+      !gqlData?.rateLimit ||
+      !Number.isFinite(gqlData.rateLimit.limit) ||
+      !Number.isFinite(gqlData.rateLimit.remaining)
+    ) {
+      throw new GitHubApiError("GitHub レート制限の応答に rateLimit がありません", 500);
+    }
+
+    if (!restRes.ok) {
+      const errText = await restRes.text().catch(() => "");
       throw new GitHubApiError(
-        `GitHub レート制限の取得に失敗しました (status ${res.status}): ${errText}`,
-        res.status,
+        `GitHub REST レート制限の取得に失敗しました (status ${restRes.status}): ${errText}`,
+        restRes.status,
       );
     }
 
-    const data = (await res.json()) as { resources?: Record<string, unknown> };
-    const pick = (name: string): GitHubRateLimitBucket => {
-      const bucket = data.resources?.[name] as Record<string, unknown> | undefined;
+    const restData = (await restRes.json()) as { resources?: Record<string, unknown> };
+    const pickRest = (name: string): GitHubRateLimitBucket => {
+      const bucket = restData.resources?.[name] as Record<string, unknown> | undefined;
       const limit = Number(bucket?.limit);
       const remaining = Number(bucket?.remaining);
       const reset = Number(bucket?.reset);
       if (!bucket || !Number.isFinite(limit) || !Number.isFinite(remaining)) {
-        throw new GitHubApiError(`GitHub レート制限の応答に ${name} がありません`, res.status);
+        throw new GitHubApiError(`GitHub レート制限の応答に ${name} がありません`, restRes.status);
       }
       return {
         limit,
@@ -159,36 +300,49 @@ export class GitHubApiClient {
         resetAt: Number.isFinite(reset) ? new Date(reset * 1000).toISOString() : null,
       };
     };
-    return { core: pick("core"), search: pick("search") };
+
+    const graphqlBucket: GraphQLRateLimitBucket = {
+      ...adaptGraphQLRateLimitBucket(gqlData.rateLimit),
+      cost: gqlData.rateLimit.cost,
+    };
+
+    return {
+      graphql: graphqlBucket,
+      core: pickRest("core"),
+      search: pickRest("search"),
+    };
   }
 
   /**
-   * Pull Request の基本情報を取得する。
+   * Pull Request の基本情報を取得する（GraphQL repository.pullRequest 経由）。
    */
   async getPullRequest(repository: string, prNumber: number): Promise<GitHubPrView> {
-    const url = `${this.baseUrl}/repos/${repository}/pulls/${prNumber}`;
+    const { owner, name } = parseRepository(repository);
+    try {
+      const data = await this.graphql<{
+        repository?: {
+          pullRequest?: GraphQLPullRequestNode | null;
+        } | null;
+      }>(GET_PULL_REQUEST_VIEW_QUERY, { owner, name, number: prNumber });
 
-    const res = await this.fetchFn(url, {
-      method: "GET",
-      headers: this.getHeaders(),
-    });
+      const prNode = data?.repository?.pullRequest;
+      if (!prNode) {
+        throw new GitHubApiError(
+          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
+          404,
+        );
+      }
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new GitHubApiError(
-        `GitHub Pull Request 取得に失敗しました (#${prNumber}, status ${res.status}): ${errText}`,
-        res.status,
-      );
+      return adaptGraphQLToPrView(prNode);
+    } catch (err: unknown) {
+      if (isPrNotFoundGraphQLError(err)) {
+        throw new GitHubApiError(
+          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
+          404,
+        );
+      }
+      throw err;
     }
-
-    const item = (await res.json()) as Record<string, unknown>;
-    return {
-      number: Number(item.number),
-      title: String(item.title),
-      url: String(item.html_url),
-      createdAt: String(item.created_at),
-      updatedAt: String(item.updated_at),
-    };
   }
 
   /**
@@ -251,9 +405,42 @@ export class GitHubApiClient {
   }
 
   /**
-   * Pull Request の詳細情報（状態、コミット一覧、ラベルなど）を取得する。
+   * Pull Request の詳細情報（状態、コミット一覧、ラベルなど）を取得する（GraphQL repository.pullRequest 経由）。
+   * 1 リクエストで PR 基本情報・ラベル・コミット一覧（先頭 100 件）を一括取得する。
    */
   async getPullRequestDetails(repository: string, prNumber: number): Promise<ProgressPrDetail> {
+    const { owner, name } = parseRepository(repository);
+    try {
+      const data = await this.graphql<{
+        repository?: {
+          pullRequest?: GraphQLPullRequestNode | null;
+        } | null;
+      }>(GET_PULL_REQUEST_DETAILS_QUERY, { owner, name, number: prNumber });
+
+      const prNode = data?.repository?.pullRequest;
+      if (!prNode) {
+        throw new GitHubApiError(
+          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
+          404,
+        );
+      }
+
+      return adaptGraphQLToPrDetail(prNode);
+    } catch (err: unknown) {
+      if (isPrNotFoundGraphQLError(err)) {
+        throw new GitHubApiError(
+          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
+          404,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * REST API を直接呼び出して PR 詳細・コミット一覧を取得する（比較検証・移行診断専用）。
+   */
+  async getPullRequestDetailsRest(repository: string, prNumber: number): Promise<ProgressPrDetail> {
     const prUrl = `${this.baseUrl}/repos/${repository}/pulls/${prNumber}`;
     const commitsUrl = `${this.baseUrl}/repos/${repository}/pulls/${prNumber}/commits?per_page=100`;
 
@@ -265,7 +452,7 @@ export class GitHubApiClient {
     if (!prRes.ok) {
       const errText = await prRes.text().catch(() => "");
       throw new GitHubApiError(
-        `GitHub Pull Request 取得に失敗しました (#${prNumber}, status ${prRes.status}): ${errText}`,
+        `GitHub Pull Request (REST) 取得に失敗しました (#${prNumber}, status ${prRes.status}): ${errText}`,
         prRes.status,
       );
     }
@@ -273,7 +460,7 @@ export class GitHubApiClient {
     if (!commitsRes.ok) {
       const errText = await commitsRes.text().catch(() => "");
       throw new GitHubApiError(
-        `GitHub PR コミット一覧取得に失敗しました (#${prNumber}, status ${commitsRes.status}): ${errText}`,
+        `GitHub PR コミット一覧 (REST) 取得に失敗しました (#${prNumber}, status ${commitsRes.status}): ${errText}`,
         commitsRes.status,
       );
     }
@@ -431,14 +618,15 @@ export class GitHubApiClient {
 
     const json = (await res.json()) as {
       data?: T;
-      errors?: Array<{ message?: string }>;
+      errors?: GraphQLErrorDetail[];
     };
 
     if (json.errors && json.errors.length > 0) {
       const messages = json.errors.map((e) => e.message ?? "Unknown error").join("; ");
-      throw new GitHubApiError(
+      throw new GitHubGraphQLError(
         `GitHub GraphQL API からエラーが返されました: ${messages}`,
         res.status,
+        json.errors,
       );
     }
 
