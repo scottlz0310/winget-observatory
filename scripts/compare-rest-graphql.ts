@@ -76,7 +76,7 @@ query ComparePullRequest($owner: String!, $name: String!, $number: Int!) {
           name
         }
       }
-      commits(last: 100) {
+      commits(first: 100) {
         nodes {
           commit {
             oid
@@ -91,10 +91,14 @@ query ComparePullRequest($owner: String!, $name: String!, $number: Int!) {
 `;
 
 const GRAPHQL_TIMELINE_QUERY = `
-query CompareTimeline($owner: String!, $name: String!, $number: Int!) {
+query CompareTimeline($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      timelineItems(first: 100, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
+      timelineItems(first: 100, after: $after, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           __typename
           ... on LabeledEvent {
@@ -206,6 +210,49 @@ export function parseCliArgs(argv: string[]): CompareOptions {
   return { repository, targetPr, query, sort, order, perPage, asJson };
 }
 
+export async function fetchGraphQLTimeline(
+  client: GitHubApiClient,
+  owner: string,
+  name: string,
+  number: number,
+  maxPages = 10,
+): Promise<GraphQLTimelineItemNode[]> {
+  const allNodes: GraphQLTimelineItemNode[] = [];
+  let after: string | null = null;
+  let pageCount = 0;
+
+  while (pageCount < maxPages) {
+    pageCount++;
+    const res: {
+      repository: {
+        pullRequest: {
+          timelineItems: {
+            pageInfo?: { hasNextPage: boolean; endCursor: string | null };
+            nodes?: GraphQLTimelineItemNode[];
+          };
+        };
+      };
+    } = await client.graphql(GRAPHQL_TIMELINE_QUERY, {
+      owner,
+      name,
+      number,
+      after,
+    });
+
+    const connection = res.repository.pullRequest.timelineItems;
+    if (Array.isArray(connection.nodes)) {
+      allNodes.push(...connection.nodes);
+    }
+
+    if (!connection.pageInfo?.hasNextPage || !connection.pageInfo.endCursor) {
+      break;
+    }
+    after = connection.pageInfo.endCursor;
+  }
+
+  return allNodes;
+}
+
 export async function runCompare(
   options: CompareOptions,
   client = new GitHubApiClient(),
@@ -250,7 +297,7 @@ export async function runCompare(
   let timelineReport: ComparisonReport["timeline"];
 
   if (comparePrNumber) {
-    const [restPrDetail, gqlPrDetailRaw, restTimeline, gqlTimelineRaw] = await Promise.all([
+    const [restPrDetail, gqlPrDetailRaw, restTimeline, gqlTimelineNodes] = await Promise.all([
       client.getPullRequestDetails(options.repository, comparePrNumber),
       client.graphql<{ repository: { pullRequest: GraphQLPullRequestNode } }>(
         GRAPHQL_PR_DETAIL_QUERY,
@@ -261,24 +308,14 @@ export async function runCompare(
         },
       ),
       client.getIssueTimeline(options.repository, comparePrNumber),
-      client.graphql<{
-        repository: {
-          pullRequest: { timelineItems: { nodes: GraphQLTimelineItemNode[] } };
-        };
-      }>(GRAPHQL_TIMELINE_QUERY, {
-        owner,
-        name,
-        number: comparePrNumber,
-      }),
+      fetchGraphQLTimeline(client, owner, name, comparePrNumber),
     ]);
 
     const gqlPrDetail = adaptGraphQLToPrDetail(gqlPrDetailRaw.repository.pullRequest);
     const prDiff = diffPrDetails(restPrDetail, gqlPrDetail);
     prDetailReport = { number: comparePrNumber, diff: prDiff };
 
-    const gqlTimelineEvents = adaptGraphQLTimelineItems(
-      gqlTimelineRaw.repository.pullRequest.timelineItems.nodes ?? [],
-    );
+    const gqlTimelineEvents = adaptGraphQLTimelineItems(gqlTimelineNodes);
     const timelineDiff = diffTimelines(
       restTimeline,
       gqlTimelineEvents,
