@@ -5,7 +5,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { join, resolve } from "node:path";
 import { DEFAULT_REPOSITORY, DEFAULT_TARGET_PR } from "../src/cli/args";
 import { describeGuidance, describeOvertake } from "../src/domain/benchmark";
-import { renderLineChartSvg, renderTimelineSvg } from "../src/domain/chart";
+import {
+  type DualAxisSeries,
+  renderDualAxisLineChartSvg,
+  renderTimelineSvg,
+} from "../src/domain/chart";
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
@@ -13,7 +17,11 @@ import {
   selectComparableHistory,
 } from "../src/domain/dashboard";
 import { calculateExitBreakdown } from "../src/domain/exit-breakdown";
-import { extractStaleFrontierSamples, parseDepthsHistory } from "../src/domain/forecast";
+import {
+  extractFirstTimerFrontierSamples,
+  extractStaleFrontierSamples,
+  parseDepthsHistory,
+} from "../src/domain/forecast";
 import {
   buildForecastSource,
   calculateForecastComparison,
@@ -97,6 +105,7 @@ function renderBottomRowTable(
   items: DepthsRow[],
   timestampIso: string,
   showAuthor = false,
+  highlightRepeaters = false,
 ): string {
   const observedMs = Date.parse(timestampIso);
   const rows = items
@@ -106,11 +115,16 @@ function renderBottomRowTable(
         Number.isNaN(observedMs) || Number.isNaN(updatedMs)
           ? "-"
           : `${Math.round(((observedMs - updatedMs) / 86_400_000) * 10) / 10} 日`;
+      const isRepeater = item.AuthorAssociation && item.AuthorAssociation !== "NONE";
+      const repeaterBadge =
+        highlightRepeaters && isRepeater
+          ? `<span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者ではないため、初回提出者の底では除外">常連除外</span>`
+          : "";
       const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
       return `
         <tr>
           <td>${index + 1}</td>
-          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a></td>
+          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}</td>
           ${authorCell}
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
           <td>${escapeHtml(item.更新日時 || item.UpdatedAt)}</td>
@@ -144,7 +158,7 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
   if (items.length === 0) {
     return `<p style="color: var(--text-muted); font-size: 0.875rem;">優等生の底のデータはまだありません。</p>`;
   }
-  return renderBottomRowTable(items, depths?.Timestamp ?? "");
+  return renderBottomRowTable(items, depths?.Timestamp ?? "", false, true);
 }
 
 /** 初回提出者の底（常連を除外した純粋な初回提出者・1コミットの PR）の表 */
@@ -153,7 +167,7 @@ function renderFirstTimerBottomTable(depths: LatestDepths | null): string {
   if (items.length === 0) {
     return `<p style="color: var(--text-muted); font-size: 0.875rem;">初回提出者の底のデータはまだありません（次回の定期観測から記録されます）。</p>`;
   }
-  return renderBottomRowTable(items, depths?.Timestamp ?? "", true);
+  return renderBottomRowTable(items, depths?.Timestamp ?? "", true, false);
 }
 
 const DAY_MS = 86_400_000;
@@ -163,6 +177,92 @@ const CHART_MAX_POINTS = 120;
 
 /** 実績サンプルが少なく、数値が揺れやすいとみなす件数 */
 const FEW_SAMPLES = 10;
+
+/**
+ * ページ最上部に置く初回提出者（純粋FIFO）サマリー
+ * スクロールなしで P50/P75 予想マージ日、残り目安日数、追い越し実態の内訳を把握できる
+ */
+function renderFirstTimerHeroSummary(
+  progress: LatestProgress | null,
+  depths: LatestDepths | null,
+): string {
+  const currentLifetime = Number(progress?.TotalLifetimeDays) || Number(progress?.WaitDays) || 0;
+  const p50 = progress?.FirstTimerMedianDays;
+  const p75 = progress?.FirstTimerP75Days;
+  const sampleCount = progress?.FirstTimerSampleCount ?? 0;
+
+  // 基準 PR の起票時刻
+  const createdRaw = depths?.TargetPr?.CreatedAt || depths?.TargetPr?.CreatedAtJst;
+  const createdMs = createdRaw ? Date.parse(createdRaw) : Number.NaN;
+
+  let p50DateStr = "-";
+  let p50EtaStr = "";
+  if (p50 !== undefined && p50 !== null) {
+    const eta = Math.max(0, Math.round((p50 - currentLifetime) * 10) / 10);
+    p50EtaStr = eta === 0 ? "（到達済み）" : `（残り約 ${eta} 日）`;
+    if (!Number.isNaN(createdMs)) {
+      p50DateStr = formatJstDate(createdMs + p50 * DAY_MS);
+    } else {
+      p50DateStr = `起票から ${p50} 日目`;
+    }
+  }
+
+  let p75DateStr = "-";
+  let p75EtaStr = "";
+  if (p75 !== undefined && p75 !== null) {
+    const eta = Math.max(0, Math.round((p75 - currentLifetime) * 10) / 10);
+    p75EtaStr = eta === 0 ? "（到達済み）" : `（残り約 ${eta} 日）`;
+    if (!Number.isNaN(createdMs)) {
+      p75DateStr = formatJstDate(createdMs + p75 * DAY_MS);
+    } else {
+      p75DateStr = `起票から ${p75} 日目`;
+    }
+  }
+
+  const c = progress?.Comparison;
+  const firstTimerOvertake = c?.FirstTimerLaterCreated ?? 0;
+  const repeatOvertake = c?.RepeatOrExpressLaterCreated ?? c?.LaterCreated ?? 0;
+  const unknownOvertake = c?.UnknownLaterCreated ?? 0;
+  const totalOvertake = c?.LaterCreated ?? firstTimerOvertake + repeatOvertake;
+
+  const overtakeNote =
+    firstTimerOvertake === 0
+      ? `<span style="color: var(--success); font-weight: 600;">✨ 初回提出者による追い越し 0 件（完全な作成順で進行中）</span>`
+      : `<span>初回提出者による追い越し ${firstTimerOvertake} 件</span>`;
+
+  return `
+    <section class="card first-timer-hero" style="border: 2px solid var(--success); margin-bottom: 1.5rem; background: linear-gradient(to bottom right, var(--card-bg), rgba(22, 163, 74, 0.04));">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
+        <div class="card-title" style="color: var(--success); font-weight: 700; font-size: 1.05rem; margin-bottom: 0;">
+          🎯 初回提出者（純粋FIFO）サマリー
+        </div>
+        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">純粋FIFO待機列 準拠</span>
+      </div>
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 0.5rem;">
+        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">予想マージ日 (P50 中央値)</div>
+          <div style="font-size: 1.25rem; font-weight: 700;">${escapeHtml(p50DateStr)} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">${p50EtaStr}</span></div>
+          <div class="card-subtext">通算実績: <strong>${p50 ?? "-"}</strong> 日（基準 PR 現在: ${currentLifetime} 日）</div>
+        </div>
+        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">予想マージ日 (P75 75%点)</div>
+          <div style="font-size: 1.25rem; font-weight: 700;">${escapeHtml(p75DateStr)} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">${p75EtaStr}</span></div>
+          <div class="card-subtext">通算実績: <strong>${p75 ?? "-"}</strong> 日（サンプル ${sampleCount} 件）</div>
+        </div>
+        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">追い越し実態の分離内訳</div>
+          <div style="font-size: 1.15rem; font-weight: 700;">後発マージ計 ${totalOvertake} 件</div>
+          <div class="card-subtext" style="margin-top: 0.2rem;">
+            常連・特急: <strong>${repeatOvertake}</strong> 件 / 初回: <strong>${firstTimerOvertake}</strong> 件${unknownOvertake > 0 ? ` / 未判定: ${unknownOvertake} 件` : ""}
+          </div>
+          <div style="font-size: 0.75rem; margin-top: 0.25rem;">${overtakeNote}</div>
+        </div>
+      </div>
+      <div class="card-subtext" style="margin-top: 0.5rem;">
+        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、純粋な初回提出者（1コミット・健康体）の観測値に基づきます。
+      </div>
+    </section>`;
+}
 
 /** 日数統計カード（中央値・75%点・最大）と、基準 PR の現在値の位置づけ */
 function renderStatCard(
@@ -189,19 +289,39 @@ function renderStatCard(
       </div>`;
 }
 
-/** 初回提出者コホート実績カード（常連・特急レーンを除外した真の初回提出者） */
-function renderFirstTimerStatCard(progress: LatestProgress): string {
+/** 初回提出者コホート実績ブロック（常連・特急レーンを除外した真の初回提出者） */
+function renderFirstTimerCohortBlock(progress: LatestProgress | null): string {
+  if (
+    !progress ||
+    progress.FirstTimerMedianDays === undefined ||
+    progress.FirstTimerMedianDays === null
+  ) {
+    return "";
+  }
   const count = progress.FirstTimerSampleCount ?? 0;
   return `
-      <div class="card stat-card" style="border-left: 4px solid var(--primary);">
-        <div class="card-title">🌱 初回提出者コホート実績</div>
-        <div class="card-value" style="font-size: 1.15rem; display: flex; flex-wrap: wrap; column-gap: 0.75rem;">
-          <span style="white-space: nowrap;">P50: ${formatDaysStat(progress.FirstTimerMedianDays)}</span>
-          <span style="white-space: nowrap;">P75: ${formatDaysStat(progress.FirstTimerP75Days)}</span>
+    <div class="card" style="border-left: 5px solid var(--success); margin-bottom: 1.5rem; background: var(--card-bg);">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
+        <div class="card-title" style="font-size: 1rem; font-weight: 700; color: var(--success); margin-bottom: 0;">🌱 初回提出者コホート実績（純粋FIFO待機列）</div>
+        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">採用 ${count} 件</span>
+      </div>
+      <p class="section-note" style="margin-bottom: 0.75rem;">
+        常連の大量まとめマージや特急レーンを除外した「初回提出者（1コミット・累計マージ1件）」の通算所要日数です。ノイズがないため、所要日数が非常に狭いレンジ（約36〜39日）に収束します。
+      </p>
+      <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: baseline;">
+        <div>
+          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">中央値 (P50)</span>
+          <span style="font-size: 1.5rem; font-weight: 700;">${formatDaysStat(progress.FirstTimerMedianDays)}</span>
         </div>
-        <div class="card-subtext">常連・特急レーンを除外した真の初回提出者（1コミット・累計マージ1件）の通算所要日数（${count} 件）</div>
-        <div class="card-subtext">基準 PR の現在: <strong>${escapeHtml(progress.TotalLifetimeDays)}</strong> 日</div>
-      </div>`;
+        <div>
+          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">75%点 (P75)</span>
+          <span style="font-size: 1.5rem; font-weight: 700;">${formatDaysStat(progress.FirstTimerP75Days)}</span>
+        </div>
+        <div style="margin-left: auto; align-self: center;">
+          <div class="card-subtext">基準 PR の現在: <strong>${escapeHtml(progress.TotalLifetimeDays)}</strong> 日</div>
+        </div>
+      </div>
+    </div>`;
 }
 
 /** 追い越しの比較（採用サンプル内で、基準 PR より後に作成・成立してマージされた件数） */
@@ -284,20 +404,28 @@ function renderSamplesSection(progress: LatestProgress | null, repo: string): st
   // 一覧は新しい順の一部（スナップショットの上限）。統計に使った総数は SampleCount
   const total = Math.max(progress?.SampleCount ?? 0, samples.length);
   const rows = samples
-    .map(
-      (sample) => `
-        <tr>
+    .map((sample) => {
+      const cohortBadge =
+        sample.IsFirstTimer === true
+          ? '<span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">🌱 初回</span>'
+          : sample.IsFirstTimer === false
+            ? '<span class="badge" style="background: var(--code-bg); color: var(--text-muted); font-weight: 500;">⚡ 常連</span>'
+            : '<span style="color: var(--text-muted); font-size: 0.75rem; border-bottom: 1px dashed var(--border-color);">⏳ 未判定</span>';
+      const rowStyle =
+        sample.IsFirstTimer === true ? ' style="background: rgba(22, 163, 74, 0.04);"' : "";
+      return `
+        <tr${rowStyle}>
           <td><a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(sample.Number)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(sample.Number)}</a></td>
           <td>${sample.Relation === "older" ? "古い" : "新しい"}</td>
           <td>${escapeHtml(sample.CommitCount)}</td>
           <td>${sample.TurnDays.toFixed(1)} 日</td>
           <td>${sample.TotalDays.toFixed(1)} 日</td>
           <td>${sample.ReadyDays.toFixed(1)} 日</td>
-          <td>${sample.IsFirstTimer === true ? '<span style="color: var(--success); font-weight: 600;">初回</span>' : sample.IsFirstTimer === false ? '<span style="color: var(--text-muted);">常連</span>' : "-"}</td>
+          <td>${cohortBadge}</td>
           <td>${escapeHtml(formatDateTimeWithDay(sample.LatestCommittedDate))}</td>
           <td>${escapeHtml(formatDateTimeWithDay(sample.MergedAt))}</td>
-        </tr>`,
-    )
+        </tr>`;
+    })
     .join("");
   return `
     <h2 class="section-title">🧪 比較に使ったサンプル（${total} 件）</h2>
@@ -421,19 +549,6 @@ function renderForecastPanel(comparison: ForecastComparison): string {
 /** 仮説② の根拠: 優等生の底の先頭の遅れの推移と直近の観測 */
 function renderForecastSection(samples: StaleFrontierSample[]): string {
   const recent = samples.slice(-5).reverse();
-  const lagChart = renderLineChartSvg({
-    title: "優等生の底の先頭の遅れの推移（日）",
-    series: [
-      {
-        label: "先頭の遅れ（日）",
-        color: "var(--warning)",
-        points: samples
-          .slice(-CHART_MAX_POINTS)
-          .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.updatedMs) / DAY_MS })),
-      },
-    ],
-    decimals: 1,
-  });
   const rows = recent
     .map((sample) => {
       const lag = Math.round(((sample.timestampMs - sample.updatedMs) / DAY_MS) * 10) / 10;
@@ -450,12 +565,11 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
   return `
     <h2 class="section-title">🔮 仮説② の根拠（優等生の底の推移）</h2>
     <p class="section-note">
-      仮説②「更新の古い順に処理される」の根拠です。優等生の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します（予想日は最上部の比較を参照）。
+      仮説②「更新の古い順に処理される」の根拠です。優等生の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します（予想日は最上部の比較、推移は上部の統合時系列チャートを参照）。
     </p>
     <p class="section-note">
       先頭の遅れが横ばいなら先頭は進んでいません。実時間と同じ速度（1 日/日）で先頭が進むと、遅れは一定のままです。右下がりなら先頭が実時間より速く進んでいます。
     </p>
-    ${renderChartCard(lagChart)}
     ${
       recent.length > 0
         ? `<table>
@@ -470,7 +584,7 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
       <tbody>${rows}
       </tbody>
     </table>`
-        : ""
+        : `<div class="card-subtext">観測が 2 件以上たまると推移を表示します</div>`
     }`;
 }
 
@@ -593,6 +707,7 @@ function generateHtml(
   csvRows: ProgressHistoryRow[],
   frontierSamples: StaleFrontierSample[] = [],
   forecastHistory: ForecastHistoryLine[] = [],
+  firstTimerFrontierSamples: StaleFrontierSample[] = [],
 ): string {
   const updatedJst = progress?.TimestampJst || depths?.TimestampJst || "未観測";
   const repo = progress?.Repository || depths?.Repository || DEFAULT_REPOSITORY;
@@ -622,20 +737,51 @@ function generateHtml(
   const behindDeltaBadge = formatDeltaBadge(metrics.latestDelta.behindDelta);
 
   const chartRecords = historyRecords.slice(-CHART_MAX_POINTS);
-  const queueChart = renderLineChartSvg({
-    title: "待ち件数の推移",
-    series: [
-      {
-        label: "実質待ち（更新順）",
-        color: "var(--primary)",
-        points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.activeAhead })),
-      },
-      {
-        label: "累積待ち（作成順）",
-        color: "var(--text-muted)",
-        points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.totalAhead })),
-      },
-    ],
+  const dualSeries: DualAxisSeries[] = [
+    {
+      label: "実質待ち（更新順）",
+      axis: "left",
+      color: "var(--primary)",
+      strokeWidth: 2.5,
+      points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.activeAhead })),
+    },
+    {
+      label: "累積待ち（作成順）",
+      axis: "left",
+      color: "var(--text-muted)",
+      strokeWidth: 1.5,
+      strokeDasharray: "4 2",
+      points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.totalAhead })),
+    },
+    {
+      label: "優等生の底 先頭の遅れ",
+      axis: "right",
+      color: "var(--warning)",
+      strokeWidth: 2,
+      points: frontierSamples
+        .slice(-CHART_MAX_POINTS)
+        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.updatedMs) / DAY_MS })),
+    },
+  ];
+
+  if (firstTimerFrontierSamples.length > 0) {
+    dualSeries.push({
+      label: "🌱 初回提出者の底 先頭の遅れ",
+      axis: "right",
+      color: "var(--success)",
+      strokeWidth: 3,
+      points: firstTimerFrontierSamples
+        .slice(-CHART_MAX_POINTS)
+        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.updatedMs) / DAY_MS })),
+    });
+  }
+
+  const queueChart = renderDualAxisLineChartSvg({
+    title: "待ち件数と底の遅れの推移（統合時系列チャート）",
+    leftAxisLabel: "待ち件数",
+    rightAxisLabel: "先頭の遅れ（日）",
+    series: dualSeries,
+    rightDecimals: 1,
   });
 
   const comparison = calculateForecastComparison(
@@ -875,6 +1021,8 @@ function generateHtml(
       </div>
     </header>
 
+    ${renderFirstTimerHeroSummary(progress, depths)}
+
     ${renderForecastPanel(comparison)}
 
     <div class="grid" style="margin-top: 1.5rem;">
@@ -925,9 +1073,9 @@ function generateHtml(
       </div>
     </div>
 
-    <h2 class="section-title">📉 待ち件数の推移</h2>
+    <h2 class="section-title">📉 待ち件数の推移（キュー推移と底の進行の統合時系列）</h2>
     <p class="section-note">
-      現在の定義で記録された観測だけを表示します。実質待ち（更新順）は、前にいた PR が更新されて順位が入れ替わった分も含んで増減するため、作成順の累積待ちと並べて見てください。
+      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭の更新からの遅れ日数（優等生の底・🌱 初回提出者の底）です。
     </p>
     ${renderChartCard(queueChart)}
 
@@ -939,6 +1087,10 @@ function generateHtml(
         ? `<p class="section-note">※ サンプルが少ないため、数値は変動しやすくなっています。</p>`
         : ""
     }
+    ${renderFirstTimerCohortBlock(progress)}
+
+    <h3 class="subsection-title" style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-muted);">👥 全体実績（常連・特急レーンを含む全サンプル）</h3>
+    <p class="section-note">常連のまとめマージや特急レーンを含むため、ばらつきが大きくなります。</p>
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">${renderStatCard(
       "手番所要日数 (Turn Latency)",
       { median: progress?.TurnMedianDays, p75: progress?.TurnP75Days, max: progress?.TurnMaxDays },
@@ -965,11 +1117,7 @@ function generateHtml(
       progress?.TotalLifetimeDays,
       progress?.Guidance?.Total,
       "PR 起票からマージ完了までの全期間の所要日数",
-    )}${
-      progress?.FirstTimerMedianDays !== undefined && progress?.FirstTimerMedianDays !== null
-        ? renderFirstTimerStatCard(progress)
-        : ""
-    }
+    )}
     </div>
 
     ${renderOvertakeSection(progress)}
@@ -1055,19 +1203,33 @@ function generateHtml(
       </tbody>
     </table>
 
-    <h2 class="section-title">🧗 優等生の底（順番待ちの先頭）</h2>
+    <h2 class="section-title">🧗 待機列の底の比較（優等生 vs 初回提出者）</h2>
     <p class="section-note">
-      指摘が一度も付かずにすぐ健康になり、そのまま順番を待つだけの PR（基準 PR と同種）のうち、最終更新が古い順です（旧称: 遭難の底）。
-      更新の古い順に処理されるなら、この先頭の進みが待ち行列の実質的な進みを表します。
+      左は指摘なし・健康な1コミットPR全体（常連含む）、右はそこから常連を除外した純粋な初回提出者列です。「常連除外」バッジの付いたPRが除外されたことで、初回提出者の底で順位が繰り上がります。
     </p>
-    ${renderStaleBottomTable(depths)}
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+      <div class="card" style="padding: 1.25rem; overflow-x: auto;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 600;">🧗 優等生の底（順番待ちの先頭）</h3>
+          <span class="badge" style="background: var(--code-bg); color: var(--text-muted);">全1コミット健康体</span>
+        </div>
+        <p class="section-note" style="margin-bottom: 0.75rem;">
+          指摘なし・健康な1コミットPR（常連含む）。最終更新が古い順です。
+        </p>
+        ${renderStaleBottomTable(depths)}
+      </div>
 
-    <h3 class="subsection-title" style="margin-top: 1.5rem; font-size: 1.125rem; font-weight: 600;">🌱 初回提出者の底（真の FIFO 前線）</h3>
-    <p class="section-note">
-      優等生の底から常連コントリビューターを除外した、純粋な初回提出者（authorAssociation = NONE × 1コミット）の順番待ち先頭です。
-      常連まとめマージのノイズがない完全な FIFO 列を示します。
-    </p>
-    ${renderFirstTimerBottomTable(depths)}
+      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--success);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 600; color: var(--success);">🌱 初回提出者の底（真の FIFO 前線）</h3>
+          <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">純粋FIFO列</span>
+        </div>
+        <p class="section-note" style="margin-bottom: 0.75rem;">
+          優等生の底から常連を除外した、純粋な初回提出者（authorAssociation = NONE）。
+        </p>
+        ${renderFirstTimerBottomTable(depths)}
+      </div>
+    </div>
 
     ${renderForecastSection(frontierSamples)}
 
@@ -1169,11 +1331,12 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   }
 
   let frontierSamples: StaleFrontierSample[] = [];
+  let firstTimerFrontierSamples: StaleFrontierSample[] = [];
   if (existsSync(depthsHistoryPath)) {
     try {
-      frontierSamples = extractStaleFrontierSamples(
-        parseDepthsHistory(readFileSync(depthsHistoryPath, "utf-8")),
-      );
+      const depthsHistory = parseDepthsHistory(readFileSync(depthsHistoryPath, "utf-8"));
+      frontierSamples = extractStaleFrontierSamples(depthsHistory);
+      firstTimerFrontierSamples = extractFirstTimerFrontierSamples(depthsHistory);
     } catch (e) {
       throw buildError("キュー境界履歴", depthsHistoryPath, e);
     }
@@ -1188,7 +1351,14 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     }
   }
 
-  const html = generateHtml(progress, depths, csvRows, frontierSamples, forecastHistory);
+  const html = generateHtml(
+    progress,
+    depths,
+    csvRows,
+    frontierSamples,
+    forecastHistory,
+    firstTimerFrontierSamples,
+  );
   const htmlPath = join(outputDir, "index.html");
   writeFileSync(htmlPath, html, "utf-8");
   console.log(`[Build Pages] HTML 生成完了: ${htmlPath}`);

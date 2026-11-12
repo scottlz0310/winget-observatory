@@ -60,6 +60,26 @@ export function extractStaleFrontierSamples(snapshots: DepthsSnapshot[]): StaleF
 }
 
 /**
+ * スナップショット列から、初回提出者の底の先頭（常連を除外した初回提出者・1コミットの最古更新 PR）の
+ * 観測列を時刻昇順で取り出す。
+ * 初回提出者の底が未記録（Phase 2 導入前）、空の観測、日時が不正な観測は除く。
+ */
+export function extractFirstTimerFrontierSamples(
+  snapshots: DepthsSnapshot[],
+): StaleFrontierSample[] {
+  const samples: StaleFrontierSample[] = [];
+  for (const snapshot of snapshots) {
+    const head = snapshot.FirstTimerBottom?.[0];
+    if (!head) continue;
+    const timestampMs = Date.parse(snapshot.Timestamp);
+    const updatedMs = Date.parse(head.UpdatedAt);
+    if (Number.isNaN(timestampMs) || Number.isNaN(updatedMs)) continue;
+    samples.push({ timestampMs, pr: head.Number, updatedMs });
+  }
+  return samples.sort((a, b) => a.timestampMs - b.timestampMs);
+}
+
+/**
  * 遭難の底の先頭の進みから、基準 PR が先頭に到達するまでの日数を予想する。
  *
  * - 定常待ち時間モデル: 先頭の遅れが一定（先頭の更新時刻が実時間と同じ速度で進む）と仮定する。

@@ -24,6 +24,27 @@ export interface LineChartOptions {
   decimals?: number;
 }
 
+export interface DualAxisSeries extends ChartSeries {
+  /** 左Y軸（例: 件数）または右Y軸（例: 日数）の指定 */
+  axis: "left" | "right";
+  /** 線の太さ（省略時は 2） */
+  strokeWidth?: number;
+  /** 線の破線パターン（例: "4 2"） */
+  strokeDasharray?: string;
+}
+
+export interface DualAxisLineChartOptions {
+  /** 読み上げ用の説明（aria-label / title） */
+  title: string;
+  series: DualAxisSeries[];
+  /** 左Y軸の見出し（例: "待ち件数"） */
+  leftAxisLabel?: string;
+  /** 右Y軸の見出し（例: "先頭の遅れ（日）"） */
+  rightAxisLabel?: string;
+  leftDecimals?: number;
+  rightDecimals?: number;
+}
+
 const WIDTH = 640;
 const HEIGHT = 240;
 const MARGIN = { left: 56, right: 16, top: 30, bottom: 34 };
@@ -144,6 +165,144 @@ export function renderLineChartSvg(options: LineChartOptions): string | null {
 
   const title = xmlEscape(options.title);
   return `<svg viewBox="0 0 ${WIDTH} ${HEIGHT}" role="img" aria-label="${title}" style="width: 100%; height: auto; display: block;"><title>${title}</title>${yGrid}${xLabels}${lines}${legend}</svg>`;
+}
+
+const DUAL_WIDTH = 640;
+const DUAL_HEIGHT = 280;
+const DUAL_MARGIN = { left: 56, right: 56, top: 58, bottom: 34 };
+
+function computeAxisBounds(points: ChartPoint[], requestedDecimals?: number) {
+  if (points.length === 0) {
+    return { yMin: 0, yMax: 10, step: 2.5, decimals: 0 };
+  }
+  const yDataMin = Math.min(...points.map((p) => p.y));
+  const yDataMax = Math.max(...points.map((p) => p.y));
+  const span = yDataMax - yDataMin;
+  const pad = span === 0 ? Math.max(Math.abs(yDataMax) * 0.05, 1) : span * 0.1;
+  const step = niceStep((span + pad * 2) / Y_TICKS);
+  const yMin = Math.floor((yDataMin - pad) / step) * step;
+  const yMax = Math.ceil((yDataMax + pad) / step) * step;
+  const decimals = requestedDecimals ?? Math.max(0, Math.ceil(-Math.log10(step) - 1e-9));
+  return { yMin, yMax, step, decimals };
+}
+
+/**
+ * 2軸（左Y軸＝件数、右Y軸＝遅れ日数など）の時系列折れ線チャートを SVG 文字列にする。
+ * 描画できるだけの点（2 点以上、かつ時刻が異なる）が無ければ null を返す。
+ */
+export function renderDualAxisLineChartSvg(options: DualAxisLineChartOptions): string | null {
+  const series = options.series
+    .map((s) => ({
+      ...s,
+      points: s.points
+        .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+        .sort((a, b) => a.x - b.x),
+    }))
+    .filter((s) => s.points.length > 0);
+
+  const all = series.flatMap((s) => s.points);
+  if (all.length < 2) return null;
+
+  const xMin = Math.min(...all.map((p) => p.x));
+  const xMax = Math.max(...all.map((p) => p.x));
+  if (xMin === xMax) return null;
+
+  const leftPoints = series.filter((s) => s.axis === "left").flatMap((s) => s.points);
+  const rightPoints = series.filter((s) => s.axis === "right").flatMap((s) => s.points);
+
+  const leftBounds = computeAxisBounds(leftPoints, options.leftDecimals);
+  const rightBounds = computeAxisBounds(rightPoints, options.rightDecimals);
+
+  const plotW = DUAL_WIDTH - DUAL_MARGIN.left - DUAL_MARGIN.right;
+  const plotH = DUAL_HEIGHT - DUAL_MARGIN.top - DUAL_MARGIN.bottom;
+  const px = (x: number): number => DUAL_MARGIN.left + ((x - xMin) / (xMax - xMin)) * plotW;
+  const pyLeft = (y: number): number =>
+    DUAL_MARGIN.top +
+    (1 - (y - leftBounds.yMin) / (leftBounds.yMax - leftBounds.yMin || 1)) * plotH;
+  const pyRight = (y: number): number =>
+    DUAL_MARGIN.top +
+    (1 - (y - rightBounds.yMin) / (rightBounds.yMax - rightBounds.yMin || 1)) * plotH;
+  const num = (value: number): string => String(Math.round(value * 10) / 10);
+
+  // Y 軸グリッド線および目盛り（左・右）
+  const yGrid = Array.from({ length: Y_TICKS + 1 }, (_, i) => {
+    const ratio = i / Y_TICKS;
+    const yLeftVal = leftBounds.yMin + ratio * (leftBounds.yMax - leftBounds.yMin);
+    const yRightVal = rightBounds.yMin + ratio * (rightBounds.yMax - rightBounds.yMin);
+    const y = DUAL_MARGIN.top + (1 - ratio) * plotH;
+
+    const leftText =
+      leftPoints.length > 0
+        ? `<text x="${DUAL_MARGIN.left - 6}" y="${num(y + 4)}" text-anchor="end" style="fill: var(--text-muted)" font-size="11">${xmlEscape(formatYTick(yLeftVal, leftBounds.decimals))}</text>`
+        : "";
+    const rightText =
+      rightPoints.length > 0
+        ? `<text x="${num(DUAL_WIDTH - DUAL_MARGIN.right + 6)}" y="${num(y + 4)}" text-anchor="start" style="fill: var(--text-muted)" font-size="11">${xmlEscape(formatYTick(yRightVal, rightBounds.decimals))}</text>`
+        : "";
+
+    return (
+      `<line x1="${DUAL_MARGIN.left}" y1="${num(y)}" x2="${num(DUAL_WIDTH - DUAL_MARGIN.right)}" y2="${num(y)}" style="stroke: var(--border-color)" />` +
+      leftText +
+      rightText
+    );
+  }).join("");
+
+  // 軸見出しラベル
+  const axisHeaders =
+    (options.leftAxisLabel
+      ? `<text x="${DUAL_MARGIN.left}" y="${DUAL_MARGIN.top - 8}" text-anchor="start" font-size="11" font-weight="600" style="fill: var(--text-muted)">${xmlEscape(options.leftAxisLabel)}</text>`
+      : "") +
+    (options.rightAxisLabel
+      ? `<text x="${num(DUAL_WIDTH - DUAL_MARGIN.right)}" y="${DUAL_MARGIN.top - 8}" text-anchor="end" font-size="11" font-weight="600" style="fill: var(--text-muted)">${xmlEscape(options.rightAxisLabel)}</text>`
+      : "");
+
+  const xLabels = Array.from({ length: X_TICKS }, (_, i) => {
+    const ratio = i / (X_TICKS - 1);
+    const anchor = i === 0 ? "start" : i === X_TICKS - 1 ? "end" : "middle";
+    return `<text x="${num(DUAL_MARGIN.left + ratio * plotW)}" y="${DUAL_HEIGHT - 10}" text-anchor="${anchor}" style="fill: var(--text-muted)" font-size="11">${xmlEscape(formatXTick(xMin + (xMax - xMin) * ratio))}</text>`;
+  }).join("");
+
+  const lines = series
+    .map((s) => {
+      const py = s.axis === "left" ? pyLeft : pyRight;
+      const coords = s.points.map((p) => `${num(px(p.x))},${num(py(p.y))}`).join(" ");
+      const strokeW = s.strokeWidth ?? 2;
+      const dash = s.strokeDasharray ? ` stroke-dasharray="${xmlEscape(s.strokeDasharray)}"` : "";
+      const markers =
+        s.points.length <= MAX_MARKED_POINTS
+          ? s.points
+              .map(
+                (p) =>
+                  `<circle cx="${num(px(p.x))}" cy="${num(py(p.y))}" r="${num(strokeW + 0.5)}" style="fill: ${xmlEscape(s.color)}" />`,
+              )
+              .join("")
+          : "";
+      return `<polyline points="${coords}" fill="none" stroke-width="${strokeW}"${dash} stroke-linejoin="round" style="stroke: ${xmlEscape(s.color)}" />${markers}`;
+    })
+    .join("");
+
+  // 凡例（上部に2段構成で配置して重複を避ける）
+  const leftS = series.filter((s) => s.axis === "left");
+  const rightS = series.filter((s) => s.axis === "right");
+
+  const renderLegendRow = (items: typeof series, rowY: number, startX: number) =>
+    items
+      .map((s, i) => {
+        const x = startX + i * 180;
+        const strokeW = s.strokeWidth ?? 2;
+        const dash = s.strokeDasharray ? ` stroke-dasharray="${xmlEscape(s.strokeDasharray)}"` : "";
+        return (
+          `<line x1="${x}" y1="${rowY}" x2="${x + 16}" y2="${rowY}" stroke-width="${strokeW}"${dash} style="stroke: ${xmlEscape(s.color)}" />` +
+          `<text x="${x + 22}" y="${rowY + 4}" style="fill: var(--text-color)" font-size="11">${xmlEscape(s.label)}</text>`
+        );
+      })
+      .join("");
+
+  const legend =
+    renderLegendRow(leftS, 14, DUAL_MARGIN.left) + renderLegendRow(rightS, 32, DUAL_MARGIN.left);
+
+  const title = xmlEscape(options.title);
+  return `<svg viewBox="0 0 ${DUAL_WIDTH} ${DUAL_HEIGHT}" role="img" aria-label="${title}" style="width: 100%; height: auto; display: block;"><title>${title}</title>${yGrid}${axisHeaders}${xLabels}${lines}${legend}</svg>`;
 }
 
 export interface TimelineMarker {

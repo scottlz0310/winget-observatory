@@ -97,10 +97,17 @@ describe("buildDashboard", () => {
       // 新指標: 前回比 Δ バッジ
       expect(html).toContain("delta-badge delta-progress");
       expect(html).toContain("-50"); // 待ち件数減少（進行）
-      // 待ち件数の推移チャート（実質待ち・累積待ちの 2 系列）
-      expect(html).toContain('aria-label="待ち件数の推移"');
+      // 待ち件数の推移・底の遅れ統合チャート
+      expect(html).toContain('aria-label="待ち件数と底の遅れの推移（統合時系列チャート）"');
       expect(html.match(/<polyline /g)?.length).toBeGreaterThanOrEqual(2);
       expect(html).toContain("+50"); // 前線番号増加（進行）
+
+      // ファーストビューのサマリー
+      expect(html).toContain("🎯 初回提出者（純粋FIFO）サマリー");
+      expect(html).toContain("予想マージ日 (P50 中央値)");
+      expect(html).toContain("予想マージ日 (P75 75%点)");
+      expect(html).toContain("追い越し実態の分離内訳");
+      expect(html).toContain("常連・特急: <strong>9</strong> 件 / 初回: <strong>1</strong> 件");
 
       // 新指標: 最上部の予想パネルの順位消化（24時間で50件消化 = 日速50件、残り100件で約2日後）
       expect(html).toContain("予想マージ日（3 つの仮説の比較）");
@@ -357,18 +364,19 @@ describe("buildDashboard: マージ時期の予想", () => {
       expect(html).toContain("（約 10 日後）");
       expect(html).toContain("実測の進み: 1 日/日（直近 24 時間）");
       expect(html).toContain("仮説② の根拠");
-      expect(html).toContain('aria-label="優等生の底の先頭の遅れの推移（日）"');
+      expect(html).toContain("上部の統合時系列チャートを参照");
+      expect(html).toContain('aria-label="待ち件数と底の遅れの推移（統合時系列チャート）"');
+      expect(html).toContain("優等生の底 先頭の遅れ");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  test("観測が 1 件だけなら先頭の遅れのチャートは描かず、理由を示す", () => {
+  test("観測が 1 件だけなら先頭の遅れのテーブルは出さず、理由を示す", () => {
     const history = JSON.stringify(snapshot("2026-11-08T00:00:00Z", 10, "2026-10-10T00:00:00Z"));
     const { tempDir, dataDir, outputDir } = setup(history);
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-      expect(html).not.toContain('aria-label="優等生の底の先頭の遅れの推移（日）"');
       expect(html).toContain("観測が 2 件以上たまると推移を表示します");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -622,5 +630,189 @@ describe("buildDashboard: 過去実績との比較", () => {
     expect(html).not.toContain("追い越しの比較");
     expect(html).not.toContain("比較に使ったサンプル");
     expect(html).toContain("直前のライバル PR");
+  });
+
+  test("初回提出者コホートUX改善: ファーストビュー、独立統計ブロック、2カラム底比較・常連除外バッジ、サンプル色分け、4系列2軸チャートを正しく出力する", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-first-timer-ux-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    const dummyProgress = {
+      Timestamp: "2026-11-08T12:00:00Z",
+      TimestampJst: "2026-11-08 21:00:00",
+      Repository: "microsoft/winget-pkgs",
+      TargetPr: 123456,
+      PrTitle: "Test First Timer App",
+      FrontNumber: 120000,
+      FrontCreatedAt: "2026-10-01 10:00",
+      ActiveAhead: 1500,
+      TotalAhead: 2200,
+      Behind: 300,
+      WaitDays: 35.0,
+      TotalLifetimeDays: 35.0,
+      TotalMedianDays: 28.0,
+      TotalP75Days: 42.0,
+      TurnMedianDays: 3.5,
+      TurnP75Days: 5.5,
+      ReadyMedianDays: 2.0,
+      ReadyP75Days: 4.0,
+      FirstTimerMedianDays: 37.5,
+      FirstTimerP75Days: 39.4,
+      FirstTimerSampleCount: 12,
+      Comparison: {
+        LaterCreated: 56,
+        EarlierCreated: 100,
+        LaterReady: 20,
+        NewerNumber: 56,
+        OlderNumber: 100,
+        Verdict: "overtaken",
+        FirstTimerLaterCreated: 0,
+        RepeatOrExpressLaterCreated: 56,
+        UnknownLaterCreated: 0,
+      },
+      Samples: [
+        {
+          Number: 200001,
+          Relation: "newer",
+          CommitCount: 1,
+          TurnDays: 37.5,
+          TotalDays: 37.5,
+          ReadyDays: 37.5,
+          LatestCommittedDate: "2026-10-01T00:00:00Z",
+          MergedAt: "2026-11-07T12:00:00Z",
+          IsFirstTimer: true,
+        },
+        {
+          Number: 200002,
+          Relation: "newer",
+          CommitCount: 1,
+          TurnDays: 5.0,
+          TotalDays: 5.0,
+          ReadyDays: 5.0,
+          LatestCommittedDate: "2026-11-02T00:00:00Z",
+          MergedAt: "2026-11-07T14:00:00Z",
+          IsFirstTimer: false,
+        },
+        {
+          Number: 200003,
+          Relation: "newer",
+          CommitCount: 1,
+          TurnDays: 10.0,
+          TotalDays: 10.0,
+          ReadyDays: 10.0,
+          LatestCommittedDate: "2026-10-25T00:00:00Z",
+          MergedAt: "2026-11-05T00:00:00Z",
+        },
+      ],
+    };
+    writeFileSync(join(dataDir, "latest-progress.json"), JSON.stringify(dummyProgress), "utf-8");
+
+    const dummyDepths = {
+      Timestamp: "2026-11-08T12:00:00Z",
+      TimestampJst: "2026-11-08 21:00:00",
+      TargetPr: {
+        Number: 123456,
+        Title: "Test First Timer App",
+        CreatedAtJst: "2026-10-04 10:00",
+        CreatedAt: "2026-10-04T01:00:00Z",
+      },
+      StaleBottom: [
+        {
+          Number: 440001,
+          Title: "Stale by Contributor",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/440001",
+          Author: "frequent-contributor",
+          AuthorAssociation: "CONTRIBUTOR",
+          CreatedAt: "2026-10-02T00:00:00Z",
+          UpdatedAt: "2026-10-02T00:00:00Z",
+        },
+        {
+          Number: 440002,
+          Title: "Stale by First Timer",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/440002",
+          Author: "first-timer-user",
+          AuthorAssociation: "NONE",
+          CreatedAt: "2026-10-03T00:00:00Z",
+          UpdatedAt: "2026-10-03T00:00:00Z",
+        },
+      ],
+      FirstTimerBottom: [
+        {
+          Number: 440002,
+          Title: "Stale by First Timer",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/440002",
+          Author: "first-timer-user",
+          AuthorAssociation: "NONE",
+          CreatedAt: "2026-10-03T00:00:00Z",
+          UpdatedAt: "2026-10-03T00:00:00Z",
+        },
+      ],
+    };
+    writeFileSync(join(dataDir, "latest-depths.json"), JSON.stringify(dummyDepths), "utf-8");
+
+    const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"
+"2026-11-07 12:00:00","123456","119900","2026-09-30 10:00","1600","2300","280","34.0","34.0","34.0","1","updated"
+"2026-11-08 12:00:00","123456","120000","2026-10-01 10:00","1500","2200","300","35.0","35.0","35.0","1","updated"
+`;
+    writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
+
+    const depthsLines = [
+      JSON.stringify({
+        Timestamp: "2026-11-07T12:00:00Z",
+        StaleBottom: [{ Number: 440001, UpdatedAt: "2026-10-01T12:00:00Z" }],
+        FirstTimerBottom: [{ Number: 440002, UpdatedAt: "2026-10-02T12:00:00Z" }],
+      }),
+      JSON.stringify({
+        Timestamp: "2026-11-08T12:00:00Z",
+        StaleBottom: [{ Number: 440001, UpdatedAt: "2026-10-02T00:00:00Z" }],
+        FirstTimerBottom: [{ Number: 440002, UpdatedAt: "2026-10-03T00:00:00Z" }],
+      }),
+    ];
+    writeFileSync(join(dataDir, "depths-history.jsonl"), depthsLines.join("\n"), "utf-8");
+
+    try {
+      const { htmlPath } = buildDashboard({ dataDir, outputDir });
+      const html = readFileSync(htmlPath, "utf-8");
+
+      // 1. ファーストビューサマリー
+      expect(html).toContain("🎯 初回提出者（純粋FIFO）サマリー");
+      expect(html).toContain("純粋FIFO待機列 準拠");
+      expect(html).toContain("予想マージ日 (P50 中央値)");
+      expect(html).toContain("残り約 2.5 日");
+      expect(html).toContain("予想マージ日 (P75 75%点)");
+      expect(html).toContain("残り約 4.4 日");
+      expect(html).toContain("後発マージ計 56 件");
+      expect(html).toContain("常連・特急: <strong>56</strong> 件 / 初回: <strong>0</strong> 件");
+      expect(html).toContain("✨ 初回提出者による追い越し 0 件（完全な作成順で進行中）");
+
+      // 2. 統合チャート（4系列・2軸）
+      expect(html).toContain('aria-label="待ち件数と底の遅れの推移（統合時系列チャート）"');
+      expect(html).toContain("待ち件数"); // 左軸見出し
+      expect(html).toContain("先頭の遅れ（日）"); // 右軸見出し
+      expect(html).toContain("実質待ち（更新順）");
+      expect(html).toContain("累積待ち（作成順）");
+      expect(html).toContain("優等生の底 先頭の遅れ");
+      expect(html).toContain("🌱 初回提出者の底 先頭の遅れ");
+      expect(html.match(/<polyline /g)?.length).toBe(4);
+
+      // 3. マージ実績統計カードの分離
+      expect(html).toContain("🌱 初回提出者コホート実績（純粋FIFO待機列）");
+      expect(html).toContain("採用 12 件");
+      expect(html).toContain("👥 全体実績（常連・特急レーンを含む全サンプル）");
+
+      // 4. 底の横並び比較 ＆ 常連除外バッジ
+      expect(html).toContain("待機列の底の比較（優等生 vs 初回提出者）");
+      expect(html).toContain("🧗 優等生の底（順番待ちの先頭）");
+      expect(html).toContain("🌱 初回提出者の底（真の FIFO 前線）");
+      expect(html).toContain("常連除外"); // #440001 (CONTRIBUTOR) に付与される
+
+      // 5. サンプル一覧のコホートバッジ色分け
+      expect(html).toContain("🌱 初回");
+      expect(html).toContain("⚡ 常連");
+      expect(html).toContain("⏳ 未判定");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
