@@ -260,31 +260,18 @@ describe("CLI: logRateLimit", () => {
     resetAt: "2026-11-08T07:00:00.000Z",
   });
 
-  test("core と search の残量・使用量・リセット時刻を 1 行で出す", async () => {
-    const logs: string[] = [];
-    await logRateLimit(
-      { getRateLimit: async () => ({ core: bucket(1000, 640), search: bucket(30, 22) }) },
-      (m) => logs.push(m),
-    );
-    expect(logs).toEqual([
-      "[RateLimit] core: 残り 640 / 1000（使用 360） リセット 2026-11-08T07:00:00.000Z / search: 残り 22 / 30（使用 8） リセット 2026-11-08T07:00:00.000Z",
-    ]);
-  });
-
-  test("graphql が存在する場合は GraphQL の残量を優先して出す", async () => {
+  test("GraphQL の残量・使用量・リセット時刻を 1 行で出す", async () => {
     const logs: string[] = [];
     await logRateLimit(
       {
         getRateLimit: async () => ({
           graphql: bucket(5000, 4900),
-          core: bucket(5000, 4900),
-          search: bucket(30, 22),
         }),
       },
       (m) => logs.push(m),
     );
     expect(logs).toEqual([
-      "[RateLimit] GraphQL: 残り 4900 / 5000（使用 100） リセット 2026-11-08T07:00:00.000Z / search: 残り 22 / 30（使用 8） リセット 2026-11-08T07:00:00.000Z",
+      "[RateLimit] GraphQL: 残り 4900 / 5000（使用 100） リセット 2026-11-08T07:00:00.000Z",
     ]);
   });
 

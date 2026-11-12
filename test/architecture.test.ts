@@ -50,4 +50,30 @@ describe("Architecture Boundary Rules", () => {
       expect(code).not.toMatch(/from\s+["'].*\/(domain|api|cli)(\/|["'])/);
     }
   });
+
+  test("src/ 配下全体で GitHub REST API エンドポイント（/search/issues, /repos/, /rate_limit）を直接参照しないこと（GraphQL 一本化の強制）", () => {
+    function scanDir(dir: string): string[] {
+      const results: string[] = [];
+      const entries = readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          results.push(...scanDir(fullPath));
+        } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+          results.push(fullPath);
+        }
+      }
+      return results;
+    }
+
+    const files = scanDir("src");
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const code = readFileSync(file, "utf-8");
+      // REST エンドポイント URL パターンの直接参照を禁止
+      expect(code).not.toMatch(/\/search\/issues/);
+      expect(code).not.toMatch(/\/repos\//);
+      expect(code).not.toMatch(/\/rate_limit/);
+    }
+  });
 });

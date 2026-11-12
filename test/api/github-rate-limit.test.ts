@@ -5,7 +5,7 @@ const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("API: GitHubApiClient.getRateLimit", () => {
-  test("GraphQL rateLimit と REST core / search の実値を並行取得して返し、枠ごとの差異を保持する", async () => {
+  test("GraphQL rateLimit のみを取得して返し、REST エンドポイントを呼び出さない", async () => {
     const requests: { url: string; auth: string | null; method?: string }[] = [];
     const client = new GitHubApiClient({
       token: "dummy-token",
@@ -30,28 +30,17 @@ describe("API: GitHubApiClient.getRateLimit", () => {
           });
         }
 
-        if (urlStr.includes("/rate_limit")) {
-          return jsonResponse({
-            resources: {
-              core: { limit: 1000, remaining: 640, reset: 1_794_000_000 },
-              search: { limit: 30, remaining: 22, reset: 1_794_000_060 },
-            },
-          });
-        }
-
         return new Response("Not Found", { status: 404 });
       },
     });
 
     const result = await client.getRateLimit();
 
-    expect(requests.length).toBe(2);
-    expect(
-      requests.some((r) => r.url === "https://api.github.com/graphql" && r.method === "POST"),
-    ).toBe(true);
-    expect(
-      requests.some((r) => r.url === "https://api.github.com/rate_limit" && r.method === "GET"),
-    ).toBe(true);
+    // GraphQL 呼び出し 1 件のみであること
+    expect(requests.length).toBe(1);
+    expect(requests[0].url).toBe("https://api.github.com/graphql");
+    expect(requests[0].method).toBe("POST");
+    expect(requests.some((r) => r.url.includes("/rate_limit"))).toBe(false);
 
     // GraphQL 枠の実値
     expect(result.graphql).toEqual({
@@ -59,18 +48,6 @@ describe("API: GitHubApiClient.getRateLimit", () => {
       remaining: 4999,
       resetAt: "2026-11-12T06:00:00.000Z",
       cost: 1,
-    });
-    // REST Search 枠の実値（GraphQL の値で上書きされず独立している）
-    expect(result.search).toEqual({
-      limit: 30,
-      remaining: 22,
-      resetAt: new Date(1_794_000_060_000).toISOString(),
-    });
-    // REST Core 枠の実値
-    expect(result.core).toEqual({
-      limit: 1000,
-      remaining: 640,
-      resetAt: new Date(1_794_000_000_000).toISOString(),
     });
   });
 
@@ -91,17 +68,11 @@ describe("API: GitHubApiClient.getRateLimit", () => {
             },
           });
         }
-        return jsonResponse({
-          resources: {
-            core: { limit: 60, remaining: 59 },
-            search: { limit: 10, remaining: 10 },
-          },
-        });
+        return new Response("Not Found", { status: 404 });
       },
     });
     const result = await client.getRateLimit();
-    expect(result.graphql?.resetAt).toBeNull();
-    expect(result.search.resetAt).toBeNull();
+    expect(result.graphql.resetAt).toBeNull();
   });
 
   test.each([
@@ -122,40 +93,10 @@ describe("API: GitHubApiClient.getRateLimit", () => {
         if (urlStr.includes("/graphql")) {
           return jsonResponse(body);
         }
-        return jsonResponse({
-          resources: {
-            core: { limit: 60, remaining: 59 },
-            search: { limit: 10, remaining: 10 },
-          },
-        });
+        return new Response("Not Found", { status: 404 });
       },
     });
     await expect(client.getRateLimit()).rejects.toThrow("rateLimit がありません");
-  });
-
-  test("REST /rate_limit がエラーの場合は例外にする", async () => {
-    const client = new GitHubApiClient({
-      token: "dummy-token",
-      fetch: async (input) => {
-        const urlStr = String(input);
-        if (urlStr.includes("/graphql")) {
-          return jsonResponse({
-            data: {
-              rateLimit: {
-                limit: 5000,
-                cost: 1,
-                remaining: 4999,
-                resetAt: "2026-11-12T06:00:00Z",
-              },
-            },
-          });
-        }
-        return new Response("REST rate limit error", { status: 500 });
-      },
-    });
-    await expect(client.getRateLimit()).rejects.toThrow(
-      "GitHub REST レート制限の取得に失敗しました",
-    );
   });
 
   test("トークン未指定時は 401 GitHubApiError にする", async () => {

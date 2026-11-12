@@ -25,6 +25,7 @@ import type {
   SearchDiffResult,
   TimelineDiffResult,
 } from "../src/models/api-compare";
+import { GitHubRestApiClient } from "./rest-client";
 
 const GRAPHQL_SEARCH_QUERY = `
 query CompareSearch($query: String!, $first: Int!) {
@@ -256,6 +257,11 @@ export async function fetchGraphQLTimeline(
 export async function runCompare(
   options: CompareOptions,
   client = new GitHubApiClient(),
+  restClient = new GitHubRestApiClient({
+    token: client.apiToken,
+    baseUrl: client.apiBaseUrl,
+    fetch: client.fetchFunction,
+  }),
 ): Promise<ComparisonReport> {
   const [owner, name] = options.repository.split("/");
   if (!owner || !name) {
@@ -264,7 +270,7 @@ export async function runCompare(
 
   // 1. レート制限の比較取得
   const [restRate, gqlRateRaw] = await Promise.all([
-    client.getRateLimit(),
+    restClient.getRateLimit(),
     client.graphql<{ rateLimit: GraphQLRateLimitData }>(GRAPHQL_RATELIMIT_QUERY),
   ]);
   const gqlRate = adaptGraphQLRateLimitBucket(gqlRateRaw.rateLimit);
@@ -276,7 +282,7 @@ export async function runCompare(
   const gqlSearchQueryStr = buildGraphQLSearchQuery(baseQuery, options.sort, options.order);
 
   const [restSearch, gqlSearchRaw] = await Promise.all([
-    client.searchIssuesDetailedRest(
+    restClient.searchIssuesDetailed(
       baseQuery,
       options.sort ?? "created",
       options.order ?? "asc",
@@ -298,7 +304,7 @@ export async function runCompare(
 
   if (comparePrNumber) {
     const [restPrDetail, gqlPrDetailRaw, restTimeline, gqlTimelineNodes] = await Promise.all([
-      client.getPullRequestDetailsRest(options.repository, comparePrNumber),
+      restClient.getPullRequestDetails(options.repository, comparePrNumber),
       client.graphql<{ repository: { pullRequest: GraphQLPullRequestNode } }>(
         GRAPHQL_PR_DETAIL_QUERY,
         {
@@ -307,7 +313,7 @@ export async function runCompare(
           number: comparePrNumber,
         },
       ),
-      client.getIssueTimelineRest(options.repository, comparePrNumber),
+      restClient.getIssueTimeline(options.repository, comparePrNumber),
       fetchGraphQLTimeline(client, owner, name, comparePrNumber),
     ]);
 
