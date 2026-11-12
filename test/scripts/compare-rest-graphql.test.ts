@@ -1096,11 +1096,215 @@ describe("Scripts: compare-rest-graphql", () => {
         client,
       );
 
-      // REST (Help-Wanted) と GraphQL (New-Package) で異なるイベントが返ったため、差分が検出されること
+      // REST (Needs-Author-Feedback) と GraphQL (New-Package) で異なるイベントが返ったため、差分が検出されること
       expect(report.timeline?.diff.eventSequenceMatch).toBeFalse();
       expect(report.timeline?.diff.restHasBlocking).toBeTrue();
       expect(report.timeline?.diff.graphqlHasBlocking).toBeFalse();
       expect(report.timeline?.diff.blockingHistoryMatch).toBeFalse();
+    });
+
+    test("REST と GraphQL で意図的に異なる検索結果を返した場合に差分（totalCountMatch: false）を検出できる", async () => {
+      const fakeFetch = async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const urlStr = String(input);
+
+        if (urlStr.includes("/rate_limit")) {
+          return new Response(
+            JSON.stringify({
+              resources: {
+                core: { limit: 5000, remaining: 4999, reset: 1700000000 },
+                search: { limit: 30, remaining: 29, reset: 1700000000 },
+              },
+            }),
+            { status: 200 },
+          );
+        }
+
+        // REST 側検索結果: total_count = 5
+        if (urlStr.includes("/search/issues")) {
+          return new Response(
+            JSON.stringify({
+              total_count: 5,
+              items: [
+                {
+                  number: 100,
+                  title: "REST PR 100",
+                  html_url: "https://github.com/owner/repo/pull/100",
+                  created_at: "2026-10-01T00:00:00Z",
+                  updated_at: "2026-10-02T00:00:00Z",
+                  labels: [{ name: "New-Package" }],
+                  draft: false,
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (urlStr.includes("/repos/owner/repo/pulls/100/commits")) {
+          return new Response(
+            JSON.stringify([
+              {
+                sha: "commit1",
+                commit: {
+                  message: "commit 1",
+                  committer: { date: "2026-10-01T00:00:00Z" },
+                },
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (urlStr.includes("/repos/owner/repo/pulls/100")) {
+          return new Response(
+            JSON.stringify({
+              number: 100,
+              title: "REST PR 100",
+              html_url: "https://github.com/owner/repo/pull/100",
+              state: "open",
+              draft: false,
+              created_at: "2026-10-01T00:00:00Z",
+              updated_at: "2026-10-02T00:00:00Z",
+              merged_at: null,
+              closed_at: null,
+              labels: [{ name: "New-Package" }],
+              user: { login: "tester" },
+              author_association: "NONE",
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (urlStr.includes("/repos/owner/repo/issues/100/timeline")) {
+          return new Response(JSON.stringify([]), { status: 200 });
+        }
+
+        if (urlStr.includes("/graphql")) {
+          const body = JSON.parse(String(init?.body)) as { query: string };
+          const query = body.query;
+
+          if (query.includes("CompareRateLimit") || query.includes("GetRateLimit")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  rateLimit: {
+                    limit: 5000,
+                    cost: 1,
+                    remaining: 4999,
+                    resetAt: "2026-10-01T00:00:00Z",
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+
+          if (query.includes("ComparePullRequest")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  repository: {
+                    pullRequest: {
+                      number: 100,
+                      title: "REST PR 100",
+                      url: "https://github.com/owner/repo/pull/100",
+                      state: "OPEN",
+                      isDraft: false,
+                      createdAt: "2026-10-01T00:00:00Z",
+                      updatedAt: "2026-10-02T00:00:00Z",
+                      mergedAt: null,
+                      closedAt: null,
+                      author: { login: "tester" },
+                      authorAssociation: "NONE",
+                      labels: { nodes: [{ name: "New-Package" }] },
+                      commits: {
+                        nodes: [
+                          {
+                            commit: {
+                              oid: "commit1",
+                              messageHeadline: "commit 1",
+                              committedDate: "2026-10-01T00:00:00Z",
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+
+          if (query.includes("CompareTimeline")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  repository: {
+                    pullRequest: {
+                      timelineItems: {
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                        nodes: [],
+                      },
+                    },
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+
+          // GraphQL 側検索結果: issueCount = 10 (REST と不一致)
+          if (query.includes("CompareSearch")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  search: {
+                    issueCount: 10,
+                    nodes: [
+                      {
+                        number: 100,
+                        title: "GraphQL PR 100",
+                        url: "https://github.com/owner/repo/pull/100",
+                        createdAt: "2026-10-01T00:00:00Z",
+                        updatedAt: "2026-10-02T00:00:00Z",
+                        isDraft: false,
+                        mergedAt: null,
+                        author: { login: "tester" },
+                        authorAssociation: "NONE",
+                        labels: { nodes: [{ name: "New-Package" }] },
+                      },
+                    ],
+                  },
+                },
+              }),
+              { status: 200 },
+            );
+          }
+        }
+
+        return new Response("Not Found", { status: 404 });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: fakeFetch,
+      });
+
+      const report = await runCompare(
+        {
+          repository: "owner/repo",
+        },
+        client,
+      );
+
+      // REST (totalCount=5) と GraphQL (issueCount=10) で異なる件数が返ったため、差分が検出されること
+      expect(report.search.totalCountMatch).toBeFalse();
+      expect(report.search.restTotalCount).toBe(5);
+      expect(report.search.graphqlTotalCount).toBe(10);
+      expect(report.search.countDiff).toBe(5);
     });
   });
 });
