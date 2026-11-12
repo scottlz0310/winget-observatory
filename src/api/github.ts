@@ -258,6 +258,27 @@ export function calculateBackoffDelay(
   return exponential + jitter;
 }
 
+/**
+ * Retry-After ヘッダー（秒数または HTTP-date）をミリ秒数としてパースする。
+ * 不正値や未設定時は undefined を返す。
+ */
+export function parseRetryAfterMs(headerValue: string | null | undefined): number | undefined {
+  if (!headerValue) {
+    return undefined;
+  }
+  const trimmed = headerValue.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds)) {
+    return seconds >= 0 ? seconds * 1000 : undefined;
+  }
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    const diff = dateMs - Date.now();
+    return Math.max(diff, 0);
+  }
+  return undefined;
+}
+
 export interface GraphQLRetryOptions {
   /** 最大リトライ回数（既定: 3。初回含め計 4 回試行） */
   maxRetries?: number;
@@ -662,12 +683,21 @@ export class GitHubApiClient {
 
     for (let attempt = 1; attempt <= this.maxRetries + 1; attempt++) {
       let res: Response;
+      let rawText: string;
+
       try {
         res = await this.fetchFn(url, {
           method: "POST",
           headers,
           body,
         });
+
+        // 成功レスポンスの場合、本文のストリーム受信までを通信処理として実行（本文受信中の切断もリトライ対象）
+        if (res.ok) {
+          rawText = await res.text();
+        } else {
+          rawText = await res.text().catch(() => "");
+        }
       } catch (err: unknown) {
         const networkError = err instanceof Error ? err : new Error(String(err));
         lastError = networkError;
@@ -685,15 +715,24 @@ export class GitHubApiClient {
       }
 
       if (!res.ok) {
-        const errText = await res.text().catch(() => "");
         const apiError = new GitHubApiError(
-          `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): ${errText}`,
+          `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): ${rawText}`,
           res.status,
         );
 
         if (isRetryableStatusCode(res.status) && attempt <= this.maxRetries) {
           lastError = apiError;
-          const delay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
+          const exponentialDelay = calculateBackoffDelay(
+            attempt,
+            this.baseDelayMs,
+            this.maxJitterMs,
+          );
+          const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+          const delay =
+            retryAfterMs !== undefined
+              ? Math.max(exponentialDelay, retryAfterMs)
+              : exponentialDelay;
+
           this.warnLogFn(
             `[GitHub GraphQL] 一時エラーが発生しました (status: ${res.status})。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
           );
@@ -704,10 +743,22 @@ export class GitHubApiClient {
         throw apiError;
       }
 
-      const json = (await res.json()) as {
+      let json: {
         data?: T;
         errors?: GraphQLErrorDetail[];
       };
+
+      try {
+        json = JSON.parse(rawText) as {
+          data?: T;
+          errors?: GraphQLErrorDetail[];
+        };
+      } catch {
+        throw new GitHubApiError(
+          `GitHub GraphQL API の応答 JSON パースに失敗しました: ${rawText}`,
+          res.status,
+        );
+      }
 
       if (json.errors && json.errors.length > 0) {
         const messages = json.errors.map((e) => e.message ?? "Unknown error").join("; ");

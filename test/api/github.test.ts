@@ -7,6 +7,7 @@ import {
   isPrNotFoundGraphQLError,
   isRetryableStatusCode,
   parseRepository,
+  parseRetryAfterMs,
 } from "../../src/api/github";
 
 describe("API: GitHubApiClient", () => {
@@ -999,6 +1000,195 @@ describe("API: GitHubApiClient", () => {
       },
     );
 
+    test("429 応答の Retry-After を待機時間の下限として扱い指定秒数前に再送しない", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts === 1) {
+          return new Response("Too Many Requests", {
+            status: 429,
+            headers: { "Retry-After": "60" },
+          });
+        }
+        return new Response(JSON.stringify({ data: { test: "recovered" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 2000,
+          maxJitterMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      const result = await client.graphql<{ test: string }>("query { test }");
+      expect(result).toEqual({ test: "recovered" });
+      expect(attempts).toBe(2);
+      // 指数バックオフ（2000ms）より Retry-After（60000ms）が長いため 60000ms が下限として使用される
+      expect(sleepDelays).toEqual([60000]);
+      expect(warnLogs[0]).toContain("status: 429");
+      expect(warnLogs[0]).toContain("待機時間: 60000ms");
+    });
+
+    test("429 応答の Retry-After が指数バックオフより短い場合は指数バックオフが維持される", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts === 1) {
+          return new Response("Too Many Requests", {
+            status: 429,
+            headers: { "Retry-After": "1" }, // 1 秒 = 1000ms
+          });
+        }
+        return new Response(JSON.stringify({ data: { test: "ok" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 2000,
+          maxJitterMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+        },
+      });
+
+      await client.graphql("query { test }");
+      expect(attempts).toBe(2);
+      // Retry-After 1000ms < 指数バックオフ 2000ms なので 2000ms が使用される
+      expect(sleepDelays).toEqual([2000]);
+    });
+
+    test("200 応答の本文受信中（ReadableStream）に接続切断が発生した場合にリトライして成功する", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts === 1) {
+          // ヘッダーは 200 OK だが本文読み込みで ECONNRESET
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "Content-Type": "application/json" }),
+            text: async () => {
+              throw new Error("connect ECONNRESET in body stream");
+            },
+          } as unknown as Response;
+        }
+        return new Response(JSON.stringify({ data: { streamResult: "ok" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 5,
+          maxJitterMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      const res = await client.graphql<{ streamResult: string }>("query { streamResult }");
+      expect(res).toEqual({ streamResult: "ok" });
+      expect(attempts).toBe(2);
+      expect(sleepDelays).toEqual([5]);
+      expect(warnLogs[0]).toContain("ECONNRESET in body stream");
+      expect(warnLogs[0]).toContain("リトライ 1/3");
+    });
+
+    test("200 応答の本文受信中の接続切断が上限超過した場合はエラーをスローする", async () => {
+      let attempts = 0;
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "Content-Type": "application/json" }),
+          text: async () => {
+            throw new Error("socket hang up during body read");
+          },
+        } as unknown as Response;
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 5,
+          maxJitterMs: 0,
+          sleep: async () => {},
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      await expect(client.graphql("query { test }")).rejects.toThrow("socket hang up");
+      expect(attempts).toBe(4);
+      expect(warnLogs.length).toBe(3);
+    });
+
+    test("200 応答だが JSON 構文エラーの場合はリトライせず即座にエラーをスローする", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        return new Response("<html><body>502 Bad Gateway Proxy Error</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+        },
+      });
+
+      await expect(client.graphql("query { test }")).rejects.toThrow(
+        "応答 JSON パースに失敗しました",
+      );
+      expect(attempts).toBe(1);
+      expect(sleepDelays.length).toBe(0);
+    });
+
     test("ネットワークエラー発生時にリトライして成功する", async () => {
       let attempts = 0;
       const sleepDelays: number[] = [];
@@ -1243,6 +1433,30 @@ describe("API: GitHubApiClient", () => {
         expect(delay).toBeGreaterThanOrEqual(base);
         expect(delay).toBeLessThan(base + 500);
       }
+    });
+  });
+
+  describe("parseRetryAfterMs", () => {
+    test("秒数文字列をミリ秒に変換する", () => {
+      expect(parseRetryAfterMs("60")).toBe(60000);
+      expect(parseRetryAfterMs("0")).toBe(0);
+      expect(parseRetryAfterMs(" 120 ")).toBe(120000);
+    });
+
+    test("null, undefined, 不正文字列の場合は undefined を返す", () => {
+      expect(parseRetryAfterMs(null)).toBeUndefined();
+      expect(parseRetryAfterMs(undefined)).toBeUndefined();
+      expect(parseRetryAfterMs("")).toBeUndefined();
+      expect(parseRetryAfterMs("invalid")).toBeUndefined();
+      expect(parseRetryAfterMs("-10")).toBeUndefined();
+    });
+
+    test("未来の HTTP-date 文字列を現在時刻からの差分ミリ秒に変換する", () => {
+      const futureDate = new Date(Date.now() + 30000).toUTCString();
+      const ms = parseRetryAfterMs(futureDate);
+      expect(ms).toBeDefined();
+      expect(ms).toBeGreaterThan(25000);
+      expect(ms).toBeLessThanOrEqual(30000);
     });
   });
 });
