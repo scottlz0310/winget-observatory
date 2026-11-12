@@ -135,7 +135,7 @@ describe("Scripts: compare-rest-graphql", () => {
           const body = JSON.parse(String(init?.body));
           const query = String(body.query);
 
-          if (query.includes("CompareRateLimit")) {
+          if (query.includes("CompareRateLimit") || query.includes("GetRateLimit")) {
             return new Response(
               JSON.stringify({
                 data: {
@@ -178,7 +178,7 @@ describe("Scripts: compare-rest-graphql", () => {
             );
           }
 
-          if (query.includes("ComparePullRequest")) {
+          if (query.includes("ComparePullRequest") || query.includes("GetPullRequestDetails")) {
             return new Response(
               JSON.stringify({
                 data: {
@@ -355,7 +355,7 @@ describe("Scripts: compare-rest-graphql", () => {
           const body = JSON.parse(String(init?.body));
           const query = String(body.query);
 
-          if (query.includes("CompareRateLimit")) {
+          if (query.includes("CompareRateLimit") || query.includes("GetRateLimit")) {
             return new Response(
               JSON.stringify({
                 data: {
@@ -393,7 +393,7 @@ describe("Scripts: compare-rest-graphql", () => {
             );
           }
 
-          if (query.includes("ComparePullRequest")) {
+          if (query.includes("ComparePullRequest") || query.includes("GetPullRequestDetails")) {
             return new Response(
               JSON.stringify({
                 data: {
@@ -567,7 +567,7 @@ describe("Scripts: compare-rest-graphql", () => {
           const body = JSON.parse(String(init?.body));
           const query = String(body.query);
 
-          if (query.includes("CompareRateLimit")) {
+          if (query.includes("CompareRateLimit") || query.includes("GetRateLimit")) {
             return new Response(
               JSON.stringify({
                 data: {
@@ -605,7 +605,7 @@ describe("Scripts: compare-rest-graphql", () => {
             );
           }
 
-          if (query.includes("ComparePullRequest")) {
+          if (query.includes("ComparePullRequest") || query.includes("GetPullRequestDetails")) {
             // commits(first: 100) で先頭100件が返る
             const gqlCommits = allCommits.slice(0, 100).map((c) => ({
               commit: {

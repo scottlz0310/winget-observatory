@@ -271,6 +271,23 @@ describe("CLI: logRateLimit", () => {
     ]);
   });
 
+  test("graphql が存在する場合は GraphQL の残量を優先して出す", async () => {
+    const logs: string[] = [];
+    await logRateLimit(
+      {
+        getRateLimit: async () => ({
+          graphql: bucket(5000, 4900),
+          core: bucket(5000, 4900),
+          search: bucket(30, 22),
+        }),
+      },
+      (m) => logs.push(m),
+    );
+    expect(logs).toEqual([
+      "[RateLimit] GraphQL: 残り 4900 / 5000（使用 100） リセット 2026-11-08T07:00:00.000Z / search: 残り 22 / 30（使用 8） リセット 2026-11-08T07:00:00.000Z",
+    ]);
+  });
+
   test("取得に失敗しても例外にせず、警告として原因を残す（診断は計測の成否に影響させない）", async () => {
     const logs: string[] = [];
     await logRateLimit(

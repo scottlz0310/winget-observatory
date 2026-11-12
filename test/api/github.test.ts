@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { GitHubApiClient, GitHubApiError } from "../../src/api/github";
+import { GitHubApiClient, GitHubApiError, parseRepository } from "../../src/api/github";
 
 describe("API: GitHubApiClient", () => {
   test("searchIssues は正しくエンコードされた URL とヘッダーでリクエストを行う", async () => {
@@ -50,18 +50,31 @@ describe("API: GitHubApiClient", () => {
     expect(capturedHeaders.Accept).toBe("application/vnd.github+json");
   });
 
-  test("getPullRequest は PR 基本情報を取得する", async () => {
+  test("getPullRequest は PR 基本情報を GraphQL で取得する", async () => {
     let capturedUrl = "";
+    let capturedBody = "";
+    let capturedHeaders: Record<string, string> = {};
 
-    const mockFetch = async (input: string | URL | Request): Promise<Response> => {
+    const mockFetch = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
       capturedUrl = String(input);
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      capturedHeaders = (init?.headers as Record<string, string>) ?? {};
       return new Response(
         JSON.stringify({
-          number: 464302,
-          title: "New package: sample",
-          html_url: "https://github.com/microsoft/winget-pkgs/pull/464302",
-          created_at: "2026-10-28T21:47:38Z",
-          updated_at: "2026-11-02T03:00:00Z",
+          data: {
+            repository: {
+              pullRequest: {
+                number: 464302,
+                title: "New package: sample",
+                url: "https://github.com/microsoft/winget-pkgs/pull/464302",
+                createdAt: "2026-10-28T21:47:38Z",
+                updatedAt: "2026-11-02T03:00:00Z",
+              },
+            },
+          },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -77,7 +90,42 @@ describe("API: GitHubApiClient", () => {
     expect(pr.title).toBe("New package: sample");
     expect(pr.url).toBe("https://github.com/microsoft/winget-pkgs/pull/464302");
     expect(pr.updatedAt).toBe("2026-11-02T03:00:00Z");
-    expect(capturedUrl).toBe("https://api.github.com/repos/microsoft/winget-pkgs/pulls/464302");
+    expect(capturedUrl).toBe("https://api.github.com/graphql");
+    expect(capturedHeaders.Authorization).toBe("Bearer sample-token");
+    expect(capturedBody).toContain("GetPullRequestView");
+    expect(capturedBody).toContain('"owner":"microsoft"');
+    expect(capturedBody).toContain('"name":"winget-pkgs"');
+    expect(capturedBody).toContain('"number":464302');
+  });
+
+  test("getPullRequest は PR が存在しない場合 404 GitHubApiError をスローする", async () => {
+    const mockFetch = async (): Promise<Response> => {
+      return new Response(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: null,
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({
+      token: "sample-token",
+      fetch: mockFetch,
+    });
+
+    await expect(client.getPullRequest("microsoft/winget-pkgs", 999999)).rejects.toThrow(
+      GitHubApiError,
+    );
+    try {
+      await client.getPullRequest("microsoft/winget-pkgs", 999999);
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(404);
+    }
   });
 
   test("API エラー発生時に GitHubApiError をスローする", async () => {
@@ -168,49 +216,96 @@ describe("API: GitHubApiClient", () => {
     expect(res.items[0].labels?.[0].name).toBe("New-Package");
   });
 
-  test("getPullRequestDetails は PR 情報とコミット一覧を統合して返す", async () => {
-    const mockFetch = async (input: string | URL | Request): Promise<Response> => {
-      const url = String(input);
-      if (url.includes("/commits")) {
-        return new Response(
-          JSON.stringify([
-            {
-              sha: "abcdef123456",
-              commit: {
-                message: "Initial commit\n\nbody details",
-                committer: { date: "2026-11-01T12:00:00Z" },
-              },
-            },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
+  test("getPullRequestDetails は PR 情報とコミット一覧を GraphQL 1 リクエストで統合して返す", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+    const mockFetch = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      capturedUrl = String(input);
+      capturedBody = typeof init?.body === "string" ? init.body : "";
       return new Response(
         JSON.stringify({
-          number: 300,
-          title: "PR 300",
-          html_url: "https://github.com/test/repo/pull/300",
-          state: "open",
-          draft: false,
-          created_at: "2026-11-01T10:00:00Z",
-          merged_at: null,
-          closed_at: null,
-          labels: [{ name: "New-Package" }, { name: "Validation-Completed" }],
+          data: {
+            repository: {
+              pullRequest: {
+                number: 300,
+                title: "PR 300",
+                url: "https://github.com/test/repo/pull/300",
+                state: "OPEN",
+                isDraft: false,
+                createdAt: "2026-11-01T10:00:00Z",
+                updatedAt: "2026-11-02T10:00:00Z",
+                mergedAt: null,
+                closedAt: null,
+                author: { login: "test-author" },
+                authorAssociation: "CONTRIBUTOR",
+                labels: {
+                  nodes: [{ name: "New-Package" }, { name: "Validation-Completed" }],
+                },
+                commits: {
+                  totalCount: 1,
+                  nodes: [
+                    {
+                      commit: {
+                        oid: "abcdef123456",
+                        messageHeadline: "Initial commit",
+                        committedDate: "2026-11-01T12:00:00Z",
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     };
 
-    const client = new GitHubApiClient({ fetch: mockFetch });
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
     const pr = await client.getPullRequestDetails("test/repo", 300);
+
+    expect(capturedUrl).toBe("https://api.github.com/graphql");
+    expect(capturedBody).toContain("GetPullRequestDetails");
+    expect(capturedBody).toContain('"owner":"test"');
+    expect(capturedBody).toContain('"name":"repo"');
+    expect(capturedBody).toContain('"number":300');
 
     expect(pr.number).toBe(300);
     expect(pr.state).toBe("OPEN");
+    expect(pr.author).toBe("test-author");
+    expect(pr.authorAssociation).toBe("CONTRIBUTOR");
     expect(pr.labels).toEqual(["New-Package", "Validation-Completed"]);
     expect(pr.commits.length).toBe(1);
     expect(pr.commits[0].oid).toBe("abcdef123456");
     expect(pr.commits[0].messageHeadline).toBe("Initial commit");
     expect(pr.commits[0].committedDate).toBe("2026-11-01T12:00:00Z");
+  });
+
+  test("getPullRequestDetails は PR が存在しない場合 404 GitHubApiError をスローする", async () => {
+    const mockFetch = async (): Promise<Response> => {
+      return new Response(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: null,
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    await expect(client.getPullRequestDetails("test/repo", 999)).rejects.toThrow(GitHubApiError);
+    try {
+      await client.getPullRequestDetails("test/repo", 999);
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(404);
+    }
   });
 
   test("getIssueTimeline はページネーションして全イベントを取得する", async () => {
@@ -256,28 +351,18 @@ describe("API: GitHubApiClient", () => {
     expect(events[1].label?.name).toBe("Validation-Completed");
   });
 
-  test("getPullRequestDetails はコミット一覧取得失敗時に例外をスローする", async () => {
-    const mockFetch = async (input: string | URL | Request): Promise<Response> => {
-      const url = String(input);
-      if (url.includes("/commits")) {
-        return new Response("Service Unavailable", { status: 503 });
-      }
+  test("getPullRequestDetails は GraphQL エラー発生時に例外をスローする", async () => {
+    const mockFetch = async (): Promise<Response> => {
       return new Response(
         JSON.stringify({
-          number: 301,
-          title: "PR 301",
-          html_url: "https://github.com/test/repo/pull/301",
-          state: "open",
-          draft: false,
-          created_at: "2026-11-01T10:00:00Z",
-          labels: [],
+          errors: [{ message: "Repository not found" }],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     };
 
-    const client = new GitHubApiClient({ fetch: mockFetch });
-    expect(client.getPullRequestDetails("test/repo", 301)).rejects.toThrow(GitHubApiError);
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    await expect(client.getPullRequestDetails("test/repo", 301)).rejects.toThrow(GitHubApiError);
   });
 
   test("searchIssuesDetailed は page 引数を URL に付与する", async () => {
@@ -454,5 +539,30 @@ describe("API: GitHubApiClient", () => {
         "data フィールドが含まれていません",
       );
     });
+  });
+
+  describe("parseRepository", () => {
+    test("owner/name 形式の文字列を正しくパースする", () => {
+      expect(parseRepository("microsoft/winget-pkgs")).toEqual({
+        owner: "microsoft",
+        name: "winget-pkgs",
+      });
+      expect(parseRepository("scottlz0310/winget-observatory")).toEqual({
+        owner: "scottlz0310",
+        name: "winget-observatory",
+      });
+    });
+
+    test.each(["", "repo", "owner/repo/extra", "/repo", "owner/"])(
+      "不正な形式の場合は 400 GitHubApiError をスローする: %s",
+      (invalidRepo) => {
+        expect(() => parseRepository(invalidRepo)).toThrow(GitHubApiError);
+        try {
+          parseRepository(invalidRepo);
+        } catch (err: unknown) {
+          expect((err as GitHubApiError).status).toBe(400);
+        }
+      },
+    );
   });
 });

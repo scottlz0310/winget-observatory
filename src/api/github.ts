@@ -1,9 +1,11 @@
 import type { GitHubPrView, GitHubSearchItem } from "../models/depths";
-import type {
-  ProgressCommitSummary,
-  ProgressPrDetail,
-  ProgressTimelineEvent,
-} from "../models/progress";
+import type { ProgressPrDetail, ProgressTimelineEvent } from "../models/progress";
+import {
+  adaptGraphQLRateLimitBucket,
+  adaptGraphQLToPrDetail,
+  adaptGraphQLToPrView,
+} from "./graphql-adapters";
+import type { GraphQLPullRequestNode, GraphQLRateLimitData } from "./graphql-types";
 
 export interface GitHubDetailedSearchItem {
   number: number;
@@ -26,7 +28,7 @@ export interface GitHubDetailedSearchResult {
 /** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-/** レート制限の 1 枠（core / search）の残量 */
+/** レート制限の 1 枠（core / search / graphql）の残量 */
 export interface GitHubRateLimitBucket {
   limit: number;
   remaining: number;
@@ -34,10 +36,93 @@ export interface GitHubRateLimitBucket {
   resetAt: string | null;
 }
 
-export interface GitHubRateLimit {
-  core: GitHubRateLimitBucket;
-  search: GitHubRateLimitBucket;
+export interface GraphQLRateLimitBucket extends GitHubRateLimitBucket {
+  cost?: number;
 }
+
+export interface GitHubRateLimit {
+  /** GraphQL レート制限枠 */
+  graphql?: GraphQLRateLimitBucket;
+  /** 後方互換のためのエイリアスまたはフォールバック */
+  core: GraphQLRateLimitBucket;
+  search: GraphQLRateLimitBucket;
+}
+
+/**
+ * リポジトリ識別文字列（"owner/name"）をパースする。
+ */
+export function parseRepository(repository: string): { owner: string; name: string } {
+  const parts = repository.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new GitHubApiError(
+      `リポジトリ名の形式が不正です: "${repository}" (owner/repo 形式を指定してください)`,
+      400,
+    );
+  }
+  return { owner: parts[0], name: parts[1] };
+}
+
+export const GET_RATE_LIMIT_QUERY = `
+query GetRateLimit {
+  rateLimit {
+    limit
+    cost
+    remaining
+    resetAt
+  }
+}
+`;
+
+export const GET_PULL_REQUEST_VIEW_QUERY = `
+query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      createdAt
+      updatedAt
+    }
+  }
+}
+`;
+
+export const GET_PULL_REQUEST_DETAILS_QUERY = `
+query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      state
+      isDraft
+      createdAt
+      updatedAt
+      mergedAt
+      closedAt
+      author {
+        login
+      }
+      authorAssociation
+      labels(first: 100) {
+        nodes {
+          name
+        }
+      }
+      commits(first: 100) {
+        totalCount
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            committedDate
+          }
+        }
+      }
+    }
+  }
+}
+`;
 
 export interface GitHubApiClientOptions {
   token?: string;
@@ -127,68 +212,51 @@ export class GitHubApiClient {
   }
 
   /**
-   * レート制限の残量を取得する。このエンドポイントの呼び出し自体は、制限を消費しない。
-   * core（通常の REST）と search（検索 API）は別枠なので、それぞれ返す。
+   * レート制限の残量を取得する。GraphQL の rateLimit クエリを使用する。
+   * 既存コードとの後方互換性のため、core と search にも GraphQL の情報を設定して返す。
    */
   async getRateLimit(): Promise<GitHubRateLimit> {
-    const res = await this.fetchFn(`${this.baseUrl}/rate_limit`, {
-      method: "GET",
-      headers: this.getHeaders(),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new GitHubApiError(
-        `GitHub レート制限の取得に失敗しました (status ${res.status}): ${errText}`,
-        res.status,
-      );
+    const data = await this.graphql<{ rateLimit?: GraphQLRateLimitData }>(GET_RATE_LIMIT_QUERY);
+    if (
+      !data?.rateLimit ||
+      !Number.isFinite(data.rateLimit.limit) ||
+      !Number.isFinite(data.rateLimit.remaining)
+    ) {
+      throw new GitHubApiError("GitHub レート制限の応答に rateLimit がありません", 500);
     }
 
-    const data = (await res.json()) as { resources?: Record<string, unknown> };
-    const pick = (name: string): GitHubRateLimitBucket => {
-      const bucket = data.resources?.[name] as Record<string, unknown> | undefined;
-      const limit = Number(bucket?.limit);
-      const remaining = Number(bucket?.remaining);
-      const reset = Number(bucket?.reset);
-      if (!bucket || !Number.isFinite(limit) || !Number.isFinite(remaining)) {
-        throw new GitHubApiError(`GitHub レート制限の応答に ${name} がありません`, res.status);
-      }
-      return {
-        limit,
-        remaining,
-        resetAt: Number.isFinite(reset) ? new Date(reset * 1000).toISOString() : null,
-      };
+    const bucket: GraphQLRateLimitBucket = {
+      ...adaptGraphQLRateLimitBucket(data.rateLimit),
+      cost: data.rateLimit.cost,
     };
-    return { core: pick("core"), search: pick("search") };
+
+    return {
+      graphql: bucket,
+      core: bucket,
+      search: bucket,
+    };
   }
 
   /**
-   * Pull Request の基本情報を取得する。
+   * Pull Request の基本情報を取得する（GraphQL repository.pullRequest 経由）。
    */
   async getPullRequest(repository: string, prNumber: number): Promise<GitHubPrView> {
-    const url = `${this.baseUrl}/repos/${repository}/pulls/${prNumber}`;
+    const { owner, name } = parseRepository(repository);
+    const data = await this.graphql<{
+      repository?: {
+        pullRequest?: GraphQLPullRequestNode | null;
+      } | null;
+    }>(GET_PULL_REQUEST_VIEW_QUERY, { owner, name, number: prNumber });
 
-    const res = await this.fetchFn(url, {
-      method: "GET",
-      headers: this.getHeaders(),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
+    const prNode = data?.repository?.pullRequest;
+    if (!prNode) {
       throw new GitHubApiError(
-        `GitHub Pull Request 取得に失敗しました (#${prNumber}, status ${res.status}): ${errText}`,
-        res.status,
+        `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
+        404,
       );
     }
 
-    const item = (await res.json()) as Record<string, unknown>;
-    return {
-      number: Number(item.number),
-      title: String(item.title),
-      url: String(item.html_url),
-      createdAt: String(item.created_at),
-      updatedAt: String(item.updated_at),
-    };
+    return adaptGraphQLToPrView(prNode);
   }
 
   /**
@@ -251,86 +319,26 @@ export class GitHubApiClient {
   }
 
   /**
-   * Pull Request の詳細情報（状態、コミット一覧、ラベルなど）を取得する。
+   * Pull Request の詳細情報（状態、コミット一覧、ラベルなど）を取得する（GraphQL repository.pullRequest 経由）。
+   * 1 リクエストで PR 基本情報・ラベル・コミット一覧（先頭 100 件）を一括取得する。
    */
   async getPullRequestDetails(repository: string, prNumber: number): Promise<ProgressPrDetail> {
-    const prUrl = `${this.baseUrl}/repos/${repository}/pulls/${prNumber}`;
-    const commitsUrl = `${this.baseUrl}/repos/${repository}/pulls/${prNumber}/commits?per_page=100`;
+    const { owner, name } = parseRepository(repository);
+    const data = await this.graphql<{
+      repository?: {
+        pullRequest?: GraphQLPullRequestNode | null;
+      } | null;
+    }>(GET_PULL_REQUEST_DETAILS_QUERY, { owner, name, number: prNumber });
 
-    const [prRes, commitsRes] = await Promise.all([
-      this.fetchFn(prUrl, { method: "GET", headers: this.getHeaders() }),
-      this.fetchFn(commitsUrl, { method: "GET", headers: this.getHeaders() }),
-    ]);
-
-    if (!prRes.ok) {
-      const errText = await prRes.text().catch(() => "");
+    const prNode = data?.repository?.pullRequest;
+    if (!prNode) {
       throw new GitHubApiError(
-        `GitHub Pull Request 取得に失敗しました (#${prNumber}, status ${prRes.status}): ${errText}`,
-        prRes.status,
+        `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
+        404,
       );
     }
 
-    if (!commitsRes.ok) {
-      const errText = await commitsRes.text().catch(() => "");
-      throw new GitHubApiError(
-        `GitHub PR コミット一覧取得に失敗しました (#${prNumber}, status ${commitsRes.status}): ${errText}`,
-        commitsRes.status,
-      );
-    }
-
-    const prData = (await prRes.json()) as Record<string, unknown>;
-
-    const rawCommits = (await commitsRes.json()) as unknown[];
-    const commits: ProgressCommitSummary[] = Array.isArray(rawCommits)
-      ? rawCommits.map((c) => {
-          const commitObj = c as Record<string, unknown>;
-          const commitDetails = commitObj.commit as Record<string, unknown> | undefined;
-          const committer = commitDetails?.committer as Record<string, unknown> | undefined;
-          const author = commitDetails?.author as Record<string, unknown> | undefined;
-          const message = String(commitDetails?.message ?? "");
-          const committedDate = String(committer?.date ?? author?.date ?? prData.created_at);
-
-          return {
-            oid: commitObj.sha ? String(commitObj.sha) : undefined,
-            messageHeadline: message.split("\n")[0],
-            committedDate,
-          };
-        })
-      : [];
-
-    const stateRaw = String(prData.state ?? "open").toUpperCase();
-    const isMerged = Boolean(prData.merged_at);
-    const state: "OPEN" | "CLOSED" | "MERGED" = isMerged
-      ? "MERGED"
-      : stateRaw === "OPEN"
-        ? "OPEN"
-        : "CLOSED";
-
-    const labels = Array.isArray(prData.labels)
-      ? prData.labels.map((l) => String((l as Record<string, unknown>).name))
-      : [];
-
-    const userObj = prData.user as Record<string, unknown> | undefined;
-    const author = userObj?.login ? String(userObj.login) : undefined;
-    const authorAssociation = prData.author_association
-      ? String(prData.author_association)
-      : undefined;
-
-    return {
-      number: Number(prData.number),
-      title: String(prData.title),
-      url: String(prData.html_url),
-      state,
-      isDraft: Boolean(prData.draft),
-      createdAt: String(prData.created_at),
-      updatedAt: String(prData.updated_at),
-      mergedAt: prData.merged_at ? String(prData.merged_at) : null,
-      closedAt: prData.closed_at ? String(prData.closed_at) : null,
-      labels,
-      commits,
-      author,
-      authorAssociation,
-    };
+    return adaptGraphQLToPrDetail(prNode);
   }
 
   /**
