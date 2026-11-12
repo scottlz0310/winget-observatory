@@ -3,21 +3,55 @@
  * 外部 I/O を行わず、src/models の型定義のみに依存する。
  */
 
-import { BLOCKED_PATTERNS } from "./progress";
+import { isBlockedLabel } from "./progress";
+
+export interface TimelineEventLike {
+  event: string;
+  created_at?: string;
+  label?: { name: string };
+}
 
 /**
- * サンプルが初回提出者（1コミット・阻害ラベルなし）の前提条件を満たすか判定する。
+ * タイムライン履歴および Draft 状態を検査し、阻害要因（阻害ラベル付与・Draft化）が
+ * 過去に一度でも発生した履歴があるか判定する。
+ * 一度でも阻害が発生した PR は、途中で解除されたとしても「初期健康体」とはみなさない。
+ */
+export function hasBlockingOrDraftHistory(
+  timeline: TimelineEventLike[],
+  isDraft?: boolean,
+): boolean {
+  if (isDraft) return true;
+  for (const ev of timeline) {
+    if (ev.event === "convert_to_draft") {
+      return true;
+    }
+    if (ev.event === "labeled" && ev.label?.name) {
+      if (isBlockedLabel(ev.label.name)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * サンプルが初回提出者（1コミット・初期健康体）の前提条件を満たすか判定する。
  */
 export function isFirstTimerSampleCandidate(sample: {
   commitCount: number;
-  labels?: string[];
+  timeline?: TimelineEventLike[];
+  isDraft?: boolean;
 }): boolean {
   if (sample.commitCount !== 1) {
     return false;
   }
-  const labels = sample.labels ?? [];
-  const hasBlocked = labels.some((name) => BLOCKED_PATTERNS.some((pattern) => pattern.test(name)));
-  return !hasBlocked;
+  if (sample.isDraft) {
+    return false;
+  }
+  if (sample.timeline && hasBlockingOrDraftHistory(sample.timeline, sample.isDraft)) {
+    return false;
+  }
+  return true;
 }
 
 /**

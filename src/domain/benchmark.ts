@@ -61,7 +61,12 @@ export function compareWithSamples(
   const laterCreatedSamples = samples.filter((s) => Date.parse(s.createdAt) > createdMs);
   const laterCreated = laterCreatedSamples.length;
   const firstTimerLaterCreated = laterCreatedSamples.filter((s) => s.isFirstTimer === true).length;
-  const repeatOrExpressLaterCreated = laterCreated - firstTimerLaterCreated;
+  const repeatOrExpressLaterCreated = laterCreatedSamples.filter(
+    (s) => s.isFirstTimer === false,
+  ).length;
+  const unknownLaterCreated = laterCreatedSamples.filter(
+    (s) => s.isFirstTimer === undefined,
+  ).length;
   const newerNumber = samples.filter((s) => s.number > target.number).length;
   const olderNumber = samples.filter((s) => s.number < target.number).length;
 
@@ -81,6 +86,7 @@ export function compareWithSamples(
     Verdict: verdict,
     FirstTimerLaterCreated: firstTimerLaterCreated,
     RepeatOrExpressLaterCreated: repeatOrExpressLaterCreated,
+    UnknownLaterCreated: unknownLaterCreated,
   };
 }
 
@@ -162,11 +168,19 @@ export function describeOvertake(comparison: SampleComparison): string {
       return "マージされたPRのほぼ全てが自分より前に作成されたものです。大きく追い越されているわけではありません。";
     case "overtaken": {
       const ftCount = comparison.FirstTimerLaterCreated ?? 0;
-      const repeatCount = comparison.RepeatOrExpressLaterCreated ?? comparison.LaterCreated;
-      if (ftCount === 0) {
+      const repeatCount = comparison.RepeatOrExpressLaterCreated ?? 0;
+      const unknownCount = comparison.UnknownLaterCreated ?? 0;
+      if (ftCount === 0 && unknownCount === 0) {
         return `自分より後に作成されたPRが ${comparison.LaterCreated} 件マージ済みです（すべて常連・特急レーンによるもので、初回提出者による追い越しはありません）。`;
       }
-      return `自分より後に作成されたPRが ${comparison.LaterCreated} 件マージ済みです（うち初回提出者 ${ftCount} 件、常連・特急レーン ${repeatCount} 件）。`;
+      if (ftCount === 0 && unknownCount > 0) {
+        return `自分より後に作成されたPRが ${comparison.LaterCreated} 件マージ済みです（うち常連・特急レーン ${repeatCount} 件、未判定 ${unknownCount} 件。確定した初回提出者による追い越しはありません）。`;
+      }
+      const parts: string[] = [];
+      if (ftCount > 0) parts.push(`初回提出者 ${ftCount} 件`);
+      if (repeatCount > 0) parts.push(`常連・特急レーン ${repeatCount} 件`);
+      if (unknownCount > 0) parts.push(`未判定 ${unknownCount} 件`);
+      return `自分より後に作成されたPRが ${comparison.LaterCreated} 件マージ済みです（うち${parts.join("、")}）。`;
     }
   }
 }

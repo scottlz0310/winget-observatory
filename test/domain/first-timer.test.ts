@@ -2,37 +2,74 @@ import { describe, expect, test } from "bun:test";
 import {
   buildAuthorMergedCountQuery,
   extractSingleHitCandidateLogins,
+  hasBlockingOrDraftHistory,
   isFirstTimerSampleCandidate,
   parseAuthorMergedCounts,
 } from "../../src/domain/first-timer";
 
+describe("Domain: hasBlockingOrDraftHistory", () => {
+  test("クリーンなタイムライン（阻害ラベルやDraft化なし）は false", () => {
+    const timeline = [
+      { event: "labeled", label: { name: "New-Package" } },
+      { event: "labeled", label: { name: "Azure-Pipeline-Passed" } },
+    ];
+    expect(hasBlockingOrDraftHistory(timeline, false)).toBe(false);
+  });
+
+  test("最初から Draft の場合は true", () => {
+    expect(hasBlockingOrDraftHistory([], true)).toBe(true);
+  });
+
+  test("途中で convert_to_draft された場合は true", () => {
+    const timeline = [{ event: "convert_to_draft" }];
+    expect(hasBlockingOrDraftHistory(timeline, false)).toBe(true);
+  });
+
+  test("途中で阻害ラベル（BLOCKED_LABELS, INVESTIGATION_LABELS, BLOCKED_PATTERNS）が付与された場合は true", () => {
+    const timelineWithBlocked = [
+      { event: "labeled", label: { name: "New-Package" } },
+      { event: "labeled", label: { name: "Needs-Author-Feedback" } },
+      { event: "unlabeled", label: { name: "Needs-Author-Feedback" } },
+    ];
+    expect(hasBlockingOrDraftHistory(timelineWithBlocked, false)).toBe(true);
+
+    const timelineWithPattern = [{ event: "labeled", label: { name: "Error-TestFailure" } }];
+    expect(hasBlockingOrDraftHistory(timelineWithPattern, false)).toBe(true);
+  });
+});
+
 describe("Domain: isFirstTimerSampleCandidate", () => {
-  test("1 コミットかつ阻害ラベルなしなら true", () => {
+  test("1 コミットかつタイムライン阻害なしなら true", () => {
     expect(
       isFirstTimerSampleCandidate({
         commitCount: 1,
-        labels: ["New-Package", "Azure-Pipeline-Passed"],
+        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
       }),
     ).toBe(true);
   });
 
   test("commitCount が 1 以外なら false", () => {
-    expect(isFirstTimerSampleCandidate({ commitCount: 2, labels: ["New-Package"] })).toBe(false);
-    expect(isFirstTimerSampleCandidate({ commitCount: 0, labels: ["New-Package"] })).toBe(false);
+    expect(isFirstTimerSampleCandidate({ commitCount: 2 })).toBe(false);
+    expect(isFirstTimerSampleCandidate({ commitCount: 0 })).toBe(false);
   });
 
-  test("BLOCKED_PATTERNS に該当するラベルがあれば false", () => {
+  test("タイムラインに阻害ラベル履歴があれば解除されていても false", () => {
     expect(
       isFirstTimerSampleCandidate({
         commitCount: 1,
-        labels: ["New-Package", "Error-TestFailure"],
+        timeline: [
+          { event: "labeled", label: { name: "Error-TestFailure" } },
+          { event: "unlabeled", label: { name: "Error-TestFailure" } },
+        ],
       }),
     ).toBe(false);
+  });
 
+  test("Draft だった履歴があれば false", () => {
     expect(
       isFirstTimerSampleCandidate({
         commitCount: 1,
-        labels: ["Validation-Submission-Failed"],
+        isDraft: true,
       }),
     ).toBe(false);
   });

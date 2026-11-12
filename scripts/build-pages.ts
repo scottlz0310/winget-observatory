@@ -209,9 +209,13 @@ function renderOvertakeSection(progress: LatestProgress | null): string {
   const c = progress?.Comparison;
   if (!c) return "";
   const noteColor = c.Verdict === "overtaken" ? "var(--danger)" : "var(--text-muted)";
+  const unknownDetail =
+    c.UnknownLaterCreated !== undefined && c.UnknownLaterCreated > 0
+      ? ` / 未判定: <strong>${c.UnknownLaterCreated}</strong> 件`
+      : "";
   const overtakeDetail =
     c.FirstTimerLaterCreated !== undefined && c.RepeatOrExpressLaterCreated !== undefined
-      ? `<div class="card-subtext" style="margin-top: 0.2rem;">うち初回提出者: <strong>${c.FirstTimerLaterCreated}</strong> 件 / 常連・特急レーン: <strong>${c.RepeatOrExpressLaterCreated}</strong> 件</div>`
+      ? `<div class="card-subtext" style="margin-top: 0.2rem;">うち初回提出者: <strong>${c.FirstTimerLaterCreated}</strong> 件 / 常連・特急レーン: <strong>${c.RepeatOrExpressLaterCreated}</strong> 件${unknownDetail}</div>`
       : "";
   return `
     <h2 class="section-title">🏃 追い越しの比較（採用サンプル内）</h2>

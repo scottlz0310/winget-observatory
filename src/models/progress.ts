@@ -161,8 +161,10 @@ export interface SampleComparison {
   Verdict: OvertakeVerdict;
   /** 初回提出者による追い越し（基準 PR より後に作成された初回提出者マージ） */
   FirstTimerLaterCreated?: number;
-  /** 常連・特急レーンによる追い越し（全体の追い越し − 初回提出者による追い越し） */
+  /** 常連・特急レーンによる追い越し（基準 PR より後に作成された常連・手戻りマージ） */
   RepeatOrExpressLaterCreated?: number;
+  /** 未判定（旧キャッシュ等で判定情報がない追い越し） */
+  UnknownLaterCreated?: number;
 }
 
 /**
