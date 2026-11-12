@@ -229,6 +229,13 @@ describe("buildDashboard: 遭難の底と履歴の扱い", () => {
           Timestamp: "2026-11-08T05:54:00Z",
           TimestampJst: "2026-11-08 14:54:00",
           StaleBottom: [item(449320, "2026-10-09T05:54:00Z"), item(449314, "2026-10-09T07:46:00Z")],
+          FirstTimerBottom: [
+            {
+              ...item(450100, "2026-10-09T08:00:00Z"),
+              Author: "alice",
+              AuthorAssociation: "NONE",
+            },
+          ],
         }),
         "utf-8",
       );
@@ -251,7 +258,10 @@ describe("buildDashboard: 遭難の底と履歴の扱い", () => {
       const { htmlPath } = buildDashboard({ dataDir, outputDir });
       const html = readFileSync(htmlPath, "utf-8");
 
-      expect(html).toContain("遭難の底（順番待ちの先頭）");
+      expect(html).toContain("優等生の底（順番待ちの先頭）");
+      expect(html).toContain("初回提出者の底（真の FIFO 前線）");
+      expect(html).toContain("#450100");
+      expect(html).toContain("alice");
       expect(html.indexOf("#449320")).toBeLessThan(html.indexOf("#449314"));
       // 観測時刻(11-08 05:54Z) − 最終更新(10-09 05:54Z) = 30 日
       expect(html).toContain("30 日");
@@ -328,7 +338,7 @@ describe("buildDashboard: マージ時期の予想", () => {
       expect(html).toContain("（約 10 日後）");
       expect(html).toContain("実測の進み: 1 日/日（直近 24 時間）");
       expect(html).toContain("仮説② の根拠");
-      expect(html).toContain('aria-label="遭難の底の先頭の遅れの推移（日）"');
+      expect(html).toContain('aria-label="優等生の底の先頭の遅れの推移（日）"');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -339,7 +349,7 @@ describe("buildDashboard: マージ時期の予想", () => {
     const { tempDir, dataDir, outputDir } = setup(history);
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-      expect(html).not.toContain('aria-label="遭難の底の先頭の遅れの推移（日）"');
+      expect(html).not.toContain('aria-label="優等生の底の先頭の遅れの推移（日）"');
       expect(html).toContain("観測が 2 件以上たまると推移を表示します");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

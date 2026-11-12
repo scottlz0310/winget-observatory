@@ -20,7 +20,7 @@ import {
 } from "../src/domain/forecast-comparison";
 import { parseForecastHistory, scoreForecasts } from "../src/domain/forecast-history";
 import { formatDateTimeWithDay, formatHumanDays, parseCsvRows } from "../src/domain/progress";
-import type { DepthsSnapshot } from "../src/models/depths";
+import type { DepthsRow, DepthsSnapshot } from "../src/models/depths";
 import type {
   ExitBreakdownResult,
   ExitBreakdownUnavailableReason,
@@ -92,13 +92,13 @@ function formatDaysStat(val: number | null | undefined): string {
   return `<strong>${val}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>`;
 }
 
-/** 遭難の底（更新が古い順の健康な PR）の表。先頭からの遅れ = 観測時刻 − 最終更新 */
-function renderStaleBottomTable(depths: LatestDepths | null): string {
-  const items = depths?.StaleBottom ?? [];
-  if (items.length === 0) {
-    return `<p style="color: var(--text-muted); font-size: 0.875rem;">遭難の底のデータはまだありません。</p>`;
-  }
-  const observedMs = Date.parse(depths?.Timestamp ?? "");
+/** 底の行一覧のテーブル HTML を生成する */
+function renderBottomRowTable(
+  items: DepthsRow[],
+  timestampIso: string,
+  showAuthor = false,
+): string {
+  const observedMs = Date.parse(timestampIso);
   const rows = items
     .map((item, index) => {
       const updatedMs = Date.parse(item.UpdatedAt);
@@ -106,10 +106,12 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
         Number.isNaN(observedMs) || Number.isNaN(updatedMs)
           ? "-"
           : `${Math.round(((observedMs - updatedMs) / 86_400_000) * 10) / 10} 日`;
+      const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
       return `
         <tr>
           <td>${index + 1}</td>
           <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a></td>
+          ${authorCell}
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
           <td>${escapeHtml(item.更新日時 || item.UpdatedAt)}</td>
           <td>${lag}</td>
@@ -117,12 +119,14 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
         </tr>`;
     })
     .join("");
+  const authorHeader = showAuthor ? "<th>作者</th>" : "";
   return `
     <table>
       <thead>
         <tr>
           <th>順位</th>
           <th>PR 番号</th>
+          ${authorHeader}
           <th>起票日時 (JST)</th>
           <th>最終更新 (JST)</th>
           <th>更新からの経過</th>
@@ -132,6 +136,24 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
       <tbody>${rows}
       </tbody>
     </table>`;
+}
+
+/** 優等生の底（更新が古い順の健康な PR）の表。先頭からの遅れ = 観測時刻 − 最終更新 */
+function renderStaleBottomTable(depths: LatestDepths | null): string {
+  const items = depths?.StaleBottom ?? [];
+  if (items.length === 0) {
+    return `<p style="color: var(--text-muted); font-size: 0.875rem;">優等生の底のデータはまだありません。</p>`;
+  }
+  return renderBottomRowTable(items, depths?.Timestamp ?? "");
+}
+
+/** 初回提出者の底（常連を除外した純粋な初回提出者・1コミットの PR）の表 */
+function renderFirstTimerBottomTable(depths: LatestDepths | null): string {
+  const items = depths?.FirstTimerBottom ?? [];
+  if (items.length === 0) {
+    return `<p style="color: var(--text-muted); font-size: 0.875rem;">初回提出者の底のデータはまだありません（次回の定期観測から記録されます）。</p>`;
+  }
+  return renderBottomRowTable(items, depths?.Timestamp ?? "", true);
 }
 
 const DAY_MS = 86_400_000;
@@ -371,11 +393,11 @@ function renderForecastPanel(comparison: ForecastComparison): string {
     </section>`;
 }
 
-/** 仮説② の根拠: 遭難の底の先頭の遅れの推移と直近の観測 */
+/** 仮説② の根拠: 優等生の底の先頭の遅れの推移と直近の観測 */
 function renderForecastSection(samples: StaleFrontierSample[]): string {
   const recent = samples.slice(-5).reverse();
   const lagChart = renderLineChartSvg({
-    title: "遭難の底の先頭の遅れの推移（日）",
+    title: "優等生の底の先頭の遅れの推移（日）",
     series: [
       {
         label: "先頭の遅れ（日）",
@@ -401,9 +423,9 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
     .join("");
 
   return `
-    <h2 class="section-title">🔮 仮説② の根拠（遭難の底の推移）</h2>
+    <h2 class="section-title">🔮 仮説② の根拠（優等生の底の推移）</h2>
     <p class="section-note">
-      仮説②「更新の古い順に処理される」の根拠です。遭難の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します（予想日は最上部の比較を参照）。
+      仮説②「更新の古い順に処理される」の根拠です。優等生の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します（予想日は最上部の比較を参照）。
     </p>
     <p class="section-note">
       先頭の遅れが横ばいなら先頭は進んでいません。実時間と同じ速度（1 日/日）で先頭が進むと、遅れは一定のままです。右下がりなら先頭が実時間より速く進んでいます。
@@ -415,7 +437,7 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
       <thead>
         <tr>
           <th>観測日時 (JST)</th>
-          <th>遭難の底の先頭</th>
+          <th>優等生の底の先頭</th>
           <th>先頭の最終更新</th>
           <th>先頭の遅れ</th>
         </tr>
@@ -1004,12 +1026,19 @@ function generateHtml(
       </tbody>
     </table>
 
-    <h2 class="section-title">🧗 遭難の底（順番待ちの先頭）</h2>
+    <h2 class="section-title">🧗 優等生の底（順番待ちの先頭）</h2>
     <p class="section-note">
-      指摘が一度も付かずにすぐ健康になり、そのまま順番を待つだけの PR（基準 PR と同種）のうち、最終更新が古い順です。
+      指摘が一度も付かずにすぐ健康になり、そのまま順番を待つだけの PR（基準 PR と同種）のうち、最終更新が古い順です（旧称: 遭難の底）。
       更新の古い順に処理されるなら、この先頭の進みが待ち行列の実質的な進みを表します。
     </p>
     ${renderStaleBottomTable(depths)}
+
+    <h3 class="subsection-title" style="margin-top: 1.5rem; font-size: 1.125rem; font-weight: 600;">🌱 初回提出者の底（真の FIFO 前線）</h3>
+    <p class="section-note">
+      優等生の底から常連コントリビューターを除外した、純粋な初回提出者（authorAssociation = NONE × 1コミット）の順番待ち先頭です。
+      常連まとめマージのノイズがない完全な FIFO 列を示します。
+    </p>
+    ${renderFirstTimerBottomTable(depths)}
 
     ${renderForecastSection(frontierSamples)}
 

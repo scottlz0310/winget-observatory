@@ -20,7 +20,7 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 /** 観測速度モデルが算出できない理由の説明 */
 export const FORECAST_UNAVAILABLE_TEXT: Record<string, string> = {
-  "no-samples": "遭難の底の観測がありません",
+  "no-samples": "優等生の底の観測がありません",
   "no-target": "基準 PR の更新時刻が未記録です（次回の観測から記録されます）",
   "insufficient-window": "速度を測る観測期間が足りません（6 時間以上の間隔が必要）",
   "no-progress": "観測期間内に先頭が進んでいないため算出できません",
@@ -37,10 +37,10 @@ export interface ForecastComparisonSource {
   activeAhead: number;
   /** 通算所要日数の中央値・75%点（旧スナップショットでは無い） */
   totalMedianDays?: number | null;
-  totalP75Days?: number | null;
   /** 現在の定義（更新順）で記録された履歴 */
+  totalP75Days?: number | null;
   history: HistoryRecord[];
-  /** 遭難の底の先頭の観測列 */
+  /** 優等生の底の先頭の観測列 */
   frontierSamples: StaleFrontierSample[];
 }
 
@@ -137,7 +137,8 @@ function summarizeUpdateOrder(stale: StaleFrontierForecast, nowMs: number): Hypo
   return {
     id: "update-order",
     title: "② 更新順",
-    premise: "更新の古い順に処理され、遭難の底の先頭が基準 PR の更新時刻に届いた時点でマージされる",
+    premise:
+      "更新の古い順に処理され、優等生の底の先頭が基準 PR の更新時刻に届いた時点でマージされる",
     progressText: parts.join("。"),
     progressRatio: null,
     estimates,

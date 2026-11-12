@@ -137,7 +137,7 @@ describe("Domain: calculateForecastComparison", () => {
   });
 
   test.each([
-    ["先頭の観測が無い", { frontierSamples: [] }, "遭難の底の観測がありません"],
+    ["先頭の観測が無い", { frontierSamples: [] }, "優等生の底の観測がありません"],
     ["基準 PR の更新時刻が不明", { targetUpdatedMs: null }, "基準 PR の更新時刻が未記録です"],
   ])("更新順は予想日を出せない理由を示す: %s", (_name, overrides, text) => {
     const update = calculateForecastComparison(baseSource(overrides)).hypotheses[1];

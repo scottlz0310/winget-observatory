@@ -6,6 +6,7 @@ import {
   buildExpressQuery,
   buildHealthyBaseQuery,
   createDepthsSnapshot,
+  filterFirstTimerCandidates,
   formatDepthsRow,
   formatTargetPrInfo,
 } from "../domain/depths";
@@ -13,6 +14,7 @@ import type {
   DepthsRow,
   DepthsSnapshot,
   ExploreDepthsOptions,
+  GraphQLPrNode,
   TargetPrInfo,
 } from "../models/depths";
 import {
@@ -23,7 +25,111 @@ import {
 } from "./args";
 
 /** 遭難の底（更新が最も古い健康な PR）として取得・表示する件数 */
-const STALE_BOTTOM_LIMIT = 10;
+export const STALE_BOTTOM_LIMIT = 10;
+
+/** 初回提出者の底を走査する際の 1 ページあたりの取得件数（GraphQL search の上限値） */
+export const FIRST_TIMER_PAGE_SIZE = 100;
+
+/** 初回提出者の底を走査する際の探索安全上限（終端に達する前の過剰走査を防止するガード） */
+export const FIRST_TIMER_MAX_NODES = 1000;
+
+export const FIRST_TIMER_GRAPHQL_QUERY = `query($query: String!, $first: Int!, $after: String) {
+  search(query: $query, type: ISSUE, first: $first, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        number
+        title
+        url
+        createdAt
+        updatedAt
+        author {
+          login
+        }
+        authorAssociation
+        commits {
+          totalCount
+        }
+        labels(first: 30) {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+}`;
+
+export interface GraphQLSearchFirstTimerResponse {
+  search?: {
+    pageInfo?: {
+      hasNextPage?: boolean;
+      endCursor?: string | null;
+    };
+    nodes?: GraphQLPrNode[];
+  };
+}
+
+/**
+ * GraphQL API を用いて初回提出者の底（First-Timer Bottom）を取得する。
+ * 50件の1回取得で終わらず、採用件数（limit）に達するか走査終了（hasNextPage=false）まで
+ * 最大 maxTraverseNodes 件までページング走査する。
+ * 通信障害や認証エラー時は例外を握りつぶさずコンテキスト付き例外として伝播させる。
+ */
+export async function fetchFirstTimerBottom(
+  client: GitHubApiClient,
+  baseQuery: string,
+  limit = STALE_BOTTOM_LIMIT,
+  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+): Promise<DepthsRow[]> {
+  const openGqlQuery = `${baseQuery} sort:updated-asc`;
+  let cursor: string | null = null;
+  let hasNext = true;
+  let traversedCount = 0;
+  const collectedRows: DepthsRow[] = [];
+
+  while (hasNext && collectedRows.length < limit) {
+    if (traversedCount >= maxTraverseNodes) {
+      throw new Error(
+        `初回提出者の底の探索上限 (${maxTraverseNodes}件) に達しましたが、未走査の PR が残っています (採用件数: ${collectedRows.length}/${limit}件)。不完全な結果を避けるため中断します。`,
+      );
+    }
+
+    const fetchCount = Math.min(FIRST_TIMER_PAGE_SIZE, maxTraverseNodes - traversedCount);
+    try {
+      const gqlRes: GraphQLSearchFirstTimerResponse =
+        await client.graphql<GraphQLSearchFirstTimerResponse>(FIRST_TIMER_GRAPHQL_QUERY, {
+          query: openGqlQuery,
+          first: fetchCount,
+          ...(cursor ? { after: cursor } : {}),
+        });
+
+      const nodes = gqlRes.search?.nodes ?? [];
+      traversedCount += nodes.length;
+
+      const needed = limit - collectedRows.length;
+      const candidates = filterFirstTimerCandidates(nodes, needed);
+      collectedRows.push(...candidates);
+
+      hasNext = Boolean(gqlRes.search?.pageInfo?.hasNextPage);
+      cursor = gqlRes.search?.pageInfo?.endCursor ?? null;
+
+      if (!cursor || nodes.length === 0) {
+        break;
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`初回提出者の底の GraphQL 取得に失敗しました: ${msg}`, {
+        cause: err,
+      });
+    }
+  }
+
+  return collectedRows.slice(0, limit);
+}
 
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
   let targetPr = resolveDefaultTargetPr();
@@ -66,13 +172,13 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
   };
 }
 
-function printRowTable(rows: DepthsRow[]): void {
+function printRowTable(rows: DepthsRow[], log = console.log): void {
   if (rows.length === 0) {
-    console.log("  （該当なし）");
+    log("  （該当なし）");
     return;
   }
   for (const row of rows) {
-    console.log(`  ${row.PR.padEnd(8)} | ${row.作成日時} | ${row.更新日時} | ${row.タイトル}`);
+    log(`  ${row.PR.padEnd(8)} | ${row.作成日時} | ${row.更新日時} | ${row.タイトル}`);
   }
 }
 
@@ -125,11 +231,14 @@ export async function runExploreDepths(
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
-  // 3. 遭難の底（Stale Bottom）: 指摘なく健康になり、そのまま順番を待っている PR の先頭
+  // 3. 優等生の底（Stale Bottom）: 指摘なく健康になり、そのまま順番を待っている PR の先頭
   const staleItems = await client.searchIssues(healthyBase, "updated", "asc", STALE_BOTTOM_LIMIT);
   const staleBottom = staleItems.map(formatDepthsRow);
 
-  // 4. 特急レーン（Express Lane）
+  // 4. 初回提出者の底（First-Timer Bottom）: 優等生の底から常連を除外した、純粋な初回提出者の先頭
+  const firstTimerBottom = await fetchFirstTimerBottom(client, healthyBase, STALE_BOTTOM_LIMIT);
+
+  // 5. 特急レーン（Express Lane）
   let expressBottom: DepthsRow[] = [];
   if (hasTarget && targetCreatedAtIso) {
     const expressQuery = buildExpressQuery(options.repository, targetCreatedAtIso);
@@ -140,24 +249,33 @@ export async function runExploreDepths(
   if (!options.asJson) {
     log("【1. 健康的な大底 (Healthy Bottom)】");
     log("説明: CI通過・エラーなしの健康体で、現在最も古いオープンPR (FIFOの正当な先頭)");
-    printRowTable(healthyBottom);
+    printRowTable(healthyBottom, log);
     log("");
 
     log("【2. 真の大底 (Absolute Bottom)】");
     log("説明: 状態やエラーを問わず、未クローズの New-Package で最も古いPR");
-    printRowTable(absoluteBottom);
+    printRowTable(absoluteBottom, log);
     log("");
 
-    log("【3. 遭難の底 (Stale Bottom)】");
-    log("説明: 健康体の中で更新日時(updated)が最も古い、指摘なく順番待ちを続けているPR");
-    printRowTable(staleBottom);
+    log("【3. 優等生の底 (Stale Bottom / Healthy Oldest)】");
+    log(
+      "説明: 健康体の中で更新日時(updated)が最も古い、指摘なく順番待ちを続けているPR (旧称: 遭難の底)",
+    );
+    printRowTable(staleBottom, log);
+    log("");
+
+    log("【4. 初回提出者の底 (First-Timer Bottom)】");
+    log(
+      "説明: 優等生の底から常連を除外した、純粋な初回提出者（authorAssociation = NONE × 1コミット）の順番待ち先頭",
+    );
+    printRowTable(firstTimerBottom, log);
     log("");
 
     if (hasTarget && targetInfo) {
-      log("【4. 特急レーン・追い越し (Express Lane)】");
+      log("【5. 特急レーン・追い越し (Express Lane)】");
       log(`説明: あなたのPR作成日(${targetInfo.CreatedAtJst})以降に作成され、すでにマージされたPR`);
       if (expressBottom.length > 0) {
-        printRowTable(expressBottom);
+        printRowTable(expressBottom, log);
       } else {
         log("  該当なし（追い越しマージはありません）");
       }
@@ -172,6 +290,7 @@ export async function runExploreDepths(
     healthyBottom,
     absoluteBottom,
     staleBottom,
+    firstTimerBottom,
     expressLane: expressBottom,
   });
 

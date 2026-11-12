@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/cli/explore-depths.ts`, `src/domain/depths.ts`, `src/models/depths.ts`, `scripts/build-pages.ts`: 深度探索において「遭難の底」を「優等生の底」に改名し、新セクション「初回提出者の底（First-Timer Bottom）」を並列追加。GraphQL API を使用して更新順の健康体から常連コントリビューター（`authorAssociation !== NONE` または複数コミット）を除外し、純粋な初回提出者（1コミット・初期健康体）の順番待ち先頭を特定・表示できるように対応
 - `src/api/github.ts`: GitHub GraphQL API クライアントメソッド `graphql<T>(query, variables)` を追加。トークン未設定時の 401 例外、HTTP エラー時のステータス付き例外、GraphQL errors 返却時のメッセージ付き例外、およびレスポンスの data フィールド抽出をサポート
 - `bunfig.toml`: `minimumReleaseAge = 259200`（3 日）を追加。公開から 3 日未満の版を新規に解決しない。lock file maintenance は Renovate の minimumReleaseAge を迂回するため、無人の自動マージに対する防御としてパッケージマネージャ側で止める
 
@@ -48,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `src/cli/explore-depths.ts`: 初回提出者の底（First-Timer Bottom）の GraphQL クエリ走査において、固定件数による候補取りこぼしを防ぐためページネーション（`pageInfo`）を導入し、採用件数（10件）または検索結果の終端まで走査するよう修正。走査上限に達して未走査の PR が残る場合は候補なしと誤認させず例外で中断し、GraphQL 通信・認証エラーの握りつぶしも撤廃して不完全なデータの保存を防止
 - `src/domain/dashboard.ts`, `scripts/build-pages.ts`: ダッシュボードの履歴処理を `selectComparableHistory` に切り出して是正（Issue #18）。基準 PR が異なる行、待ち件数の算出基準（`QueueBasis`）が現行と異なる旧定義の行を速度・前回比・推移表から除外し、数値が空欄の行を `0` 件として扱って速度や ETA を歪めていた問題を解消。ラベル表記も「実質待ち件数（更新順の順位）」「作成順の累積」に修正
 - `scripts/build-pages.ts`: 進捗・境界スナップショットおよび履歴 CSV の読み込み失敗を `console.warn` で握りつぶして空のダッシュボードを公開していた問題を修正し、ファイルパス付きで中断（exit 1）するよう変更（Issue #18）
 - `src/cli/explore-depths.ts`: 基準 PR の取得失敗時に基準 PR 無しのスナップショットを履歴 JSONL へ追記して続行していた問題を修正し、中断するよう変更。エントリポイントの引数エラーも他 CLI と同じ書式で報告（Issue #18）
