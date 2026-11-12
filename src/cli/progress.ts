@@ -355,6 +355,7 @@ export async function runProgressCli(
   );
 
   const samples: MergedCandidateSample[] = [];
+  const skippedCandidates: { number: number; mergedAt: Date }[] = [];
   let skipped = 0;
 
   const rawCache = options.cachePath ? readSampleCache(options.cachePath) : [];
@@ -378,6 +379,7 @@ export async function runProgressCli(
           samples.push(s);
         } else {
           skipped++;
+          skippedCandidates.push({ number: cand.number, mergedAt: new Date(cached.MergedAt) });
         }
         continue;
       }
@@ -395,6 +397,7 @@ export async function runProgressCli(
         const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
         if (!readyAt) {
           skipped++;
+          skippedCandidates.push({ number: cand.number, mergedAt });
           const skippedEntry: SampleCacheEntry = {
             Type: "skipped",
             Number: cand.number,
@@ -409,6 +412,7 @@ export async function runProgressCli(
         const readyDays = (mergedAt.getTime() - readyAt.getTime()) / (1000 * 60 * 60 * 24);
         if (readyDays < 0) {
           skipped++;
+          skippedCandidates.push({ number: cand.number, mergedAt });
           const skippedEntry: SampleCacheEntry = {
             Type: "skipped",
             Number: cand.number,
@@ -603,10 +607,9 @@ export async function runProgressCli(
   const overallSamples = samples.filter(
     (s) => new Date(s.mergedAt).getTime() >= overallSince.getTime(),
   );
-  const overallCandidates = candidates.filter(
-    (c) => new Date(c.pull_request?.merged_at ?? c.updated_at).getTime() >= overallSince.getTime(),
-  );
-  const overallSkipped = Math.max(0, overallCandidates.length - overallSamples.length);
+  const overallSkipped = skippedCandidates.filter(
+    (s) => s.mergedAt.getTime() >= overallSince.getTime(),
+  ).length;
 
   const stats = calculateProgressStats(overallSamples, overallSkipped);
 

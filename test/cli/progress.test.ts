@@ -1635,4 +1635,198 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("キャッシュなしで取得予算を超えて保留（deferred）された候補は SkippedCount に誤混入しない", async () => {
+    const now = new Date();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const merged5d = new Date(now.getTime() - 5 * dayMs).toISOString();
+    const merged10d = new Date(now.getTime() - 10 * dayMs).toISOString();
+
+    // 候補 PR が 2 件（#201, #202）存在
+    const client = {
+      ...buildClient(),
+      graphql: async () => ({}),
+      searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+        if (query.includes("is:merged")) {
+          return {
+            totalCount: 2,
+            items: [
+              {
+                number: 201,
+                title: "PR 201",
+                html_url: "u201",
+                created_at: new Date(now.getTime() - 7 * dayMs).toISOString(),
+                updated_at: merged5d,
+                labels,
+                is_draft: false,
+                pull_request: { merged_at: merged5d },
+              },
+              {
+                number: 202,
+                title: "PR 202",
+                html_url: "u202",
+                created_at: new Date(now.getTime() - 12 * dayMs).toISOString(),
+                updated_at: merged10d,
+                labels,
+                is_draft: false,
+                pull_request: { merged_at: merged10d },
+              },
+            ],
+          };
+        }
+        return (
+          buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+        )(query);
+      },
+      getPullRequestDetails: async (_repo: string, num: number) => ({
+        number: num,
+        title: `PR ${num}`,
+        url: `https://github.com/test/repo/pull/${num}`,
+        state: "OPEN" as const,
+        isDraft: false,
+        createdAt: new Date(now.getTime() - 7 * dayMs).toISOString(),
+        updatedAt: merged5d,
+        mergedAt: null,
+        closedAt: null,
+        labels: labels.map((l) => l.name),
+        commits: [{ oid: "abc", messageHeadline: "fix", committedDate: merged5d }],
+        author: "author-test",
+      }),
+      getIssueTimeline: async () =>
+        labels.map((l) => ({
+          event: "labeled",
+          created_at: new Date(now.getTime() - 6 * dayMs).toISOString(),
+          label: { name: l.name },
+        })),
+    } as unknown as GitHubApiClient;
+
+    const logs: string[] = [];
+    // fetchBudget: 1 のため、#201 を取得した時点で予算上限となり #202 は保留（deferred）される
+    const { snapshot } = await runProgressCli(
+      {
+        ...options,
+        fetchBudget: 1,
+        lookbackDays: 30,
+        firstTimerLookbackDays: 90,
+      },
+      client,
+      (m) => logs.push(m),
+    );
+
+    // 採用 1 件、保留 1 件、除外は 0 件であること（保留分が SkippedCount に誤算入されない）
+    expect(snapshot?.SampleCount).toBe(1);
+    expect(snapshot?.SkippedCount).toBe(0);
+    const logText = logs.join("\n");
+    expect(logText).toContain("採用 1 件・除外 0 件");
+    expect(logText).toContain("未取得の候補 1 件は次回以降に取得します");
+  });
+
+  test("一部キャッシュ済みで取得予算を超えて保留された場合も、実際の除外判定のみが SkippedCount に計上される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-obs-deferred-skipped-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    const now = new Date();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const merged3d = new Date(now.getTime() - 3 * dayMs).toISOString();
+    const merged6d = new Date(now.getTime() - 6 * dayMs).toISOString();
+    const merged10d = new Date(now.getTime() - 10 * dayMs).toISOString();
+
+    // キャッシュには #301（採用サンプル）と #302（除外サンプル: no-ready）がある
+    const cacheEntries: SampleCacheEntry[] = [
+      {
+        Type: "sample",
+        Number: 301,
+        MergedAt: merged3d,
+        CreatedAt: new Date(now.getTime() - 5 * dayMs).toISOString(),
+        LatestCommittedDate: new Date(now.getTime() - 5 * dayMs).toISOString(),
+        CommitCount: 1,
+        ReadyAt: new Date(now.getTime() - 4 * dayMs).toISOString(),
+        TotalDays: 2.0,
+        TurnDays: 2.0,
+        ReadyDays: 1.0,
+        Title: "Sample 301",
+        Author: "author-301",
+        IsFirstTimer: true,
+      },
+      {
+        Type: "skipped",
+        Number: 302,
+        MergedAt: merged6d,
+        Reason: "no-ready",
+      },
+    ];
+    writeFileSync(cachePath, serializeSampleCacheEntries(cacheEntries), "utf-8");
+
+    try {
+      // 候補には #301, #302 に加え、未キャッシュの #303 が存在する
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 3,
+              items: [
+                {
+                  number: 301,
+                  title: "PR 301",
+                  html_url: "u301",
+                  created_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                  updated_at: merged3d,
+                  labels,
+                  is_draft: false,
+                  pull_request: { merged_at: merged3d },
+                },
+                {
+                  number: 302,
+                  title: "PR 302",
+                  html_url: "u302",
+                  created_at: new Date(now.getTime() - 8 * dayMs).toISOString(),
+                  updated_at: merged6d,
+                  labels,
+                  is_draft: false,
+                  pull_request: { merged_at: merged6d },
+                },
+                {
+                  number: 303,
+                  title: "PR 303",
+                  html_url: "u303",
+                  created_at: new Date(now.getTime() - 12 * dayMs).toISOString(),
+                  updated_at: merged10d,
+                  labels,
+                  is_draft: false,
+                  pull_request: { merged_at: merged10d },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      // fetchBudget: 0 のため、未キャッシュの #303 は保留（deferred）される
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 0,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // 採用 1 件（#301）、除外 1 件（#302 のみ）、保留 1 件（#303）
+      expect(snapshot?.SampleCount).toBe(1);
+      expect(snapshot?.SkippedCount).toBe(1); // #303 は保留なので SkippedCount は 2 にならず 1 のまま！
+      const logText = logs.join("\n");
+      expect(logText).toContain("採用 1 件・除外 1 件");
+      expect(logText).toContain("未取得の候補 1 件は次回以降に取得します");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
