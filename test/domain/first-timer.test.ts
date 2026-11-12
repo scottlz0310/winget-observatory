@@ -20,8 +20,16 @@ describe("Domain: hasBlockingOrDraftHistory", () => {
     expect(hasBlockingOrDraftHistory([], true)).toBe(true);
   });
 
-  test("途中で convert_to_draft された場合は true", () => {
-    const timeline = [{ event: "convert_to_draft" }];
+  test("途中で converted_to_draft (または convert_to_draft) された場合は true", () => {
+    expect(hasBlockingOrDraftHistory([{ event: "converted_to_draft" }], false)).toBe(true);
+    expect(hasBlockingOrDraftHistory([{ event: "convert_to_draft" }], false)).toBe(true);
+  });
+
+  test("最初から Draft で後に ready_for_review された場合は true", () => {
+    const timeline = [
+      { event: "labeled", label: { name: "New-Package" } },
+      { event: "ready_for_review" },
+    ];
     expect(hasBlockingOrDraftHistory(timeline, false)).toBe(true);
   });
 
@@ -61,6 +69,21 @@ describe("Domain: isFirstTimerSampleCandidate", () => {
           { event: "labeled", label: { name: "Error-TestFailure" } },
           { event: "unlabeled", label: { name: "Error-TestFailure" } },
         ],
+      }),
+    ).toBe(false);
+  });
+
+  test("converted_to_draft や ready_for_review の履歴があれば false", () => {
+    expect(
+      isFirstTimerSampleCandidate({
+        commitCount: 1,
+        timeline: [{ event: "converted_to_draft" }],
+      }),
+    ).toBe(false);
+    expect(
+      isFirstTimerSampleCandidate({
+        commitCount: 1,
+        timeline: [{ event: "ready_for_review" }],
       }),
     ).toBe(false);
   });

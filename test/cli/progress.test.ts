@@ -1163,6 +1163,167 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
+  test("1コミット・累計マージ1件でもDraft履歴（converted_to_draft や ready_for_review）があるPRは初期健康体から除外される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-draft-history-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      let graphqlCalled = false;
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 2,
+              items: [600, 601].map((n) => ({
+                number: n,
+                title: `Merged ${n}`,
+                html_url: `https://github.com/test/repo/pull/${n}`,
+                created_at: "2026-10-01T00:00:00Z",
+                updated_at: "2026-11-01T00:00:00Z",
+                labels,
+                is_draft: false,
+                pull_request: { merged_at: "2026-11-01T00:00:00Z" },
+              })),
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getIssueTimeline: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return [
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "New-Package" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "Azure-Pipeline-Passed" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-11-01T01:00:00Z",
+                label: { name: "Validation-Completed" },
+              },
+            ];
+          }
+          if (num === 600) {
+            // 途中で converted_to_draft → ready_for_review
+            return [
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "New-Package" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "Azure-Pipeline-Passed" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "Validation-Completed" },
+              },
+              {
+                event: "converted_to_draft",
+                created_at: "2026-10-02T01:00:00Z",
+              },
+              {
+                event: "ready_for_review",
+                created_at: "2026-10-15T01:00:00Z",
+              },
+            ];
+          }
+          // PR 601: 最初から Draft で起票され、後に ready_for_review のみ発生
+          return [
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "New-Package" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "Azure-Pipeline-Passed" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T01:00:00Z",
+              label: { name: "Validation-Completed" },
+            },
+            {
+              event: "ready_for_review",
+              created_at: "2026-10-10T01:00:00Z",
+            },
+          ];
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          return {
+            number: num,
+            title: `Merged PR ${num}`,
+            url: `https://github.com/test/repo/pull/${num}`,
+            state: "MERGED" as const,
+            isDraft: false,
+            createdAt: "2026-10-01T00:00:00Z",
+            updatedAt: "2026-11-01T00:00:00Z",
+            mergedAt: "2026-11-01T00:00:00Z",
+            closedAt: null,
+            labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+            commits: [
+              { oid: `oid${num}`, messageHeadline: "feat", committedDate: "2026-10-01T00:00:00Z" },
+            ],
+            author: `draftUser${num}`,
+          };
+        },
+        graphql: async () => {
+          graphqlCalled = true;
+          return { u_0: { issueCount: 1 } };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli({ ...options, cachePath }, client, (m) =>
+        logs.push(m),
+      );
+
+      // Draft 履歴があるため候補から除外され、GraphQL 一括照会も行われない
+      expect(graphqlCalled).toBeFalse();
+      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+      const s600 = snapshot?.Samples.find((s) => s.Number === 600);
+      expect(s600?.IsFirstTimer).toBeFalse();
+      const s601 = snapshot?.Samples.find((s) => s.Number === 601);
+      expect(s601?.IsFirstTimer).toBeFalse();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("旧形式キャッシュ（Author/IsFirstTimer欠落）が存在する場合に未判定として正しく分離され常連に誤合算されない", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-cache-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");

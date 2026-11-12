@@ -12,9 +12,10 @@ export interface TimelineEventLike {
 }
 
 /**
- * タイムライン履歴および Draft 状態を検査し、阻害要因（阻害ラベル付与・Draft化）が
+ * タイムライン履歴および Draft 状態を検査し、阻害要因（阻害ラベル付与・Draft化・Draft公開復帰）が
  * 過去に一度でも発生した履歴があるか判定する。
- * 一度でも阻害が発生した PR は、途中で解除されたとしても「初期健康体」とはみなさない。
+ * 一度でも阻害や Draft 状態（最初から Draft、途中で Draft 化）が発生した PR は、
+ * 途中で解除・公開されたとしても「初期健康体」とはみなさない。
  */
 export function hasBlockingOrDraftHistory(
   timeline: TimelineEventLike[],
@@ -22,7 +23,11 @@ export function hasBlockingOrDraftHistory(
 ): boolean {
   if (isDraft) return true;
   for (const ev of timeline) {
-    if (ev.event === "convert_to_draft") {
+    if (
+      ev.event === "converted_to_draft" ||
+      ev.event === "convert_to_draft" ||
+      ev.event === "ready_for_review"
+    ) {
       return true;
     }
     if (ev.event === "labeled" && ev.label?.name) {
