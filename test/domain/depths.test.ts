@@ -47,6 +47,8 @@ describe("Domain: depths logic", () => {
       html_url: "https://github.com/microsoft/winget-pkgs/pull/430799",
       created_at: "2026-09-07T07:53:38Z",
       updated_at: "2026-11-04T02:04:16Z",
+      author: "repeater-author",
+      author_association: "CONTRIBUTOR",
     };
 
     const row = formatDepthsRow(item);
@@ -59,6 +61,8 @@ describe("Domain: depths logic", () => {
     expect(row.タイトル).toBe("New package: LiamCottle.ReticulumMeshChat ...");
     expect(row.Title).toBe(item.title);
     expect(row.Url).toBe(item.html_url);
+    expect(row.Author).toBe("repeater-author");
+    expect(row.AuthorAssociation).toBe("CONTRIBUTOR");
   });
 
   test("formatTargetPrInfo は PR 情報を正しく TargetPrInfo にマッピングする", () => {

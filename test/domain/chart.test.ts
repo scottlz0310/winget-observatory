@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { renderLineChartSvg, renderTimelineSvg } from "../../src/domain/chart";
+import {
+  renderDualAxisLineChartSvg,
+  renderLineChartSvg,
+  renderTimelineSvg,
+} from "../../src/domain/chart";
 
 const HOUR = 60 * 60 * 1000;
 const T0 = Date.parse("2026-11-07T00:00:00Z");
@@ -231,5 +235,93 @@ describe("Domain: renderTimelineSvg", () => {
     expect(svg).not.toContain("<script>");
     expect(svg).toContain("&lt;script&gt;");
     expect(svg).toContain("a&lt;b");
+  });
+});
+
+describe("Domain: renderDualAxisLineChartSvg", () => {
+  test.each([
+    ["系列が空", []],
+    ["点が 1 つだけ", [{ label: "a", axis: "left" as const, color: "red", points: [point(0, 1)] }]],
+    [
+      "すべて同じ時刻",
+      [
+        {
+          label: "a",
+          axis: "left" as const,
+          color: "red",
+          points: [point(0, 1), point(0, 2)],
+        },
+      ],
+    ],
+  ])("描画できないときは null を返す: %s", (_name, series) => {
+    expect(renderDualAxisLineChartSvg({ title: "t", series })).toBeNull();
+  });
+
+  test("左右 2 軸それぞれの系列と見出し・目盛り・凡例を正しく描く", () => {
+    const svg = renderDualAxisLineChartSvg({
+      title: "統合チャート",
+      leftAxisLabel: "待ち件数",
+      rightAxisLabel: "先頭の遅れ（日）",
+      series: [
+        {
+          label: "実質待ち",
+          axis: "left",
+          color: "var(--primary)",
+          strokeWidth: 2.5,
+          points: [point(0, 100), point(1, 80), point(2, 50)],
+        },
+        {
+          label: "累積待ち",
+          axis: "left",
+          color: "var(--text-muted)",
+          strokeDasharray: "4 2",
+          points: [point(0, 150), point(1, 130), point(2, 110)],
+        },
+        {
+          label: "優等生の底 先頭の遅れ",
+          axis: "right",
+          color: "var(--warning)",
+          points: [point(0, 30), point(1, 31), point(2, 32)],
+        },
+        {
+          label: "🌱 初回提出者の底 先頭の遅れ",
+          axis: "right",
+          color: "var(--success)",
+          strokeWidth: 3,
+          points: [point(1, 35), point(2, 36)],
+        },
+      ],
+    });
+
+    expect(svg).not.toBeNull();
+    const str = svg as string;
+    expect(str).toContain('aria-label="統合チャート"');
+    expect(str).toContain("待ち件数");
+    expect(str).toContain("先頭の遅れ（日）");
+    expect(str).toContain("実質待ち");
+    expect(str).toContain("累積待ち");
+    expect(str).toContain("優等生の底 先頭の遅れ");
+    expect(str).toContain("🌱 初回提出者の底 先頭の遅れ");
+    expect(str).toContain('stroke-dasharray="4 2"');
+    expect(str).toContain('stroke-width="3"');
+    expect(str.match(/<polyline /g)?.length).toBe(4);
+  });
+
+  test("タイトルやラベルを XML エスケープする", () => {
+    const svg = renderDualAxisLineChartSvg({
+      title: "Chart <1>",
+      leftAxisLabel: "Left & Right",
+      series: [
+        {
+          label: "A < B",
+          axis: "left",
+          color: "blue",
+          points: [point(0, 1), point(1, 2)],
+        },
+      ],
+    }) as string;
+    expect(svg).toContain("Chart &lt;1&gt;");
+    expect(svg).toContain("Left &amp; Right");
+    expect(svg).toContain("A &lt; B");
   });
 });

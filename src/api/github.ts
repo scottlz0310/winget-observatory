@@ -113,12 +113,15 @@ export class GitHubApiClient {
 
     return data.items.map((raw) => {
       const item = raw as Record<string, unknown>;
+      const user = item.user as Record<string, unknown> | undefined;
       return {
         number: Number(item.number),
         title: String(item.title),
         html_url: String(item.html_url),
         created_at: String(item.created_at),
         updated_at: String(item.updated_at),
+        author: user?.login ? String(user.login) : undefined,
+        author_association: item.author_association ? String(item.author_association) : undefined,
       };
     });
   }

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   calculateLifetimeForecast,
   calculateStaleFrontierForecast,
+  extractFirstTimerFrontierSamples,
   extractStaleFrontierSamples,
   parseDepthsHistory,
 } from "../../src/domain/forecast";
@@ -70,6 +71,26 @@ describe("Domain: extractStaleFrontierSamples", () => {
       snapshot("2026-11-01T06:00:00Z", [row(40, "not-a-date")]),
     ]);
     expect(samples.map((s) => s.pr)).toEqual([10, 20]);
+  });
+});
+
+describe("Domain: extractFirstTimerFrontierSamples", () => {
+  test("初回提出者の底の先頭を時刻昇順で取り出し、空・不正な観測は除く", () => {
+    const s1 = snapshot("2026-11-01T08:00:00Z", []);
+    s1.FirstTimerBottom = [row(200, "2026-10-10T00:00:00Z")];
+    const s2 = snapshot("2026-11-01T00:00:00Z", []);
+    s2.FirstTimerBottom = [row(100, "2026-10-09T00:00:00Z")];
+    const s3 = snapshot("2026-11-01T04:00:00Z", []);
+    s3.FirstTimerBottom = [];
+    const s4 = snapshot("invalid", []);
+    s4.FirstTimerBottom = [row(300, "2026-10-11T00:00:00Z")];
+    const s5 = snapshot("2026-11-01T06:00:00Z", []);
+    s5.FirstTimerBottom = [row(400, "not-a-date")];
+    const s6 = snapshot("2026-11-01T07:00:00Z", []);
+    // FirstTimerBottom 未定義
+
+    const samples = extractFirstTimerFrontierSamples([s1, s2, s3, s4, s5, s6]);
+    expect(samples.map((s) => s.pr)).toEqual([100, 200]);
   });
 });
 
