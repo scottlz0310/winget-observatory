@@ -105,19 +105,22 @@ export function putWorkerSecrets(
     input: string,
   ) => { status: number | null; stdout: string; stderr: string } = defaultWranglerRunner,
 ): string {
-  const args = ["wrangler", "secret", "bulk", "--config", configPath];
-  const result = runner("bunx", args, secretsJson);
+  // Windows でも cmd.exe の再解釈やシェルメタ文字の誤解釈を防ぐため、
+  // shell: false で Bun 実行バイナリ (process.execPath x wrangler ...) を直接呼び出す
+  const cmd = process.execPath;
+  const args = ["x", "wrangler", "secret", "bulk", "--config", configPath];
+  const result = runner(cmd, args, secretsJson);
   if (result.status !== 0) {
     throw new Error(`Wrangler secret bulk failed: ${(result.stderr || "").trim()}`);
   }
   return result.stdout;
 }
 
-function defaultWranglerRunner(cmd: string, args: string[], input: string) {
+export function defaultWranglerRunner(cmd: string, args: string[], input: string) {
   return spawnSync(cmd, args, {
     input,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: false,
   });
 }
 
@@ -125,19 +128,35 @@ export function parseCliArgs(argv: string[]): SyncSecretsOptions {
   const options: SyncSecretsOptions = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--client-id" && i + 1 < argv.length) {
+    if (arg === "--client-id") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("オプション --client-id の値が指定されていません");
+      }
       options.clientId = argv[++i];
-    } else if (arg === "--installation-id" && i + 1 < argv.length) {
+    } else if (arg === "--installation-id") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("オプション --installation-id の値が指定されていません");
+      }
       options.installationId = argv[++i];
-    } else if (arg === "--source-repo" && i + 1 < argv.length) {
+    } else if (arg === "--source-repo") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("オプション --source-repo の値が指定されていません");
+      }
       options.sourceRepo = argv[++i];
-    } else if (arg === "--config" && i + 1 < argv.length) {
+    } else if (arg === "--config") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+        throw new Error("オプション --config の値が指定されていません");
+      }
       options.configPath = argv[++i];
     } else if (arg === "-h" || arg === "--help") {
       printHelp();
       process.exit(0);
-    } else if (!arg.startsWith("-") && !options.pemPath) {
+    } else if (arg.startsWith("-")) {
+      throw new Error(`未知のオプションです: ${arg}`);
+    } else if (!options.pemPath) {
       options.pemPath = arg;
+    } else {
+      throw new Error(`予期しない追加の引数です: ${arg}`);
     }
   }
   return options;
@@ -157,7 +176,16 @@ function printHelp() {
 `);
 }
 
-export async function runSync(options: SyncSecretsOptions): Promise<void> {
+export interface RunSyncDependencies {
+  resolveClientIdFn?: typeof resolveClientId;
+  putWorkerSecretsFn?: typeof putWorkerSecrets;
+  stdinReader?: () => Promise<string>;
+}
+
+export async function runSync(
+  options: SyncSecretsOptions,
+  deps: RunSyncDependencies = {},
+): Promise<string> {
   let pemContent = options.pemContent;
   if (!pemContent) {
     if (options.pemPath) {
@@ -167,6 +195,8 @@ export async function runSync(options: SyncSecretsOptions): Promise<void> {
       pemContent = readFileSync(options.pemPath, "utf8");
     } else if (process.env.GITHUB_APP_PRIVATE_KEY) {
       pemContent = process.env.GITHUB_APP_PRIVATE_KEY;
+    } else if (deps.stdinReader) {
+      pemContent = await deps.stdinReader();
     } else if (!process.stdin.isTTY) {
       pemContent = await Bun.stdin.text();
     }
@@ -178,7 +208,8 @@ export async function runSync(options: SyncSecretsOptions): Promise<void> {
     );
   }
 
-  const clientId = resolveClientId(options.clientId, options.sourceRepo);
+  const resolver = deps.resolveClientIdFn ?? resolveClientId;
+  const clientId = resolver(options.clientId, options.sourceRepo);
   console.log(`[Secrets Sync] Client ID を解決しました: ${clientId}`);
 
   const secretsJson = buildWorkerSecretsJson(
@@ -189,8 +220,10 @@ export async function runSync(options: SyncSecretsOptions): Promise<void> {
 
   const configPath = options.configPath || DEFAULT_WORKER_CONFIG;
   console.log(`[Secrets Sync] Wrangler secret bulk を実行中 (${configPath})...`);
-  const output = putWorkerSecrets(secretsJson, configPath);
+  const putter = deps.putWorkerSecretsFn ?? putWorkerSecrets;
+  const output = putter(secretsJson, configPath);
   console.log(output || "[Secrets Sync] 登録完了");
+  return output || "[Secrets Sync] 登録完了";
 }
 
 if (import.meta.main) {
