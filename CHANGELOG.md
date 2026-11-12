@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `scripts/sync-worker-secrets.ts`, `test/scripts/sync-worker-secrets.test.ts`, `package.json`, `workers/observe-trigger/README.md`: Cloudflare Workers（`workers/observe-trigger`）へ GitHub App の Client ID と秘密鍵を安全に一括登録する同期スクリプト `sync:secrets`（`scripts/sync-worker-secrets.ts`）を追加（Issue #60）。`scottlz0310/renovate-config` の `GLOBAL_AUTOMERGE_CLIENT_ID` から Client ID を自動解決（明示指定や環境変数もサポート）し、秘密鍵（PKCS#1 または PKCS#8）を Web Crypto 互換の PKCS#8 PEM へ自動変換した上で、`wrangler secret bulk` に標準入力経由で安全に流し込むことで、ディスクやコマンドラインに平文の秘密鍵を残さず安全な一発登録を実現。単体テスト（13件）および README の手順ドキュメントを配備
 - `workers/observe-trigger/`: Cloudflare Workers の Cron Trigger から GitHub Actions ワークフロー（`observe.yml`）を定時起動するトリガー Worker（`winget-observatory-trigger`）を新設（Issue #58）。Web Crypto API（RS256）を用いた GitHub App の JWT 署名、短期間有効な Installation Access Token（`actions: write`）の動的取得（または固定 ID 参照）、`workflow_dispatch` 呼び出し、誤アクセス防止のための 404 レスポンス、および単体テスト・Wrangler 設定・README を配備
 
 ### Changed

@@ -30,18 +30,34 @@ bunx wrangler deploy
 
 ## Secrets（環境変数）の設定
 
-初回デプロイ時、または鍵ローテーション時に Wrangler でシークレットを設定します。
+初回デプロイ時、または鍵ローテーション時にシークレットを設定します。
+
+### 自動登録スクリプト（推奨）
+
+リポジトリルートの同期スクリプトを使用すると、共有 GitHub App（`scottlz0310/renovate-config` の `GLOBAL_AUTOMERGE_CLIENT_ID`）から Client ID を自動取得し、秘密鍵（PKCS#1 または PKCS#8）を PKCS#8 に自動変換した上で、Wrangler 経由でメモリから直接一括登録できます（ディスクやコマンドラインに平文の鍵は残りません）。
+
+```sh
+# 秘密鍵ファイルを指定して一括登録
+bun run sync:secrets <秘密鍵.pem>
+
+# または Client ID を明示指定して登録
+bun run sync:secrets --client-id <id> <秘密鍵.pem>
+```
+
+### 手動登録（Wrangler 直接実行）
+
+手動で登録する場合は以下を実行します：
 
 ```sh
 # GitHub App の Client ID（または App ID）
-bunx wrangler secret put GITHUB_APP_CLIENT_ID
+bunx wrangler secret put GITHUB_APP_CLIENT_ID --config workers/observe-trigger/wrangler.toml
 
 # GitHub App の秘密鍵（PKCS#8 形式の PEM）
-bunx wrangler secret put GITHUB_APP_PRIVATE_KEY
+bunx wrangler secret put GITHUB_APP_PRIVATE_KEY --config workers/observe-trigger/wrangler.toml
 ```
 
 > [!NOTE]
-> `GITHUB_APP_PRIVATE_KEY` は PKCS#8 形式（`-----BEGIN PRIVATE KEY-----`）である必要があります。
+> 手動登録の場合、`GITHUB_APP_PRIVATE_KEY` は PKCS#8 形式（`-----BEGIN PRIVATE KEY-----`）である必要があります。
 > GitHub からダウンロードした秘密鍵が PKCS#1 形式（`-----BEGIN RSA PRIVATE KEY-----`）の場合は、事前に以下で変換してください：
 > ```sh
 > openssl pkcs8 -topk8 -nocrypt -in private-key.pem -out private-key-pkcs8.pem
@@ -50,7 +66,7 @@ bunx wrangler secret put GITHUB_APP_PRIVATE_KEY
 必要に応じて、Installation ID を固定したい場合は以下も設定可能です（未設定時はリポジトリ情報から自動取得されます）：
 
 ```sh
-bunx wrangler secret put GITHUB_INSTALLATION_ID
+bunx wrangler secret put GITHUB_INSTALLATION_ID --config workers/observe-trigger/wrangler.toml
 ```
 
 ## 動作確認
