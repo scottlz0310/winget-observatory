@@ -304,6 +304,7 @@ export async function runProgressCli(
   let page = 1;
   const maxPages = Math.ceil(options.fetchLimit / perPage);
 
+  let cursor: string | null = null;
   while (candidates.length < options.fetchLimit && page <= maxPages) {
     const mergedRes = await client.searchIssuesDetailed(
       mergedQuery,
@@ -311,6 +312,7 @@ export async function runProgressCli(
       "desc",
       perPage,
       page,
+      cursor,
     );
     if (!mergedRes.items || mergedRes.items.length === 0) {
       break;
@@ -323,9 +325,13 @@ export async function runProgressCli(
         }
       }
     }
-    if (mergedRes.items.length < perPage) {
+    const hasMore = mergedRes.pageInfo
+      ? Boolean(mergedRes.pageInfo.hasNextPage && mergedRes.pageInfo.endCursor)
+      : mergedRes.items.length >= perPage;
+    if (!hasMore) {
       break;
     }
+    cursor = mergedRes.pageInfo?.endCursor ?? null;
     page++;
   }
 

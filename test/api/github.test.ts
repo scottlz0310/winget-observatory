@@ -8,7 +8,71 @@ import {
 } from "../../src/api/github";
 
 describe("API: GitHubApiClient", () => {
-  test("searchIssues は正しくエンコードされた URL とヘッダーでリクエストを行う", async () => {
+  test("searchIssues は GraphQL 経由で検索を実行しアイテム一覧を返す", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+    let capturedHeaders: Record<string, string> = {};
+
+    const mockFetch = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      capturedUrl = String(input);
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      capturedHeaders = (init?.headers as Record<string, string>) ?? {};
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            search: {
+              issueCount: 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  number: 101,
+                  title: "Test PR 101",
+                  url: "https://github.com/test/repo/pull/101",
+                  createdAt: "2026-11-01T00:00:00Z",
+                  updatedAt: "2026-11-02T00:00:00Z",
+                  author: { login: "tester" },
+                  authorAssociation: "CONTRIBUTOR",
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({
+      token: "dummy-token-xyz",
+      fetch: mockFetch,
+    });
+
+    const items = await client.searchIssues(
+      "repo:microsoft/winget-pkgs is:pr",
+      "created",
+      "asc",
+      3,
+    );
+
+    expect(items.length).toBe(1);
+    expect(items[0].number).toBe(101);
+    expect(items[0].title).toBe("Test PR 101");
+    expect(items[0].html_url).toBe("https://github.com/test/repo/pull/101");
+    expect(items[0].author).toBe("tester");
+    expect(items[0].author_association).toBe("CONTRIBUTOR");
+    expect(capturedUrl).toContain("/graphql");
+    const parsedBody = JSON.parse(capturedBody) as {
+      variables: { query: string; first: number };
+    };
+    expect(parsedBody.variables.query).toBe("repo:microsoft/winget-pkgs is:pr sort:created-asc");
+    expect(parsedBody.variables.first).toBe(3);
+    expect(capturedHeaders.Authorization).toBe("Bearer dummy-token-xyz");
+  });
+
+  test("searchIssuesRest は正しくエンコードされた URL とヘッダーでリクエストを行う", async () => {
     let capturedUrl = "";
     let capturedHeaders: Record<string, string> = {};
 
@@ -40,7 +104,7 @@ describe("API: GitHubApiClient", () => {
       fetch: mockFetch,
     });
 
-    const items = await client.searchIssues(
+    const items = await client.searchIssuesRest(
       "repo:microsoft/winget-pkgs is:pr",
       "created",
       "asc",
@@ -233,7 +297,7 @@ describe("API: GitHubApiClient", () => {
         fetch: mockFetch,
       });
 
-      await client.searchIssues("test");
+      await client.searchIssuesRest("test");
       expect(capturedHeaders.Authorization).toBeUndefined();
     } finally {
       if (origGithubToken !== undefined) {
@@ -249,7 +313,165 @@ describe("API: GitHubApiClient", () => {
     }
   });
 
-  test("searchIssuesDetailed は totalCount と items を返す", async () => {
+  test("searchIssuesDetailed は GraphQL 経由で totalCount と items を返す", async () => {
+    let capturedBody = "";
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return new Response(
+        JSON.stringify({
+          data: {
+            search: {
+              issueCount: 42,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  number: 200,
+                  title: "Issue 200",
+                  url: "https://github.com/test/repo/issues/200",
+                  createdAt: "2026-11-01T00:00:00Z",
+                  updatedAt: "2026-11-02T00:00:00Z",
+                  isDraft: false,
+                  labels: { nodes: [{ name: "New-Package" }] },
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const res = await client.searchIssuesDetailed("repo:test/repo is:pr");
+
+    expect(res.totalCount).toBe(42);
+    expect(res.items.length).toBe(1);
+    expect(res.items[0].number).toBe(200);
+    expect(res.items[0].labels?.[0].name).toBe("New-Package");
+    const parsedBody = JSON.parse(capturedBody) as { variables: { query: string } };
+    expect(parsedBody.variables.query).toContain("sort:created-asc");
+  });
+
+  test("searchIssuesDetailed は cursor 引数を受け取って直接そのカーソルで検索する", async () => {
+    let capturedBody = "";
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return new Response(
+        JSON.stringify({
+          data: {
+            search: {
+              issueCount: 100,
+              pageInfo: { hasNextPage: true, endCursor: "next-cursor-123" },
+              nodes: [
+                {
+                  number: 201,
+                  title: "Issue 201",
+                  url: "https://github.com/test/repo/issues/201",
+                  createdAt: "2026-11-01T00:00:00Z",
+                  updatedAt: "2026-11-02T00:00:00Z",
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const res = await client.searchIssuesDetailed(
+      "repo:test/repo is:pr",
+      "updated",
+      "desc",
+      30,
+      1,
+      "cursor-xyz",
+    );
+
+    const parsedBody = JSON.parse(capturedBody) as {
+      variables: { query: string; first: number; after: string };
+    };
+    expect(parsedBody.variables.after).toBe("cursor-xyz");
+    expect(parsedBody.variables.first).toBe(30);
+    expect(res.pageInfo?.endCursor).toBe("next-cursor-123");
+    expect(res.items[0].number).toBe(201);
+  });
+
+  test("searchIssuesDetailed は cursor 未指定で page > 1 の場合に前ページから走査して指定ページを返す", async () => {
+    let callCount = 0;
+    const requestedCursors: (string | null | undefined)[] = [];
+
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      callCount++;
+      const body = JSON.parse(String(init?.body)) as {
+        variables: { after?: string | null };
+      };
+      requestedCursors.push(body.variables.after);
+
+      if (callCount === 1) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              search: {
+                issueCount: 50,
+                pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                nodes: [
+                  {
+                    number: 101,
+                    title: "PR 101",
+                    url: "https://x/101",
+                    createdAt: "2026-01-01",
+                    updatedAt: "2026-01-01",
+                  },
+                ],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            search: {
+              issueCount: 50,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  number: 102,
+                  title: "PR 102",
+                  url: "https://x/102",
+                  createdAt: "2026-01-02",
+                  updatedAt: "2026-01-02",
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const res = await client.searchIssuesDetailed("repo:test/repo is:pr", "created", "asc", 10, 2);
+
+    expect(callCount).toBe(2);
+    expect(requestedCursors).toEqual([null, "cursor-1"]);
+    expect(res.items.length).toBe(1);
+    expect(res.items[0].number).toBe(102);
+  });
+
+  test("searchIssuesDetailedRest は totalCount と items を返す", async () => {
     const mockFetch = async (): Promise<Response> => {
       return new Response(
         JSON.stringify({
@@ -271,7 +493,7 @@ describe("API: GitHubApiClient", () => {
     };
 
     const client = new GitHubApiClient({ fetch: mockFetch });
-    const res = await client.searchIssuesDetailed("repo:test/repo is:pr");
+    const res = await client.searchIssuesDetailedRest("repo:test/repo is:pr");
 
     expect(res.totalCount).toBe(42);
     expect(res.items.length).toBe(1);
@@ -771,7 +993,7 @@ describe("API: GitHubApiClient", () => {
     await expect(client.getPullRequestDetails("test/repo", 301)).rejects.toThrow(GitHubApiError);
   });
 
-  test("searchIssuesDetailed は page 引数を URL に付与する", async () => {
+  test("searchIssuesDetailedRest は page 引数を URL に付与する", async () => {
     let capturedUrl = "";
     const mockFetch = async (input: string | URL | Request): Promise<Response> => {
       capturedUrl = String(input);
@@ -779,7 +1001,7 @@ describe("API: GitHubApiClient", () => {
     };
 
     const client = new GitHubApiClient({ fetch: mockFetch });
-    await client.searchIssuesDetailed("test", "created", "asc", 30, 3);
+    await client.searchIssuesDetailedRest("test", "created", "asc", 30, 3);
     expect(capturedUrl).toContain("page=3");
   });
 

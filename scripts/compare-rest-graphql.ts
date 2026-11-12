@@ -276,7 +276,7 @@ export async function runCompare(
   const gqlSearchQueryStr = buildGraphQLSearchQuery(baseQuery, options.sort, options.order);
 
   const [restSearch, gqlSearchRaw] = await Promise.all([
-    client.searchIssuesDetailed(
+    client.searchIssuesDetailedRest(
       baseQuery,
       options.sort ?? "created",
       options.order ?? "asc",

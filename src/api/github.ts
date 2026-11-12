@@ -7,12 +7,17 @@ import type {
 import {
   adaptGraphQLRateLimitBucket,
   adaptGraphQLTimelineItems,
+  adaptGraphQLToDetailedSearchItem,
   adaptGraphQLToPrDetail,
   adaptGraphQLToPrView,
+  adaptGraphQLToSearchItem,
+  buildGraphQLSearchQuery,
 } from "./graphql-adapters";
 import type {
+  GraphQLPageInfo,
   GraphQLPullRequestNode,
   GraphQLRateLimitData,
+  GraphQLSearchConnection,
   GraphQLTimelineItemNode,
 } from "./graphql-types";
 
@@ -32,6 +37,7 @@ export interface GitHubDetailedSearchItem {
 export interface GitHubDetailedSearchResult {
   totalCount: number;
   items: GitHubDetailedSearchItem[];
+  pageInfo?: GraphQLPageInfo;
 }
 
 /** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
@@ -71,6 +77,38 @@ export function parseRepository(repository: string): { owner: string; name: stri
   }
   return { owner: parts[0], name: parts[1] };
 }
+
+export const SEARCH_ISSUES_QUERY = `
+query SearchIssues($query: String!, $first: Int!, $after: String) {
+  search(query: $query, type: ISSUE, first: $first, after: $after) {
+    issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        number
+        title
+        url
+        createdAt
+        updatedAt
+        isDraft
+        mergedAt
+        author {
+          login
+        }
+        authorAssociation
+        labels(first: 100) {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+}
+`;
 
 export const GET_RATE_LIMIT_QUERY = `
 query GetRateLimit {
@@ -179,6 +217,10 @@ query GetPullRequestTimeline($owner: String!, $name: String!, $number: Int!, $af
 }
 `;
 
+interface GraphQLSearchResponse {
+  search?: GraphQLSearchConnection<GraphQLPullRequestNode> | null;
+}
+
 interface GraphQLTimelineItemsResponse {
   repository?: {
     pullRequest?: {
@@ -275,9 +317,44 @@ export class GitHubApiClient {
   }
 
   /**
-   * Search Issues / PRs API を呼び出す。
+   * GitHub GraphQL Search API を呼び出し、PR の検索結果アイテム一覧を取得する。
+   *
+   * @param query 検索クエリ文字列
+   * @param sort ソート基準（例: "created", "updated"）
+   * @param order ソート順（"asc" または "desc"）
+   * @param perPage 取得件数（最大100）
+   * @returns 検索結果アイテム一覧（GitHubSearchItem[]）
    */
   async searchIssues(
+    query: string,
+    sort = "created",
+    order = "asc",
+    perPage = 3,
+  ): Promise<GitHubSearchItem[]> {
+    const fullQuery = buildGraphQLSearchQuery(query, sort, order);
+    const data = await this.graphql<GraphQLSearchResponse>(SEARCH_ISSUES_QUERY, {
+      query: fullQuery,
+      first: perPage,
+    });
+
+    const nodes = data?.search?.nodes;
+    if (!Array.isArray(nodes)) {
+      return [];
+    }
+
+    const items: GitHubSearchItem[] = [];
+    for (const raw of nodes) {
+      if (raw && typeof raw === "object" && "number" in raw && "title" in raw) {
+        items.push(adaptGraphQLToSearchItem(raw as GraphQLPullRequestNode));
+      }
+    }
+    return items;
+  }
+
+  /**
+   * REST API を直接呼び出して PR の検索結果を取得する（比較検証・移行診断専用）。
+   */
+  async searchIssuesRest(
     query: string,
     sort = "created",
     order = "asc",
@@ -294,7 +371,7 @@ export class GitHubApiClient {
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       throw new GitHubApiError(
-        `GitHub Search API 呼び出しに失敗しました (${res.status}): ${errText}`,
+        `GitHub Search API (REST) 呼び出しに失敗しました (${res.status}): ${errText}`,
         res.status,
       );
     }
@@ -410,9 +487,81 @@ export class GitHubApiClient {
   }
 
   /**
-   * Search Issues / PRs API を呼び出し、詳細情報と総件数を返す。
+   * Search Issues / PRs API を呼び出し、詳細情報と総件数を取得する（GraphQL search 経由）。
+   *
+   * @param query 検索クエリ文字列
+   * @param sort ソート基準（例: "created", "updated"）
+   * @param order ソート順（"asc" または "desc"）
+   * @param perPage 1ページあたりの取得件数（最大100）
+   * @param page 取得ページ番号（1始まり。cursor 未指定で page > 1 の場合は内部で cursor を走査）
+   * @param cursor GraphQL ページネーションカーソル（省略可）
+   * @returns 検索結果オブジェクト（totalCount と items を含む。pageInfo も付与）
    */
   async searchIssuesDetailed(
+    query: string,
+    sort = "created",
+    order = "asc",
+    perPage = 30,
+    page = 1,
+    cursor?: string | null,
+  ): Promise<GitHubDetailedSearchResult> {
+    const fullQuery = buildGraphQLSearchQuery(query, sort, order);
+
+    let after: string | null = cursor ?? null;
+
+    // cursor が明示されておらず、page > 1 が指定された場合は、1ページ目から cursor をたどる
+    if (!cursor && page > 1) {
+      let currentPage = 1;
+      while (currentPage < page) {
+        const stepData: GraphQLSearchResponse = await this.graphql<GraphQLSearchResponse>(
+          SEARCH_ISSUES_QUERY,
+          {
+            query: fullQuery,
+            first: perPage,
+            after,
+          },
+        );
+        const conn = stepData.search;
+        if (!conn?.pageInfo?.hasNextPage || !conn.pageInfo.endCursor) {
+          return {
+            totalCount: Number(conn?.issueCount ?? 0),
+            items: [],
+            pageInfo: conn?.pageInfo,
+          };
+        }
+        after = conn.pageInfo.endCursor;
+        currentPage++;
+      }
+    }
+
+    const data: GraphQLSearchResponse = await this.graphql<GraphQLSearchResponse>(
+      SEARCH_ISSUES_QUERY,
+      {
+        query: fullQuery,
+        first: perPage,
+        after,
+      },
+    );
+
+    const connection = data.search;
+    const totalCount = Number(connection?.issueCount ?? 0);
+    const items: GitHubDetailedSearchItem[] = [];
+
+    if (Array.isArray(connection?.nodes)) {
+      for (const raw of connection.nodes) {
+        if (raw && typeof raw === "object" && "number" in raw && "title" in raw) {
+          items.push(adaptGraphQLToDetailedSearchItem(raw as GraphQLPullRequestNode));
+        }
+      }
+    }
+
+    return { totalCount, items, pageInfo: connection?.pageInfo };
+  }
+
+  /**
+   * REST API を直接呼び出して PR の詳細検索結果を取得する（比較検証・移行診断専用）。
+   */
+  async searchIssuesDetailedRest(
     query: string,
     sort = "created",
     order = "asc",
@@ -430,7 +579,7 @@ export class GitHubApiClient {
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       throw new GitHubApiError(
-        `GitHub Search API 呼び出しに失敗しました (${res.status}): ${errText}`,
+        `GitHub Search API (REST) 呼び出しに失敗しました (${res.status}): ${errText}`,
         res.status,
       );
     }
