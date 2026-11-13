@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `src/cli/progress.ts`, `test/cli/progress.test.ts`: マージ済み PR の詳細（タイムライン・PR詳細）取得予算 `--fetch-budget` の既定値を 100 から 300 へ引き上げ（Issue #66）。90 日間の初回提出者候補および 30 日間の全体枠を合わせても実質 200 件前後であるため、初回実行やキャッシュ移行・再評価を 1 回のワークフロー実行で完了可能にし、保留（deferred）による複数回分割を解消
+
 ### Added
 
 - `src/models/progress.ts`, `src/models/sample-cache.ts`: `ProgressSnapshot` に初回提出者コホートの最終コミット後所要日数（Turn Latency）を記録する `FirstTimerTurnMedianDays` および `FirstTimerTurnP75Days` を追加（Issue #64）。`CachedSampleEntry` に初回判定バージョン `FirstTimerVersion` および除外由来 `FirstTimerReason` を追加し、キャッシュのバージョン管理と由来追跡を可能に

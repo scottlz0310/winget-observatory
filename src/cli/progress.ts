@@ -75,7 +75,7 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
   let repository = process.env.WINGET_REPOSITORY ?? DEFAULT_REPOSITORY;
   let lookbackDays = 30;
   let firstTimerLookbackDays = 90;
-  let fetchBudget = 100;
+  let fetchBudget = 300;
   let fetchLimit = 5000;
   let logPath: string | undefined = process.env.WINGET_LOG_PATH;
   let snapshotPath: string | undefined = process.env.WINGET_SNAPSHOT_PATH;
