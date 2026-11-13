@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `src/api/github.ts`, `test/api/github.test.ts`: GitHub GraphQL API において HTTP 200 応答だが空文字・空白のみ・HTML エラー画面・不完全構文等で JSON パースに失敗した場合に、一時的通信エラーとして指数バックオフ付きで自動リトライするよう耐障害性を強化（Issue #68）。ロードバランサーやプロキシの一時的な瞬断（空ボディ返却）によるワークフロー中断を解消
+- `src/domain/depths.ts`, `src/models/depths.ts`, `src/cli/explore-depths.ts`, `src/domain/forecast.ts`, `test/domain/depths.test.ts`, `test/cli/explore-depths.test.ts`: `explore-depths` の「初回提出者の底（First-Timer Bottom）」判定（`isFirstTimerCandidate`）に残存していた 1 コミット制限を撤廃し、PR #65（初回提出者コホートのコミット数制限撤廃）と仕様を整合（Issue #68）。手直しコミットを経た健康な初回提出者のオープン PR も正しく順番待ち先頭として反映されるよう修正
+
+### Documentation
+
+- `README.md`: マージ済み PR 詳細取得予算 `--fetch-budget` の既定値記載を 100 から 300 へ更新。初回提出者コホートの新仕様（90 日窓、生涯 1 件マージ全体、通算所要日数および Turn Latency 併記）、キュー境界の初回提出者の底、Cloudflare Workers（`observe-trigger`）による定時トリガーおよび Wrangler Secrets 同期スクリプトの記載を最新化（Issue #68）
+
 ### Changed
 
 - `src/cli/progress.ts`, `test/cli/progress.test.ts`: マージ済み PR の詳細（タイムライン・PR詳細）取得予算 `--fetch-budget` の既定値を 100 から 300 へ引き上げ（Issue #66）。90 日間の初回提出者候補および 30 日間の全体枠を合わせても実質 200 件前後であるため、初回実行やキャッシュ移行・再評価を 1 回のワークフロー実行で完了可能にし、保留（deferred）による複数回分割を解消

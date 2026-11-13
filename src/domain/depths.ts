@@ -117,13 +117,11 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
 }
 
 /**
- * GraphQL 検索ノードが「初回提出者（authorAssociation = NONE × 1コミット・除外ラベルなし）」の条件を満たすか判定する。
+ * GraphQL 検索ノードが「初回提出者（authorAssociation = NONE・除外ラベルなし）」の条件を満たすか判定する。
+ * PR #65（初回提出者コホートのコミット数制限撤廃）に準拠し、手直しコミットが入った健康な初回提出者も許容する。
  */
 export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
   if (!node.author?.login) {
-    return false;
-  }
-  if (node.commits.totalCount !== 1) {
     return false;
   }
   if (node.authorAssociation !== "NONE") {
@@ -137,7 +135,7 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
 }
 
 /**
- * GraphQL 検索ノードから「初回提出者（authorAssociation = NONE × 1コミット・除外ラベルなし）」を抽出し、
+ * GraphQL 検索ノードから「初回提出者（authorAssociation = NONE・除外ラベルなし）」を抽出し、
  * DepthsRow 形式で返す。
  */
 export function filterFirstTimerCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {

@@ -482,6 +482,31 @@ describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）�
     expect(results.length).toBe(10);
   });
 
+  test("複数コミット（commits > 1）の初回提出者（NONE）も除外されずに初回提出者の底として抽出される", async () => {
+    // 3コミットの初回提出者PR
+    const multiCommitNodes: GraphQLPrNode[] = [
+      createMockNode(400501, "multi-commit-first-timer-1", "NONE", 3),
+      createMockNode(400502, "multi-commit-first-timer-2", "NONE", 5),
+    ];
+
+    const mockClient = {
+      graphql: async <T>(): Promise<T> =>
+        ({
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: multiCommitNodes,
+          },
+        }) as unknown as T,
+    } as unknown as GitHubApiClient;
+
+    const results = await fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
+    expect(results.length).toBe(2);
+    expect(results[0].Number).toBe(400501);
+    expect(results[0].Author).toBe("multi-commit-first-timer-1");
+    expect(results[1].Number).toBe(400502);
+    expect(results[1].Author).toBe("multi-commit-first-timer-2");
+  });
+
   test("GraphQL API が 503 等で失敗した場合はコンテキスト付き例外をスローする", async () => {
     const mockClient = {
       graphql: async () => {

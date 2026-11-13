@@ -266,7 +266,7 @@ export async function runExploreDepths(
 
     log("【4. 初回提出者の底 (First-Timer Bottom)】");
     log(
-      "説明: 優等生の底から常連を除外した、純粋な初回提出者（authorAssociation = NONE × 1コミット）の順番待ち先頭",
+      "説明: 優等生の底から常連を除外した、純粋な初回提出者（authorAssociation = NONE）の順番待ち先頭",
     );
     printRowTable(firstTimerBottom, log);
     log("");

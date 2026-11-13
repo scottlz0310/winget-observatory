@@ -167,7 +167,7 @@ describe("Domain: depths logic", () => {
       },
       {
         number: 450003,
-        title: "Multi-commit PR (Should be excluded)",
+        title: "Multi-commit PR (Should be included after commit limit removal)",
         url: "https://github.com/microsoft/winget-pkgs/pull/450003",
         createdAt: "2026-10-09T04:00:00Z",
         updatedAt: "2026-10-09T04:30:00Z",
@@ -209,23 +209,26 @@ describe("Domain: depths logic", () => {
       },
     ];
 
-    test("isFirstTimerCandidate は適格条件を個別に判定する", () => {
+    test("isFirstTimerCandidate は適格条件を個別に判定する（複数コミットも許容）", () => {
       expect(isFirstTimerCandidate(sampleNodes[0])).toBe(true);
       expect(isFirstTimerCandidate(sampleNodes[1])).toBe(false); // CONTRIBUTOR
-      expect(isFirstTimerCandidate(sampleNodes[2])).toBe(false); // 2 commits
+      expect(isFirstTimerCandidate(sampleNodes[2])).toBe(true); // 2 commits（コミット数制限撤廃により初回提出者として許容）
       expect(isFirstTimerCandidate(sampleNodes[3])).toBe(false); // blocked label
       expect(isFirstTimerCandidate(sampleNodes[4])).toBe(false); // author null
       expect(isFirstTimerCandidate(sampleNodes[5])).toBe(true);
     });
 
-    test("filterFirstTimerCandidates は NONE かつ 1 コミットの健全な PR のみを抽出する", () => {
+    test("filterFirstTimerCandidates は NONE の健全な初回提出者 PR をコミット数制限なく抽出する", () => {
       const result = filterFirstTimerCandidates(sampleNodes);
-      expect(result.length).toBe(2);
+      expect(result.length).toBe(3);
       expect(result[0].Number).toBe(450001);
       expect(result[0].Author).toBe("alice");
       expect(result[0].AuthorAssociation).toBe("NONE");
-      expect(result[1].Number).toBe(450006);
-      expect(result[1].Author).toBe("eve");
+      expect(result[1].Number).toBe(450003);
+      expect(result[1].Author).toBe("charlie");
+      expect(result[1].AuthorAssociation).toBe("NONE");
+      expect(result[2].Number).toBe(450006);
+      expect(result[2].Author).toBe("eve");
     });
 
     test("filterFirstTimerCandidates は limit 件数で切り詰める", () => {

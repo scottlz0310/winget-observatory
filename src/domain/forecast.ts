@@ -60,7 +60,7 @@ export function extractStaleFrontierSamples(snapshots: DepthsSnapshot[]): StaleF
 }
 
 /**
- * スナップショット列から、初回提出者の底の先頭（常連を除外した初回提出者・1コミットの最古更新 PR）の
+ * スナップショット列から、初回提出者の底の先頭（常連を除外した初回提出者の最古更新 PR）の
  * 観測列を時刻昇順で取り出す。
  * 初回提出者の底が未記録（Phase 2 導入前）、空の観測、日時が不正な観測は除く。
  */
