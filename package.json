@@ -17,7 +17,6 @@
     "sync:dropbox": "bun run scripts/sync-dropbox.ts",
     "explore:depths": "bun run src/cli/explore-depths.ts",
     "progress": "bun run src/cli/progress.ts",
-    "compare:api": "bun run scripts/compare-rest-graphql.ts",
     "sync:secrets": "bun run scripts/sync-worker-secrets.ts"
   },
   "devDependencies": {
