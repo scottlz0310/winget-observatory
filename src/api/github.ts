@@ -23,6 +23,8 @@ export interface GitHubDetailedSearchItem {
   html_url: string;
   created_at: string;
   updated_at: string;
+  author?: string;
+  commitCount?: number;
   labels?: { name: string }[];
   is_draft?: boolean;
   pull_request?: {
@@ -99,6 +101,9 @@ query SearchIssues($query: String!, $first: Int!, $after: String) {
           nodes {
             name
           }
+        }
+        commits(first: 1) {
+          totalCount
         }
       }
     }

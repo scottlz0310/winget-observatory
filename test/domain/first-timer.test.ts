@@ -1,11 +1,96 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildAuthorMergedCountQuery,
+  countCandidateAuthors,
   extractSingleHitCandidateLogins,
   hasBlockingOrDraftHistory,
+  isCandidateEligibleForFirstTimerDetail,
   isFirstTimerSampleCandidate,
   parseAuthorMergedCounts,
 } from "../../src/domain/first-timer";
+
+describe("Domain: countCandidateAuthors & isCandidateEligibleForFirstTimerDetail", () => {
+  test("countCandidateAuthors は候補配列から作者ごとの出現数を集計する", () => {
+    const candidates = [
+      { author: "alice" },
+      { author: "bob" },
+      { author: "alice" },
+      { author: undefined },
+      { author: "charlie" },
+    ];
+    const counts = countCandidateAuthors(candidates);
+    expect(counts.get("alice")).toBe(2);
+    expect(counts.get("bob")).toBe(1);
+    expect(counts.get("charlie")).toBe(1);
+    expect(counts.get("unknown")).toBeUndefined();
+  });
+
+  test("1コミット・非Draft・阻害ラベルなし・単発authorなら eligible", () => {
+    const authorCounts = new Map([["alice", 1]]);
+    const candidate = {
+      commitCount: 1,
+      isDraft: false,
+      labels: [{ name: "Area-Package" }, { name: "Validation-Passed" }],
+      author: "alice",
+    };
+    expect(isCandidateEligibleForFirstTimerDetail(candidate, authorCounts)).toBe(true);
+  });
+
+  test("コミット数が 2 以上の場合は ineligible", () => {
+    const authorCounts = new Map([["alice", 1]]);
+    expect(
+      isCandidateEligibleForFirstTimerDetail(
+        { commitCount: 2, isDraft: false, author: "alice" },
+        authorCounts,
+      ),
+    ).toBe(false);
+  });
+
+  test("Draft の場合は ineligible", () => {
+    const authorCounts = new Map([["alice", 1]]);
+    expect(
+      isCandidateEligibleForFirstTimerDetail(
+        { commitCount: 1, isDraft: true, author: "alice" },
+        authorCounts,
+      ),
+    ).toBe(false);
+  });
+
+  test("阻害ラベルが付与されている場合は ineligible", () => {
+    const authorCounts = new Map([["alice", 1]]);
+    expect(
+      isCandidateEligibleForFirstTimerDetail(
+        {
+          commitCount: 1,
+          isDraft: false,
+          author: "alice",
+          labels: [{ name: "Needs-Author-Feedback" }],
+        },
+        authorCounts,
+      ),
+    ).toBe(false);
+  });
+
+  test("同一期間内に複数回出現している author（常連）は ineligible", () => {
+    const authorCounts = new Map([["frequent-contributor", 5]]);
+    expect(
+      isCandidateEligibleForFirstTimerDetail(
+        { commitCount: 1, isDraft: false, author: "frequent-contributor" },
+        authorCounts,
+      ),
+    ).toBe(false);
+  });
+
+  test("commitCount が未定義（不明）の場合は除外せず後続の判定に委ねる", () => {
+    const authorCounts = new Map([["alice", 1]]);
+    expect(
+      isCandidateEligibleForFirstTimerDetail(
+        { commitCount: undefined, isDraft: false, author: "alice" },
+        authorCounts,
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("Domain: hasBlockingOrDraftHistory", () => {
   test("クリーンなタイムライン（阻害ラベルやDraft化なし）は false", () => {

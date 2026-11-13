@@ -10,6 +10,7 @@ import {
   resolveDefaultDataDir,
   runProgressCli,
 } from "../../src/cli/progress";
+import { REQUIRED_LABELS } from "../../src/domain/progress";
 import { parseSampleCache, serializeSampleCacheEntries } from "../../src/domain/sample-cache";
 import type { SampleCacheEntry } from "../../src/models/sample-cache";
 
@@ -34,7 +35,7 @@ describe("CLI: progress parseArgs", () => {
       expect(opts.lookbackDays).toBe(30);
       expect(opts.firstTimerLookbackDays).toBe(90);
       expect(opts.fetchBudget).toBe(100);
-      expect(opts.fetchLimit).toBe(1000);
+      expect(opts.fetchLimit).toBe(5000);
       expect(opts.noLog).toBeFalse();
       expect(opts.asJson).toBeFalse();
     } finally {
@@ -88,11 +89,12 @@ describe("CLI: progress parseArgs", () => {
     [["--first-timer-lookback-days", "0"], "無効な値"],
     [["--first-timer-lookback-days", "400"], "無効な値"],
     [["--first-timer-lookback-days"], "必要です"],
-    [["--fetch-budget", "101"], "無効な値"],
+    [["--fetch-budget", "1001"], "無効な値"],
     [["--fetch-budget", "0"], "無効な値"],
     [["--sample-size", "30"], "未知のオプション"],
     [["--cache-path"], "必要です"],
     [["--fetch-limit", "0"], "無効な値"],
+    [["--fetch-limit", "10001"], "無効な値"],
     [["--target-pr"], "必要です"],
     [["--target-pr", "--no-log"], "必要です"],
     [["--log-path", "--no-log"], "必要です"],
@@ -1825,6 +1827,609 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const logText = logs.join("\n");
       expect(logText).toContain("採用 1 件・除外 1 件");
       expect(logText).toContain("未取得の候補 1 件は次回以降に取得します");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("マージ済み候補の走査で日付窓スライス分割クエリが発行され、30日超の非初回候補は詳細取得をスキップして除外記録される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-slice-filter-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+
+      const searchQueries: string[] = [];
+      const detailFetchedPrs: number[] = [];
+      const timelineFetchedPrs: number[] = [];
+
+      // 45日前（30日超）の PR:
+      // #501: 2コミット（非初回候補 -> スキップされるべき）
+      // #502: 1コミット・クリーン（初回候補 -> 詳細取得されるべき）
+      // #503: 1コミット・常連author（author: frequent, 同一期間に2件 -> スキップされるべき）
+      // #504: 1コミット・常連author（author: frequent, 同一期間に2件 -> スキップされるべき）
+      const merged45d = new Date(now.getTime() - 45 * dayMs).toISOString();
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          searchQueries.push(query);
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            // スライス分割クエリ（merged:ISO..ISO）が使われていること
+            expect(query).toMatch(/merged:\d{4}-\d{2}-\d{2}T.*..\d{4}-\d{2}-\d{2}T/);
+
+            return {
+              totalCount: 4,
+              items: [
+                {
+                  number: 501,
+                  title: "PR 501 (2 commits)",
+                  html_url: "u501",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "user-501",
+                  commitCount: 2, // 2コミット -> 非初回
+                  pull_request: { merged_at: merged45d },
+                },
+                {
+                  number: 502,
+                  title: "PR 502 (1 commit, first timer)",
+                  html_url: "u502",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "first-timer-user",
+                  commitCount: 1, // 1コミット -> 初回候補！
+                  pull_request: { merged_at: merged45d },
+                },
+                {
+                  number: 503,
+                  title: "PR 503 (frequent author)",
+                  html_url: "u503",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "frequent-user",
+                  commitCount: 1,
+                  pull_request: { merged_at: merged45d },
+                },
+                {
+                  number: 504,
+                  title: "PR 504 (frequent author)",
+                  html_url: "u504",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "frequent-user",
+                  commitCount: 1,
+                  pull_request: { merged_at: merged45d },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, prNumber: number) => {
+          detailFetchedPrs.push(prNumber);
+          const isTarget = prNumber === options.targetPr;
+          return {
+            number: prNumber,
+            title: `PR ${prNumber}`,
+            url: `https://github.com/microsoft/winget-pkgs/pull/${prNumber}`,
+            state: (isTarget ? "OPEN" : "MERGED") as "OPEN" | "MERGED",
+            isDraft: false,
+            createdAt: new Date(now.getTime() - 50 * dayMs).toISOString(),
+            updatedAt: merged45d,
+            mergedAt: isTarget ? null : merged45d,
+            closedAt: null,
+            author: "first-timer-user",
+            commits: [
+              {
+                committedDate: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                oid: "abc1234",
+              },
+            ],
+            labels: REQUIRED_LABELS,
+          };
+        },
+        getIssueTimeline: async (_repo: string, prNumber: number) => {
+          timelineFetchedPrs.push(prNumber);
+          return REQUIRED_LABELS.map((name) => ({
+            event: "labeled",
+            created_at: new Date(now.getTime() - 48 * dayMs).toISOString(),
+            label: { name },
+          }));
+        },
+        graphql: async <T>() => {
+          return {
+            u_0: { issueCount: 1 },
+          } as unknown as T;
+        },
+      } as unknown as GitHubApiClient;
+
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 100,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        () => {},
+      );
+
+      // 詳細・タイムライン API が呼ばれたのは 自PR(#500) と候補中では #502 のみであること！
+      // #501（2コミット）と #503, #504（常連author）は詳細フェッチをスキップ！
+      expect(detailFetchedPrs).toEqual([500, 502]);
+      expect(timelineFetchedPrs).toEqual([500, 502]);
+
+      // スナップショットの確認:
+      // #502 は45日前（30日超）のため全体窓 SampleCount には入らず、初回コホート FirstTimerSampleCount に採用されること
+      expect(snapshot?.SampleCount).toBe(0);
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      // 30日以内の除外ではないため全体 SkippedCount は 0
+      expect(snapshot?.SkippedCount).toBe(0);
+
+      // キャッシュファイルの内容を確認: スキップされた PR が not-first-timer-candidate として記録されていること
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const skippedEntries = savedCache.filter((e) => e.Type === "skipped");
+      expect(skippedEntries).toHaveLength(3);
+      for (const entry of skippedEntries) {
+        expect(entry.Reason).toBe("not-first-timer-candidate");
+      }
+      expect(skippedEntries.map((e) => e.Number).sort()).toEqual([501, 503, 504]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("単一スライスの totalCount が 1,000 件を超える場合、時間範囲が自動分割（bisecting）されて漏れなく走査される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-bisect-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+
+      // クエリごとの呼び出し回数と走査された PR 番号を記録
+      const queriedFilters: string[] = [];
+      const collectedNumbers: number[] = [];
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (
+          query: string,
+          _sort?: string,
+          _order?: string,
+          _perPage?: number,
+          _page = 1,
+        ): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            queriedFilters.push(query);
+
+            // 最初の 14 日窓（幅約 14 日）では 1,200 件を返す
+            // この場合、progress.ts が 1,000 件超を検知して期間を 2 つ（7日 + 7日）に分割する
+            if (query.includes("..")) {
+              const match = query.match(/merged:([0-9T:.Z-]+?)\.\.([0-9T:.Z-]+)/);
+              if (match) {
+                const start = new Date(match[1]);
+                const end = new Date(match[2]);
+                const durationDays = (end.getTime() - start.getTime()) / dayMs;
+
+                if (durationDays > 10) {
+                  // 14 日窓: 1,200 件と報告して分割を促す
+                  return {
+                    totalCount: 1200,
+                    items: [], // 分割されるのでアイテムは空でよい
+                  };
+                }
+
+                // 分割された 7 日窓: それぞれ 600 件（モックでは各 2 件のアイテムを返す）
+                const baseNum = start.getTime() > now.getTime() - 45 * dayMs ? 800 : 900;
+                const items = [baseNum + 1, baseNum + 2].map((num) => {
+                  collectedNumbers.push(num);
+                  return {
+                    number: num,
+                    title: `PR ${num}`,
+                    html_url: `u${num}`,
+                    created_at: new Date(start.getTime()).toISOString(),
+                    updated_at: new Date(start.getTime() + dayMs).toISOString(),
+                    labels,
+                    is_draft: false,
+                    author: `user-${num}`,
+                    commitCount: 1,
+                    pull_request: {
+                      merged_at: new Date(start.getTime() + dayMs).toISOString(),
+                    },
+                  };
+                });
+
+                return {
+                  totalCount: 2,
+                  items,
+                };
+              }
+            }
+
+            return { totalCount: 0, items: [] };
+          }
+
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+      } as unknown as GitHubApiClient;
+
+      await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 0, // サンプル詳細取得はスキップし走査のみ検証
+          fetchLimit: 5000,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        () => {},
+      );
+
+      // 分割されたサブスライス（7 日幅）のクエリが発行されていること（通常 90日 / 14日 = 7 スライスより多い）
+      expect(queriedFilters.length).toBeGreaterThan(7);
+      // 分割後の両方の窓からアイテムが漏れなく収集されていること
+      expect(collectedNumbers).toContain(801);
+      expect(collectedNumbers).toContain(802);
+      expect(collectedNumbers).toContain(901);
+      expect(collectedNumbers).toContain(902);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("5分間に集中した 1,200 件など短い時間幅でも、1秒単位まで再帰分割されて全件走査される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-short-bisect-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+      const collectedNumbers: number[] = [];
+      const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            const match = query.match(/merged:([0-9T:.Z-]+?)\.\.([0-9T:.Z-]+)/);
+            if (match) {
+              const start = new Date(match[1]);
+              const end = new Date(match[2]);
+              const durationMs = end.getTime() - start.getTime();
+
+              // 直近のスライス（end が now 付近）において 5 分間に集中した 1,200 件を模倣
+              if (end.getTime() >= fiveMinAgo.getTime()) {
+                // 150秒（2.5分）を超える幅なら 1,200 件として分割を促す
+                if (durationMs > 150_000) {
+                  return {
+                    totalCount: 1200,
+                    items: [],
+                  };
+                }
+
+                // 2.5分以下に分割された場合:
+                // 後半（新しい方）なら 951、前半なら 952 を返す
+                const isNewerHalf = start.getTime() >= now.getTime() - 150_000;
+                const num = isNewerHalf ? 951 : 952;
+                if (!collectedNumbers.includes(num)) {
+                  collectedNumbers.push(num);
+                }
+                return {
+                  totalCount: 1,
+                  items: [
+                    {
+                      number: num,
+                      title: `PR ${num}`,
+                      html_url: `u${num}`,
+                      created_at: start.toISOString(),
+                      updated_at: end.toISOString(),
+                      labels,
+                      is_draft: false,
+                      author: `user-${num}`,
+                      commitCount: 1,
+                      pull_request: { merged_at: end.toISOString() },
+                    },
+                  ],
+                };
+              }
+            }
+            return { totalCount: 0, items: [] };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+      } as unknown as GitHubApiClient;
+
+      await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 0,
+          fetchLimit: 5000,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        () => {},
+      );
+
+      // 短い時間幅（2.5分以下）まで再帰分割されて両方のアイテムが漏れなく収集されていること
+      expect(collectedNumbers).toContain(951);
+      expect(collectedNumbers).toContain(952);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("最小時間幅（1秒以下）でも 1,000 件を超過している分割不能な極限状態では、データを欠落させず明示的に例外をスローする", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-indivisible-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            // どんな時間幅でも（最小幅でも）常に 1,200 件を返す
+            return {
+              totalCount: 1200,
+              items: [],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+      } as unknown as GitHubApiClient;
+
+      // 1秒以下になっても 1,000 件を超えているため、欠落させずに明示的な例外を投げること
+      await expect(
+        runProgressCli(
+          {
+            ...options,
+            cachePath,
+            fetchBudget: 0,
+            fetchLimit: 5000,
+            lookbackDays: 30,
+            firstTimerLookbackDays: 90,
+          },
+          client,
+          () => {},
+        ),
+      ).rejects.toThrow(
+        "上限 1,000 件を超過しており、これ以上分割できないため安全に全件走査できません",
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("過去に IsFirstTimer: true でキャッシュされていた作者について、走査対象に別 PR が存在する場合に常連判定されて IsFirstTimer: false に更新される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-cache-invalidation-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+
+      // 60日前の PR #601: 以前の観測で IsFirstTimer: true としてキャッシュ保存されている
+      const merged60d = new Date(now.getTime() - 60 * dayMs).toISOString();
+      const initialCachedEntry: SampleCacheEntry = {
+        Type: "sample",
+        Number: 601,
+        Title: "PR 601 (Initial)",
+        CreatedAt: new Date(now.getTime() - 65 * dayMs).toISOString(),
+        LatestCommittedDate: new Date(now.getTime() - 65 * dayMs).toISOString(),
+        CommitCount: 1,
+        ReadyAt: new Date(now.getTime() - 63 * dayMs).toISOString(),
+        MergedAt: merged60d,
+        TotalDays: 5,
+        TurnDays: 5,
+        ReadyDays: 3,
+        Author: "repeat-author",
+        IsFirstTimer: true, // キャッシュ時点では初回扱い
+      };
+      writeFileSync(cachePath, serializeSampleCacheEntries([initialCachedEntry]), "utf-8");
+
+      // 今回の観測: 45日前に同じ author "repeat-author" の別 PR #602 が見つかる
+      const merged45d = new Date(now.getTime() - 45 * dayMs).toISOString();
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            return {
+              totalCount: 2,
+              items: [
+                {
+                  number: 601,
+                  title: "PR 601",
+                  html_url: "u601",
+                  created_at: new Date(now.getTime() - 65 * dayMs).toISOString(),
+                  updated_at: merged60d,
+                  labels,
+                  is_draft: false,
+                  author: "repeat-author",
+                  commitCount: 1,
+                  pull_request: { merged_at: merged60d },
+                },
+                {
+                  number: 602,
+                  title: "PR 602 (Another PR by same author)",
+                  html_url: "u602",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "repeat-author", // 同一作者！
+                  commitCount: 1,
+                  pull_request: { merged_at: merged45d },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+      } as unknown as GitHubApiClient;
+
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 100,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        () => {},
+      );
+
+      // #601 は同じ author の #602 が存在するため、IsFirstTimer が false に取り消され、初回コホートから除外されること
+      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+
+      // キャッシュファイル内でも IsFirstTimer: false に更新・永続化されていること
+      const updatedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached601 = updatedCache.find((e) => e.Number === 601);
+      expect(cached601?.Type).toBe("sample");
+      if (cached601?.Type === "sample") {
+        expect(cached601.IsFirstTimer).toBe(false);
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("not-first-timer-candidate として除外された PR が、全体集計窓の拡大（lookbackDays=60）により全体枠に入った場合はキャッシュのスキップが解除されて再評価・採用される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-reeval-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+
+      // 45日前の 2コミット PR #701: 以前の lookbackDays=30 の実行で
+      // 30日超の窓で 2 コミットだったため not-first-timer-candidate として除外キャッシュ保存されている
+      const merged45d = new Date(now.getTime() - 45 * dayMs).toISOString();
+      const initialSkippedEntry: SampleCacheEntry = {
+        Type: "skipped",
+        Number: 701,
+        MergedAt: merged45d,
+        Reason: "not-first-timer-candidate",
+      };
+      writeFileSync(cachePath, serializeSampleCacheEntries([initialSkippedEntry]), "utf-8");
+
+      let detailsFetched = false;
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            return {
+              totalCount: 1,
+              items: [
+                {
+                  number: 701,
+                  title: "PR 701 (2 commits)",
+                  html_url: "u701",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "user-701",
+                  commitCount: 2,
+                  pull_request: { merged_at: merged45d },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, prNumber: number) => {
+          if (prNumber === 701) detailsFetched = true;
+          const isTarget = prNumber === options.targetPr;
+          return {
+            number: prNumber,
+            title: `PR ${prNumber}`,
+            url: `https://github.com/microsoft/winget-pkgs/pull/${prNumber}`,
+            state: (isTarget ? "OPEN" : "MERGED") as "OPEN" | "MERGED",
+            isDraft: false,
+            createdAt: new Date(now.getTime() - 50 * dayMs).toISOString(),
+            updatedAt: merged45d,
+            mergedAt: isTarget ? null : merged45d,
+            closedAt: null,
+            author: "user-701",
+            commits: [
+              {
+                committedDate: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                oid: "c1",
+              },
+              {
+                committedDate: new Date(now.getTime() - 48 * dayMs).toISOString(),
+                oid: "c2",
+              },
+            ],
+            labels: REQUIRED_LABELS,
+          };
+        },
+        getIssueTimeline: async () => {
+          return REQUIRED_LABELS.map((name) => ({
+            event: "labeled",
+            created_at: new Date(now.getTime() - 48 * dayMs).toISOString(),
+            label: { name },
+          }));
+        },
+      } as unknown as GitHubApiClient;
+
+      // lookbackDays: 60 に変更して実行！
+      // 45日前の PR #701 は 60 日窓（全体集計枠）に入るため、キャッシュの skipped が解除されて詳細取得される
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 100,
+          lookbackDays: 60, // 30日 -> 60日に拡大！
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        () => {},
+      );
+
+      // 詳細 API が呼ばれたこと
+      expect(detailsFetched).toBe(true);
+      // 全体実績サンプルとして採用されたこと（SampleCount = 1）
+      expect(snapshot?.SampleCount).toBe(1);
+      // SkippedCount は 0 であること（除外されなくなった）
+      expect(snapshot?.SkippedCount).toBe(0);
+
+      // キャッシュファイル内でも sample に上書き更新されていること
+      const updatedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached701 = updatedCache.find((e) => e.Number === 701);
+      expect(cached701?.Type).toBe("sample");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
