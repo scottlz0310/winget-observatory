@@ -34,7 +34,7 @@ describe("CLI: progress parseArgs", () => {
       expect(opts.repository).toBe("microsoft/winget-pkgs");
       expect(opts.lookbackDays).toBe(30);
       expect(opts.firstTimerLookbackDays).toBe(90);
-      expect(opts.fetchBudget).toBe(100);
+      expect(opts.fetchBudget).toBe(300);
       expect(opts.fetchLimit).toBe(5000);
       expect(opts.noLog).toBeFalse();
       expect(opts.asJson).toBeFalse();
