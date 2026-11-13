@@ -1,5 +1,11 @@
 import type { GitHubPrView, GitHubSearchItem } from "../models/depths";
-import type { ProgressPrDetail, ProgressTimelineEvent } from "../models/progress";
+import type {
+  GitHubDetailedSearchItem,
+  GitHubDetailedSearchResult,
+  ProgressPrDetail,
+  ProgressTimelineEvent,
+  SearchPageInfo,
+} from "../models/progress";
 import {
   adaptGraphQLRateLimitBucket,
   adaptGraphQLTimelineItems,
@@ -10,33 +16,13 @@ import {
   buildGraphQLSearchQuery,
 } from "./graphql-adapters";
 import type {
-  GraphQLPageInfo,
   GraphQLPullRequestNode,
   GraphQLRateLimitData,
   GraphQLSearchConnection,
   GraphQLTimelineItemNode,
 } from "./graphql-types";
 
-export interface GitHubDetailedSearchItem {
-  number: number;
-  title: string;
-  html_url: string;
-  created_at: string;
-  updated_at: string;
-  author?: string;
-  commitCount?: number;
-  labels?: { name: string }[];
-  is_draft?: boolean;
-  pull_request?: {
-    merged_at?: string | null;
-  };
-}
-
-export interface GitHubDetailedSearchResult {
-  totalCount: number;
-  items: GitHubDetailedSearchItem[];
-  pageInfo?: GraphQLPageInfo;
-}
+export type { GitHubDetailedSearchItem, GitHubDetailedSearchResult, SearchPageInfo };
 
 /** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;

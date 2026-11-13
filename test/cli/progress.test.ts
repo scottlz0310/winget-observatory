@@ -1994,14 +1994,16 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
-  test("単一スライスの totalCount が 1,000 件を超える場合、時間範囲が自動分割（bisecting）されて漏れなく走査される", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "winget-bisect-test-"));
+  test("上限（1,000件）到達時に最古 mergedAt へ窓をスライドして過去へ前進し、全件走査される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-slide-test-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");
 
     try {
       const now = new Date();
       const dayMs = 24 * 60 * 60 * 1000;
       const labels = REQUIRED_LABELS.map((name) => ({ name }));
+      const slideDate = new Date(now.getTime() - 45 * dayMs);
+      const slideDateIso = slideDate.toISOString();
 
       // クエリごとの呼び出し回数と走査された PR 番号を記録
       const queriedFilters: string[] = [];
@@ -2014,56 +2016,84 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           _sort?: string,
           _order?: string,
           _perPage?: number,
-          _page = 1,
+          page = 1,
         ): Promise<GitHubDetailedSearchResult> => {
           if (query.includes("is:merged") && !query.includes("created:<")) {
             queriedFilters.push(query);
 
-            // 最初の 14 日窓（幅約 14 日）では 1,200 件を返す
-            // この場合、progress.ts が 1,000 件超を検知して期間を 2 つ（7日 + 7日）に分割する
-            if (query.includes("..")) {
-              const match = query.match(/merged:([0-9T:.Z-]+?)\.\.([0-9T:.Z-]+)/);
-              if (match) {
-                const start = new Date(match[1]);
-                const end = new Date(match[2]);
-                const durationDays = (end.getTime() - start.getTime()) / dayMs;
-
-                if (durationDays > 10) {
-                  // 14 日窓: 1,200 件と報告して分割を促す
-                  return {
-                    totalCount: 1200,
-                    items: [], // 分割されるのでアイテムは空でよい
-                  };
-                }
-
-                // 分割された 7 日窓: それぞれ 600 件（モックでは各 2 件のアイテムを返す）
-                const baseNum = start.getTime() > now.getTime() - 45 * dayMs ? 800 : 900;
-                const items = [baseNum + 1, baseNum + 2].map((num) => {
-                  collectedNumbers.push(num);
-                  return {
-                    number: num,
-                    title: `PR ${num}`,
-                    html_url: `u${num}`,
-                    created_at: new Date(start.getTime()).toISOString(),
-                    updated_at: new Date(start.getTime() + dayMs).toISOString(),
-                    labels,
-                    is_draft: false,
-                    author: `user-${num}`,
-                    commitCount: 1,
-                    pull_request: {
-                      merged_at: new Date(start.getTime() + dayMs).toISOString(),
-                    },
-                  };
-                });
-
+            if (query.includes(`..${slideDateIso}`)) {
+              // 窓2: スライド後の窓
+              const items = [901, 902].map((num) => {
+                collectedNumbers.push(num);
                 return {
-                  totalCount: 2,
-                  items,
+                  number: num,
+                  title: `PR ${num}`,
+                  html_url: `u${num}`,
+                  created_at: new Date(now.getTime() - 60 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  labels,
+                  is_draft: false,
+                  author: `user-${num}`,
+                  commitCount: 1,
+                  pull_request: {
+                    merged_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  },
                 };
-              }
+              });
+              return {
+                totalCount: 2,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                items,
+              };
             }
 
-            return { totalCount: 0, items: [] };
+            // 窓1: 直近の窓。page 10 到達で上限とし、最古アイテムを slideDate とする
+            if (page === 10) {
+              const items = [801, 802].map((num) => {
+                collectedNumbers.push(num);
+                return {
+                  number: num,
+                  title: `PR ${num}`,
+                  html_url: `u${num}`,
+                  created_at: new Date(now.getTime() - 40 * dayMs).toISOString(),
+                  updated_at: slideDateIso,
+                  labels,
+                  is_draft: false,
+                  author: `user-${num}`,
+                  commitCount: 1,
+                  pull_request: {
+                    merged_at: slideDateIso,
+                  },
+                };
+              });
+              return {
+                totalCount: 1200,
+                pageInfo: { hasNextPage: true, endCursor: "cursor-p10" },
+                items,
+              };
+            }
+
+            // page 1〜9 はアイテムありでページ送り
+            return {
+              totalCount: 1200,
+              pageInfo: { hasNextPage: true, endCursor: `cursor-p${page}` },
+              items: [
+                {
+                  number: 700 + page,
+                  title: `PR ${700 + page}`,
+                  html_url: `u${700 + page}`,
+                  created_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                  labels,
+                  is_draft: false,
+                  author: `user-p${page}`,
+                  commitCount: 1,
+                  pull_request: {
+                    merged_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                  },
+                },
+              ],
+            };
           }
 
           return (
@@ -2085,9 +2115,9 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         () => {},
       );
 
-      // 分割されたサブスライス（7 日幅）のクエリが発行されていること（通常 90日 / 14日 = 7 スライスより多い）
-      expect(queriedFilters.length).toBeGreaterThan(7);
-      // 分割後の両方の窓からアイテムが漏れなく収集されていること
+      // スライド後のクエリ（slideDateIso を上限とする）が発行されていること
+      expect(queriedFilters.some((q) => q.includes(`..${slideDateIso}`))).toBeTrue();
+      // 両方の窓からアイテムが漏れなく収集されていること
       expect(collectedNumbers).toContain(801);
       expect(collectedNumbers).toContain(802);
       expect(collectedNumbers).toContain(901);
@@ -2097,63 +2127,134 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
-  test("5分間に集中した 1,200 件など短い時間幅でも、1秒単位まで再帰分割されて全件走査される", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "winget-short-bisect-test-"));
+  test("上限到達によるカーソルスライドが複数回連続しても、境界重複を除去して漏れなく走査される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-multi-slide-test-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");
 
     try {
       const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
       const labels = REQUIRED_LABELS.map((name) => ({ name }));
+      const t1 = new Date(now.getTime() - 20 * dayMs).toISOString();
+      const t2 = new Date(now.getTime() - 50 * dayMs).toISOString();
       const collectedNumbers: number[] = [];
-      const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
 
       const client = {
         ...buildClient(),
-        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+        searchIssuesDetailed: async (
+          query: string,
+          _sort?: string,
+          _order?: string,
+          _perPage?: number,
+          page = 1,
+        ): Promise<GitHubDetailedSearchResult> => {
           if (query.includes("is:merged") && !query.includes("created:<")) {
-            const match = query.match(/merged:([0-9T:.Z-]+?)\.\.([0-9T:.Z-]+)/);
-            if (match) {
-              const start = new Date(match[1]);
-              const end = new Date(match[2]);
-              const durationMs = end.getTime() - start.getTime();
+            if (query.includes(`..${t2}`)) {
+              // 窓3（t2 〜 since）: 1ページで終了
+              collectedNumbers.push(953);
+              return {
+                totalCount: 1,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                items: [
+                  {
+                    number: 953,
+                    title: "PR 953",
+                    html_url: "u953",
+                    created_at: new Date(now.getTime() - 60 * dayMs).toISOString(),
+                    updated_at: new Date(now.getTime() - 55 * dayMs).toISOString(),
+                    labels,
+                    is_draft: false,
+                    author: "user-953",
+                    commitCount: 1,
+                    pull_request: { merged_at: new Date(now.getTime() - 55 * dayMs).toISOString() },
+                  },
+                ],
+              };
+            }
 
-              // 直近のスライス（end が now 付近）において 5 分間に集中した 1,200 件を模倣
-              if (end.getTime() >= fiveMinAgo.getTime()) {
-                // 150秒（2.5分）を超える幅なら 1,200 件として分割を促す
-                if (durationMs > 150_000) {
-                  return {
-                    totalCount: 1200,
-                    items: [],
-                  };
-                }
-
-                // 2.5分以下に分割された場合:
-                // 後半（新しい方）なら 951、前半なら 952 を返す
-                const isNewerHalf = start.getTime() >= now.getTime() - 150_000;
-                const num = isNewerHalf ? 951 : 952;
-                if (!collectedNumbers.includes(num)) {
-                  collectedNumbers.push(num);
-                }
+            if (query.includes(`..${t1}`)) {
+              // 窓2（t1 〜 since）: page 10 で t2 に到達
+              if (page === 10) {
+                collectedNumbers.push(952);
                 return {
-                  totalCount: 1,
+                  totalCount: 1200,
+                  pageInfo: { hasNextPage: true, endCursor: "c2" },
                   items: [
                     {
-                      number: num,
-                      title: `PR ${num}`,
-                      html_url: `u${num}`,
-                      created_at: start.toISOString(),
-                      updated_at: end.toISOString(),
+                      number: 952,
+                      title: "PR 952",
+                      html_url: "u952",
+                      created_at: new Date(now.getTime() - 40 * dayMs).toISOString(),
+                      updated_at: t2,
                       labels,
                       is_draft: false,
-                      author: `user-${num}`,
+                      author: "user-952",
                       commitCount: 1,
-                      pull_request: { merged_at: end.toISOString() },
+                      pull_request: { merged_at: t2 },
                     },
                   ],
                 };
               }
+              return {
+                totalCount: 1200,
+                pageInfo: { hasNextPage: true, endCursor: `c${page}` },
+                items: [
+                  {
+                    number: 750 + page,
+                    title: `PR ${750 + page}`,
+                    html_url: `u${750 + page}`,
+                    created_at: new Date(now.getTime() - 25 * dayMs).toISOString(),
+                    updated_at: new Date(now.getTime() - 25 * dayMs).toISOString(),
+                    labels,
+                    is_draft: false,
+                    author: `user-m2-${page}`,
+                    commitCount: 1,
+                    pull_request: { merged_at: new Date(now.getTime() - 25 * dayMs).toISOString() },
+                  },
+                ],
+              };
             }
-            return { totalCount: 0, items: [] };
+
+            // 窓1（直近 〜 since）: page 10 で t1 に到達
+            if (page === 10) {
+              collectedNumbers.push(951);
+              return {
+                totalCount: 1200,
+                pageInfo: { hasNextPage: true, endCursor: "c1" },
+                items: [
+                  {
+                    number: 951,
+                    title: "PR 951",
+                    html_url: "u951",
+                    created_at: new Date(now.getTime() - 10 * dayMs).toISOString(),
+                    updated_at: t1,
+                    labels,
+                    is_draft: false,
+                    author: "user-951",
+                    commitCount: 1,
+                    pull_request: { merged_at: t1 },
+                  },
+                ],
+              };
+            }
+            return {
+              totalCount: 1200,
+              pageInfo: { hasNextPage: true, endCursor: `c${page}` },
+              items: [
+                {
+                  number: 710 + page,
+                  title: `PR ${710 + page}`,
+                  html_url: `u${710 + page}`,
+                  created_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                  labels,
+                  is_draft: false,
+                  author: `user-m1-${page}`,
+                  commitCount: 1,
+                  pull_request: { merged_at: new Date(now.getTime() - 5 * dayMs).toISOString() },
+                },
+              ],
+            };
           }
           return (
             buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
@@ -2174,27 +2275,51 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         () => {},
       );
 
-      // 短い時間幅（2.5分以下）まで再帰分割されて両方のアイテムが漏れなく収集されていること
       expect(collectedNumbers).toContain(951);
       expect(collectedNumbers).toContain(952);
+      expect(collectedNumbers).toContain(953);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("最小時間幅（1秒以下）でも 1,000 件を超過している分割不能な極限状態では、データを欠落させず明示的に例外をスローする", async () => {
+  test("同一タイムスタンプに 1,000 件以上が集中してスライド不能な場合は、安全に明示的な例外をスローする", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-indivisible-test-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");
 
     try {
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+
       const client = {
         ...buildClient(),
-        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+        searchIssuesDetailed: async (
+          query: string,
+          _sort?: string,
+          _order?: string,
+          _perPage?: number,
+          _page = 1,
+        ): Promise<GitHubDetailedSearchResult> => {
           if (query.includes("is:merged") && !query.includes("created:<")) {
-            // どんな時間幅でも（最小幅でも）常に 1,200 件を返す
+            const match = query.match(/merged:([0-9T:.Z-]+?)\.\.([0-9T:.Z-]+)/);
+            const queryUntil = match ? match[2] : new Date().toISOString();
+            // 最古アイテムの merged_at も until と同一時刻
             return {
               totalCount: 1200,
-              items: [],
+              pageInfo: { hasNextPage: true, endCursor: "cursor-same" },
+              items: [
+                {
+                  number: 9999,
+                  title: "PR 9999",
+                  html_url: "u9999",
+                  created_at: queryUntil,
+                  updated_at: queryUntil,
+                  labels,
+                  is_draft: false,
+                  author: "user-9999",
+                  commitCount: 1,
+                  pull_request: { merged_at: queryUntil },
+                },
+              ],
             };
           }
           return (
@@ -2203,7 +2328,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         },
       } as unknown as GitHubApiClient;
 
-      // 1秒以下になっても 1,000 件を超えているため、欠落させずに明示的な例外を投げること
+      // 同一タイムスタンプで 1,000 件を超えているため、欠落させずに明示的な例外を投げること
       await expect(
         runProgressCli(
           {
@@ -2217,9 +2342,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           client,
           () => {},
         ),
-      ).rejects.toThrow(
-        "上限 1,000 件を超過しており、これ以上分割できないため安全に全件走査できません",
-      );
+      ).rejects.toThrow("これ以上カーソルを前進できないため安全に全件走査できません");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

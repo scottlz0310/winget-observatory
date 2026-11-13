@@ -1,67 +1,215 @@
 import { describe, expect, it } from "bun:test";
-import { buildDateWindowSlices } from "../../src/domain/search-window";
+import {
+  type CandidateSearchClient,
+  collectMergedCandidates,
+} from "../../src/domain/search-window";
+import type {
+  GitHubDetailedSearchItem,
+  GitHubDetailedSearchResult,
+} from "../../src/models/progress";
 
-describe("buildDateWindowSlices", () => {
-  it("90日間の期間を14日幅で隙間なく降順スライスに分割する", () => {
-    const until = new Date("2026-11-13T12:00:00.000Z");
-    const since = new Date(until.getTime() - 90 * 24 * 60 * 60 * 1000);
-
-    const slices = buildDateWindowSlices(since, until, 14);
-
-    // 90日 / 14日 = 6スライス (14日×6 = 84日) + 1スライス (6日) = 計7スライス
-    expect(slices).toHaveLength(7);
-
-    // 最初のスライス（最新）の until が指定した until と一致
-    expect(slices[0].until.toISOString()).toBe(until.toISOString());
-
-    // 最後のスライス（最古）の since が指定した since と一致
-    expect(slices[slices.length - 1].since.toISOString()).toBe(since.toISOString());
-
-    // スライス間の連続性（隙間・重複なし）と降順性を検証
-    for (let i = 0; i < slices.length - 1; i++) {
-      const current = slices[i];
-      const next = slices[i + 1];
-
-      // 現在スライスの since と次スライスの until が完全に一致すること
-      expect(current.since.toISOString()).toBe(next.until.toISOString());
-
-      // 各スライス内で since < until であること
-      expect(current.since.getTime()).toBeLessThan(current.until.getTime());
-
-      // クエリ文字列の形式が正しいこと
-      expect(current.queryFilter).toBe(
-        `merged:${current.since.toISOString()}..${current.until.toISOString()}`,
-      );
-    }
+describe("collectMergedCandidates（カーソルスライド方式）", () => {
+  const createMockItem = (
+    number: number,
+    mergedAt: string,
+    author: string = "user1",
+  ): GitHubDetailedSearchItem => ({
+    number,
+    title: `PR #${number}`,
+    html_url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
+    created_at: "2026-10-01T00:00:00Z",
+    updated_at: mergedAt,
+    author,
+    author_association: "NONE",
+    commitCount: 1,
+    is_draft: false,
+    pull_request: {
+      merged_at: mergedAt,
+    },
+    labels: [{ name: "New-Package" }],
   });
 
-  it("since >= until の場合は空配列を返す", () => {
-    const date = new Date("2026-11-13T12:00:00.000Z");
-    expect(buildDateWindowSlices(date, date)).toEqual([]);
+  it("1,000件未満の場合は単一窓のページネーションのみで全件収集する", async () => {
+    const since = new Date("2026-10-01T00:00:00Z");
+    const until = new Date("2026-11-01T00:00:00Z");
+    const queries: string[] = [];
 
-    const future = new Date("2026-11-14T12:00:00.000Z");
-    expect(buildDateWindowSlices(future, date)).toEqual([]);
+    const mockClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (
+        query,
+        _sort,
+        _order,
+        _perPage,
+        page,
+      ): Promise<GitHubDetailedSearchResult> => {
+        queries.push(query);
+        if (page === 1) {
+          return {
+            totalCount: 3,
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+            items: [
+              createMockItem(103, "2026-10-25T00:00:00Z"),
+              createMockItem(102, "2026-10-20T00:00:00Z"),
+            ],
+          };
+        }
+        return {
+          totalCount: 3,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          items: [createMockItem(101, "2026-10-05T00:00:00Z")],
+        };
+      },
+    };
+
+    const results = await collectMergedCandidates({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 100,
+    });
+
+    expect(results).toHaveLength(3);
+    expect(results.map((r) => r.number)).toEqual([103, 102, 101]);
+    expect(queries).toHaveLength(2);
+    // 単一窓なのでクエリの日付範囲は不変
+    expect(queries[0]).toContain(`merged:${since.toISOString()}..${until.toISOString()}`);
+    expect(queries[1]).toContain(`merged:${since.toISOString()}..${until.toISOString()}`);
   });
 
-  it("期間がスライス幅以下の場合は単一スライスを返す", () => {
-    const since = new Date("2026-11-01T00:00:00.000Z");
-    const until = new Date("2026-11-08T00:00:00.000Z"); // 7日間
+  it("上限（10ページ/1,000件）到達時に最古mergedAtへ窓をスライドして過去へ前進する", async () => {
+    const since = new Date("2026-08-01T00:00:00Z");
+    const until = new Date("2026-11-01T00:00:00Z");
+    const queries: string[] = [];
 
-    const slices = buildDateWindowSlices(since, until, 14);
-    expect(slices).toHaveLength(1);
-    expect(slices[0].since.toISOString()).toBe(since.toISOString());
-    expect(slices[0].until.toISOString()).toBe(until.toISOString());
-    expect(slices[0].queryFilter).toBe("merged:2026-11-01T00:00:00.000Z..2026-11-08T00:00:00.000Z");
+    // テスト用に maxPagesPerWindow = 2, pageSize = 2 とし、4件取得でスライドをシミュレート
+    const slideDateIso = "2026-10-10T00:00:00.000Z";
+
+    const mockClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (
+        query,
+        _sort,
+        _order,
+        _perPage,
+        page,
+      ): Promise<GitHubDetailedSearchResult> => {
+        queries.push(query);
+
+        if (query.includes(`..${until.toISOString()}`)) {
+          // 窓1 (until 〜 slideDate)
+          if (page === 1) {
+            return {
+              totalCount: 10,
+              pageInfo: { hasNextPage: true, endCursor: "c1" },
+              items: [
+                createMockItem(204, "2026-10-28T00:00:00Z"),
+                createMockItem(203, "2026-10-20T00:00:00Z"),
+              ],
+            };
+          }
+          // 窓1 の最終ページ (maxPagesPerWindow = 2 到達、さらに続きあり)
+          return {
+            totalCount: 10,
+            pageInfo: { hasNextPage: true, endCursor: "c2" },
+            items: [
+              createMockItem(202, "2026-10-15T00:00:00Z"),
+              createMockItem(201, slideDateIso), // 最古
+            ],
+          };
+        }
+
+        // 窓2 (slideDate 〜 since)
+        return {
+          totalCount: 2,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          items: [
+            createMockItem(201, slideDateIso), // 境界重複アイテム
+            createMockItem(200, "2026-09-01T00:00:00Z"),
+          ],
+        };
+      },
+    };
+
+    const results = await collectMergedCandidates({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 100,
+      pageSize: 2,
+      maxPagesPerWindow: 2,
+    });
+
+    // 204, 203, 202, 201, 200 (201の重複が除去され5件)
+    expect(results).toHaveLength(5);
+    expect(results.map((r) => r.number)).toEqual([204, 203, 202, 201, 200]);
+
+    // 窓2 のクエリ上限がスライド位置（slideDateIso）になっていること
+    expect(queries.some((q) => q.includes(`..${slideDateIso}`))).toBeTrue();
   });
 
-  it("不正な sliceDays (0 または負数) の場合はデフォルト 14 日にフォールバックする", () => {
-    const until = new Date("2026-11-13T12:00:00.000Z");
-    const since = new Date(until.getTime() - 28 * 24 * 60 * 60 * 1000);
+  it("同一タイムスタンプで上限超過し前進不能な場合は安全に例外をスローする", async () => {
+    const since = new Date("2026-10-01T00:00:00Z");
+    const until = new Date("2026-10-10T00:00:00Z");
 
-    const slicesWithZero = buildDateWindowSlices(since, until, 0);
-    expect(slicesWithZero).toHaveLength(2);
+    const mockClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => {
+        // 全アイテムが until と同一時刻でマージされている
+        return {
+          totalCount: 1000,
+          pageInfo: { hasNextPage: true, endCursor: "c1" },
+          items: [
+            createMockItem(301, until.toISOString()),
+            createMockItem(302, until.toISOString()),
+          ],
+        };
+      },
+    };
 
-    const slicesWithNegative = buildDateWindowSlices(since, until, -5);
-    expect(slicesWithNegative).toHaveLength(2);
+    await expect(
+      collectMergedCandidates({
+        client: mockClient,
+        repository: "microsoft/winget-pkgs",
+        since,
+        until,
+        targetPr: 999,
+        requiredLabels: ["New-Package"],
+        pageSize: 2,
+        maxPagesPerWindow: 1,
+      }),
+    ).rejects.toThrow("Search API の上限 1,000 件を超過しており");
+  });
+
+  it("targetPr や since より古い PR は除外される", async () => {
+    const since = new Date("2026-10-05T00:00:00Z");
+    const until = new Date("2026-10-10T00:00:00Z");
+
+    const mockClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => ({
+        totalCount: 3,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        items: [
+          createMockItem(401, "2026-10-08T00:00:00Z"),
+          createMockItem(999, "2026-10-07T00:00:00Z"), // targetPr
+          createMockItem(402, "2026-10-01T00:00:00Z"), // sinceより古い
+        ],
+      }),
+    };
+
+    const results = await collectMergedCandidates({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].number).toBe(401);
   });
 });

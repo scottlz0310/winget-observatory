@@ -248,3 +248,30 @@ export interface ProgressSnapshot {
   /** 初回提出者サンプルの採用件数 */
   FirstTimerSampleCount?: number;
 }
+
+export interface SearchPageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+export interface GitHubDetailedSearchItem {
+  number: number;
+  title: string;
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  author?: string;
+  author_association?: string;
+  commitCount?: number;
+  labels?: { name: string }[];
+  is_draft?: boolean;
+  pull_request?: {
+    merged_at?: string | null;
+  };
+}
+
+export interface GitHubDetailedSearchResult {
+  totalCount: number;
+  items: GitHubDetailedSearchItem[];
+  pageInfo?: SearchPageInfo;
+}
