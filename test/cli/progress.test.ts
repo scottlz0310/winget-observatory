@@ -2096,6 +2096,134 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
+  test("5分間に集中した 1,200 件など短い時間幅でも、1秒単位まで再帰分割されて全件走査される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-short-bisect-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+      const collectedNumbers: number[] = [];
+      const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            const match = query.match(/merged:([0-9T:.Z-]+?)\.\.([0-9T:.Z-]+)/);
+            if (match) {
+              const start = new Date(match[1]);
+              const end = new Date(match[2]);
+              const durationMs = end.getTime() - start.getTime();
+
+              // 直近のスライス（end が now 付近）において 5 分間に集中した 1,200 件を模倣
+              if (end.getTime() >= fiveMinAgo.getTime()) {
+                // 150秒（2.5分）を超える幅なら 1,200 件として分割を促す
+                if (durationMs > 150_000) {
+                  return {
+                    totalCount: 1200,
+                    items: [],
+                  };
+                }
+
+                // 2.5分以下に分割された場合:
+                // 後半（新しい方）なら 951、前半なら 952 を返す
+                const isNewerHalf = start.getTime() >= now.getTime() - 150_000;
+                const num = isNewerHalf ? 951 : 952;
+                if (!collectedNumbers.includes(num)) {
+                  collectedNumbers.push(num);
+                }
+                return {
+                  totalCount: 1,
+                  items: [
+                    {
+                      number: num,
+                      title: `PR ${num}`,
+                      html_url: `u${num}`,
+                      created_at: start.toISOString(),
+                      updated_at: end.toISOString(),
+                      labels,
+                      is_draft: false,
+                      author: `user-${num}`,
+                      commitCount: 1,
+                      pull_request: { merged_at: end.toISOString() },
+                    },
+                  ],
+                };
+              }
+            }
+            return { totalCount: 0, items: [] };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+      } as unknown as GitHubApiClient;
+
+      await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 0,
+          fetchLimit: 5000,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        () => {},
+      );
+
+      // 短い時間幅（2.5分以下）まで再帰分割されて両方のアイテムが漏れなく収集されていること
+      expect(collectedNumbers).toContain(951);
+      expect(collectedNumbers).toContain(952);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("最小時間幅（1秒以下）でも 1,000 件を超過している分割不能な極限状態では、データを欠落させず明示的に例外をスローする", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-indivisible-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            // どんな時間幅でも（最小幅でも）常に 1,200 件を返す
+            return {
+              totalCount: 1200,
+              items: [],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+      } as unknown as GitHubApiClient;
+
+      // 1秒以下になっても 1,000 件を超えているため、欠落させずに明示的な例外を投げること
+      await expect(
+        runProgressCli(
+          {
+            ...options,
+            cachePath,
+            fetchBudget: 0,
+            fetchLimit: 5000,
+            lookbackDays: 30,
+            firstTimerLookbackDays: 90,
+          },
+          client,
+          () => {},
+        ),
+      ).rejects.toThrow(
+        "上限 1,000 件を超過しており、これ以上分割できないため安全に全件走査できません",
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("過去に IsFirstTimer: true でキャッシュされていた作者について、走査対象に別 PR が存在する場合に常連判定されて IsFirstTimer: false に更新される", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-cache-invalidation-test-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");

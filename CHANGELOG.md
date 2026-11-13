@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `src/cli/progress.ts`, `src/domain/first-timer.ts`, `src/api/github.ts`, `src/api/graphql-adapters.ts`, `src/models/sample-cache.ts`, `src/domain/sample-cache.ts`, `test/domain/first-timer.test.ts`, `test/cli/progress.test.ts`, `test/domain/sample-cache.test.ts`: マージ済み PR 探索における Search API 1,000 件制限回避および「初回提出者専用フィルタリング（絞って取る）」による大幅な API 最適化を実施（Issue #62）。
   - `SEARCH_ISSUES_QUERY` の PullRequest ノードに `commits(first: 1) { totalCount }` を追加し、検索一覧取得の時点でコミット数・作者・ドラフト状態・ラベルを軽量メタデータとして一括取得
-  - `progress.ts` のマージ済み PR 走査を 14 日単位の日付窓スライス分割走査へ刷新し、単一窓が 1,000 件を超える場合は時間範囲を追加分割（bisecting）して漏れなく走査する自己分割処理を追加。候補走査上限 `fetchLimit` の既定値を 1,000 から 5,000（上限 10,000）へ拡大
+  - `progress.ts` のマージ済み PR 走査を 14 日単位の日付窓スライス分割走査へ刷新し、単一窓が 1,000 件を超える場合は時間範囲を 1 秒単位まで再帰的に追加分割（bisecting）して漏れなく走査する自己分割処理を追加。1 秒以下でも 1,000 件を超過する極端なマージ集中が発生した場合はサイレントな打ち切りを回避して明示的に例外をスローする安全設計を配備。候補走査上限 `fetchLimit` の既定値を 1,000 から 5,000（上限 10,000）へ拡大
   - 直近 30 日窓（全体実績）は従来通り全体母集団として取得・キャッシュしつつ、31〜90日前（初回提出者専用窓）については 1 コミットでない PR、Draft、阻害ラベル付き PR、同一走査期間内に複数回登場する常連 author を事前除外（`isCandidateEligibleForFirstTimerDetail` / `countCandidateAuthors`）
   - 除外された PR は `Type: "skipped"`, `Reason: "not-first-timer-candidate"` としてサンプルキャッシュに永続化し、次回以降の無駄な再走査を防止。全体集計窓（`lookbackDays`）が拡大された場合は該当 PR のスキップを解除して自動再評価し、全体実績の欠落を防止
   - 走査した全候補における作者出現頻度をキャッシュ済みサンプルの常連判定にも反映し、同作者の別 PR が発見された場合に過去の `IsFirstTimer: true` を確実に `false` へ取り消して永続化

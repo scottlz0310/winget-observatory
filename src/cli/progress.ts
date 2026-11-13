@@ -339,24 +339,30 @@ export async function runProgressCli(
       null,
     );
 
-    // 1,000 件を超えており、かつ分割可能な幅（例: 1時間以上）であれば、スライスを半分に分割して再キューイング
+    // 1,000 件を超えており、かつ分割可能な幅（1秒以上）であれば、スライスを半分に分割して再キューイング
     const sliceDurationMs = slice.until.getTime() - slice.since.getTime();
-    if (firstRes.totalCount > 1000 && sliceDurationMs > 3600000) {
-      const midMs = slice.since.getTime() + Math.floor(sliceDurationMs / 2);
-      const midDate = new Date(midMs);
-      const sliceNewer: DateWindowSlice = {
-        since: midDate,
-        until: slice.until,
-        queryFilter: `merged:${midDate.toISOString()}..${slice.until.toISOString()}`,
-      };
-      const sliceOlder: DateWindowSlice = {
-        since: slice.since,
-        until: midDate,
-        queryFilter: `merged:${slice.since.toISOString()}..${midDate.toISOString()}`,
-      };
-      // 降順を維持するため新しい方を先に処理
-      sliceQueue.unshift(sliceNewer, sliceOlder);
-      continue;
+    if (firstRes.totalCount > 1000) {
+      if (sliceDurationMs > 1000) {
+        const midMs = slice.since.getTime() + Math.floor(sliceDurationMs / 2);
+        const midDate = new Date(midMs);
+        const sliceNewer: DateWindowSlice = {
+          since: midDate,
+          until: slice.until,
+          queryFilter: `merged:${midDate.toISOString()}..${slice.until.toISOString()}`,
+        };
+        const sliceOlder: DateWindowSlice = {
+          since: slice.since,
+          until: midDate,
+          queryFilter: `merged:${slice.since.toISOString()}..${midDate.toISOString()}`,
+        };
+        // 降順を維持するため新しい方を先に処理
+        sliceQueue.unshift(sliceNewer, sliceOlder);
+        continue;
+      }
+      // 1 秒以下の極小時間範囲でも 1,000 件を超過している場合は、Search API の制限により欠落が発生するため明示的に失敗させる
+      throw new Error(
+        `時間範囲 (${slice.since.toISOString()} .. ${slice.until.toISOString()}) のマージ済み PR 件数 (${firstRes.totalCount} 件) が Search API の上限 1,000 件を超過しており、これ以上分割できないため安全に全件走査できません。`,
+      );
     }
 
     // 1 ページ目のアイテムを収集
