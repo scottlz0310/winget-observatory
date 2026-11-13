@@ -754,15 +754,31 @@ export class GitHubApiClient {
       };
 
       try {
+        if (!rawText || rawText.trim() === "") {
+          throw new SyntaxError("Unexpected end of JSON input (empty body)");
+        }
         json = JSON.parse(rawText) as {
           data?: T;
           errors?: GraphQLErrorDetail[];
         };
-      } catch {
-        throw new GitHubApiError(
+      } catch (parseErr: unknown) {
+        const parseError = new GitHubApiError(
           `GitHub GraphQL API の応答 JSON パースに失敗しました: ${rawText}`,
           res.status,
         );
+        lastError = parseError;
+
+        if (attempt <= this.maxRetries) {
+          const delay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
+          const errDetail = parseErr instanceof Error ? parseErr.message : String(parseErr);
+          this.warnLogFn(
+            `[GitHub GraphQL] 応答 JSON パースに失敗しました (${errDetail})。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
+          );
+          await this.sleepFn(delay);
+          continue;
+        }
+
+        throw parseError;
       }
 
       if (json.errors && json.errors.length > 0) {

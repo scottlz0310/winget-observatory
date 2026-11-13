@@ -87,7 +87,7 @@ export interface DepthsSnapshot {
   AbsoluteBottom: DepthsRow[];
   /** 優等生の底（旧称: 遭難の底。健康体の中で更新日時が最も古い PR） */
   StaleBottom: DepthsRow[];
-  /** 初回提出者の底（優等生の底から常連を除外した初回提出者・1コミットの PR） */
+  /** 初回提出者の底（優等生の底から常連を除外した初回提出者の健康な PR） */
   FirstTimerBottom?: DepthsRow[];
   ExpressLane: DepthsRow[];
 }

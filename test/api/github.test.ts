@@ -1160,15 +1160,67 @@ describe("API: GitHubApiClient", () => {
       expect(warnLogs.length).toBe(3);
     });
 
-    test("200 応答だが JSON 構文エラーの場合はリトライせず即座にエラーをスローする", async () => {
+    test.each([
+      ["空文字", ""],
+      ["空白のみ", "   \n\t  "],
+      ["HTMLエラー画面", "<html><body>502 Bad Gateway Proxy Error</body></html>"],
+      ["不完全なJSON構文", '{"data": { "result": '],
+    ])(
+      "200 応答だが %s の場合は一時エラーとしてリトライして成功する",
+      async (_label, invalidBody) => {
+        let attempts = 0;
+        const sleepDelays: number[] = [];
+        const warnLogs: string[] = [];
+
+        const mockFetch = async (): Promise<Response> => {
+          attempts++;
+          if (attempts === 1) {
+            return new Response(invalidBody, {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return new Response(JSON.stringify({ data: { result: "ok" } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        };
+
+        const client = new GitHubApiClient({
+          token: "dummy-token",
+          fetch: mockFetch,
+          retry: {
+            baseDelayMs: 10,
+            maxJitterMs: 0,
+            sleep: async (ms) => {
+              sleepDelays.push(ms);
+            },
+            warnLog: (msg) => {
+              warnLogs.push(msg);
+            },
+          },
+        });
+
+        const res = await client.graphql<{ result: string }>("query { test }");
+        expect(res).toEqual({ result: "ok" });
+        expect(attempts).toBe(2);
+        expect(sleepDelays).toEqual([10]);
+        expect(warnLogs.length).toBe(1);
+        expect(warnLogs[0]).toContain("JSON パースに失敗しました");
+        expect(warnLogs[0]).toContain("リトライ 1/3");
+      },
+    );
+
+    test("200 応答だが JSON パース失敗が継続して上限超過した場合は最後のエラーをスローする", async () => {
       let attempts = 0;
       const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
 
       const mockFetch = async (): Promise<Response> => {
         attempts++;
-        return new Response("<html><body>502 Bad Gateway Proxy Error</body></html>", {
+        return new Response("", {
           status: 200,
-          headers: { "Content-Type": "text/html" },
+          headers: { "Content-Type": "application/json" },
         });
       };
 
@@ -1176,8 +1228,13 @@ describe("API: GitHubApiClient", () => {
         token: "dummy-token",
         fetch: mockFetch,
         retry: {
+          baseDelayMs: 5,
+          maxJitterMs: 0,
           sleep: async (ms) => {
             sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
           },
         },
       });
@@ -1185,8 +1242,9 @@ describe("API: GitHubApiClient", () => {
       await expect(client.graphql("query { test }")).rejects.toThrow(
         "応答 JSON パースに失敗しました",
       );
-      expect(attempts).toBe(1);
-      expect(sleepDelays.length).toBe(0);
+      expect(attempts).toBe(4);
+      expect(sleepDelays.length).toBe(3);
+      expect(warnLogs.length).toBe(3);
     });
 
     test("ネットワークエラー発生時にリトライして成功する", async () => {
