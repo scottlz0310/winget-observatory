@@ -43,6 +43,9 @@ export function adaptGraphQLToDetailedSearchItem(
     html_url: String(node.url),
     created_at: String(node.createdAt),
     updated_at: String(node.updatedAt),
+    author: node.author?.login ?? undefined,
+    commitCount:
+      node.commits?.totalCount !== undefined ? Number(node.commits.totalCount) : undefined,
     labels: Array.isArray(node.labels?.nodes)
       ? node.labels.nodes.map((l) => ({ name: String(l.name) }))
       : [],

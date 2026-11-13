@@ -67,7 +67,11 @@ function validateEntry(parsed: unknown, lineNumber: number): SampleCacheEntry {
   }
 
   if (entry.Type === "skipped") {
-    if (entry.Reason !== "no-ready" && entry.Reason !== "negative-ready") {
+    if (
+      entry.Reason !== "no-ready" &&
+      entry.Reason !== "negative-ready" &&
+      entry.Reason !== "not-first-timer-candidate"
+    ) {
       return fail(`Reason が不正です: ${String(entry.Reason)}`);
     }
     return entry as unknown as SampleCacheEntry;

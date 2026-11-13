@@ -28,8 +28,8 @@ export interface CachedSkippedEntry {
   Type: "skipped";
   Number: number;
   MergedAt: string;
-  /** no-ready: 条件（必須ラベル・Draft 解除）が成立した時刻を特定できない / negative-ready: 成立がマージより後になっている */
-  Reason: "no-ready" | "negative-ready";
+  /** no-ready: 条件が成立した時刻を特定できない / negative-ready: 成立がマージより後 / not-first-timer-candidate: 30日超の窓で初回候補になり得ないため取得スキップ */
+  Reason: "no-ready" | "negative-ready" | "not-first-timer-candidate";
 }
 
 export type SampleCacheEntry = CachedSampleEntry | CachedSkippedEntry;

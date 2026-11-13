@@ -62,7 +62,7 @@ describe("GraphQL Adapters", () => {
   });
 
   describe("adaptGraphQLToDetailedSearchItem", () => {
-    test("ラベル、ドラフト状態、マージ日時を含むノードを変換できる", () => {
+    test("ラベル、ドラフト状態、マージ日時、作者、コミット数を含むノードを変換できる", () => {
       const node: GraphQLPullRequestNode = {
         number: 100,
         title: "Detailed PR",
@@ -71,6 +71,10 @@ describe("GraphQL Adapters", () => {
         updatedAt: "2026-10-05T00:00:00Z",
         isDraft: false,
         mergedAt: "2026-10-05T12:00:00Z",
+        author: { login: "first-timer-user" },
+        commits: {
+          totalCount: 1,
+        },
         labels: {
           nodes: [{ name: "Area-Package" }, { name: "Validation-Passed" }],
         },
@@ -83,6 +87,8 @@ describe("GraphQL Adapters", () => {
         html_url: "https://github.com/microsoft/winget-pkgs/pull/100",
         created_at: "2026-10-01T00:00:00Z",
         updated_at: "2026-10-05T00:00:00Z",
+        author: "first-timer-user",
+        commitCount: 1,
         labels: [{ name: "Area-Package" }, { name: "Validation-Passed" }],
         is_draft: false,
         pull_request: {

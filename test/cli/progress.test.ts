@@ -10,6 +10,7 @@ import {
   resolveDefaultDataDir,
   runProgressCli,
 } from "../../src/cli/progress";
+import { REQUIRED_LABELS } from "../../src/domain/progress";
 import { parseSampleCache, serializeSampleCacheEntries } from "../../src/domain/sample-cache";
 import type { SampleCacheEntry } from "../../src/models/sample-cache";
 
@@ -34,7 +35,7 @@ describe("CLI: progress parseArgs", () => {
       expect(opts.lookbackDays).toBe(30);
       expect(opts.firstTimerLookbackDays).toBe(90);
       expect(opts.fetchBudget).toBe(100);
-      expect(opts.fetchLimit).toBe(1000);
+      expect(opts.fetchLimit).toBe(5000);
       expect(opts.noLog).toBeFalse();
       expect(opts.asJson).toBeFalse();
     } finally {
@@ -88,11 +89,12 @@ describe("CLI: progress parseArgs", () => {
     [["--first-timer-lookback-days", "0"], "無効な値"],
     [["--first-timer-lookback-days", "400"], "無効な値"],
     [["--first-timer-lookback-days"], "必要です"],
-    [["--fetch-budget", "101"], "無効な値"],
+    [["--fetch-budget", "1001"], "無効な値"],
     [["--fetch-budget", "0"], "無効な値"],
     [["--sample-size", "30"], "未知のオプション"],
     [["--cache-path"], "必要です"],
     [["--fetch-limit", "0"], "無効な値"],
+    [["--fetch-limit", "10001"], "無効な値"],
     [["--target-pr"], "必要です"],
     [["--target-pr", "--no-log"], "必要です"],
     [["--log-path", "--no-log"], "必要です"],
@@ -1825,6 +1827,167 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const logText = logs.join("\n");
       expect(logText).toContain("採用 1 件・除外 1 件");
       expect(logText).toContain("未取得の候補 1 件は次回以降に取得します");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("マージ済み候補の走査で日付窓スライス分割クエリが発行され、30日超の非初回候補は詳細取得をスキップして除外記録される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-slice-filter-test-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+
+      const searchQueries: string[] = [];
+      const detailFetchedPrs: number[] = [];
+      const timelineFetchedPrs: number[] = [];
+
+      // 45日前（30日超）の PR:
+      // #501: 2コミット（非初回候補 -> スキップされるべき）
+      // #502: 1コミット・クリーン（初回候補 -> 詳細取得されるべき）
+      // #503: 1コミット・常連author（author: frequent, 同一期間に2件 -> スキップされるべき）
+      // #504: 1コミット・常連author（author: frequent, 同一期間に2件 -> スキップされるべき）
+      const merged45d = new Date(now.getTime() - 45 * dayMs).toISOString();
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          searchQueries.push(query);
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            // スライス分割クエリ（merged:ISO..ISO）が使われていること
+            expect(query).toMatch(/merged:\d{4}-\d{2}-\d{2}T.*..\d{4}-\d{2}-\d{2}T/);
+
+            return {
+              totalCount: 4,
+              items: [
+                {
+                  number: 501,
+                  title: "PR 501 (2 commits)",
+                  html_url: "u501",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "user-501",
+                  commitCount: 2, // 2コミット -> 非初回
+                  pull_request: { merged_at: merged45d },
+                },
+                {
+                  number: 502,
+                  title: "PR 502 (1 commit, first timer)",
+                  html_url: "u502",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "first-timer-user",
+                  commitCount: 1, // 1コミット -> 初回候補！
+                  pull_request: { merged_at: merged45d },
+                },
+                {
+                  number: 503,
+                  title: "PR 503 (frequent author)",
+                  html_url: "u503",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "frequent-user",
+                  commitCount: 1,
+                  pull_request: { merged_at: merged45d },
+                },
+                {
+                  number: 504,
+                  title: "PR 504 (frequent author)",
+                  html_url: "u504",
+                  created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                  updated_at: merged45d,
+                  labels,
+                  is_draft: false,
+                  author: "frequent-user",
+                  commitCount: 1,
+                  pull_request: { merged_at: merged45d },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, prNumber: number) => {
+          detailFetchedPrs.push(prNumber);
+          const isTarget = prNumber === options.targetPr;
+          return {
+            number: prNumber,
+            title: `PR ${prNumber}`,
+            url: `https://github.com/microsoft/winget-pkgs/pull/${prNumber}`,
+            state: (isTarget ? "OPEN" : "MERGED") as "OPEN" | "MERGED",
+            isDraft: false,
+            createdAt: new Date(now.getTime() - 50 * dayMs).toISOString(),
+            updatedAt: merged45d,
+            mergedAt: isTarget ? null : merged45d,
+            closedAt: null,
+            author: "first-timer-user",
+            commits: [
+              {
+                committedDate: new Date(now.getTime() - 50 * dayMs).toISOString(),
+                oid: "abc1234",
+              },
+            ],
+            labels: REQUIRED_LABELS,
+          };
+        },
+        getIssueTimeline: async (_repo: string, prNumber: number) => {
+          timelineFetchedPrs.push(prNumber);
+          return REQUIRED_LABELS.map((name) => ({
+            event: "labeled",
+            created_at: new Date(now.getTime() - 48 * dayMs).toISOString(),
+            label: { name },
+          }));
+        },
+        graphql: async <T>() => {
+          return {
+            u_0: { issueCount: 1 },
+          } as unknown as T;
+        },
+      } as unknown as GitHubApiClient;
+
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 100,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        () => {},
+      );
+
+      // 詳細・タイムライン API が呼ばれたのは 自PR(#500) と候補中では #502 のみであること！
+      // #501（2コミット）と #503, #504（常連author）は詳細フェッチをスキップ！
+      expect(detailFetchedPrs).toEqual([500, 502]);
+      expect(timelineFetchedPrs).toEqual([500, 502]);
+
+      // スナップショットの確認:
+      // #502 は45日前（30日超）のため全体窓 SampleCount には入らず、初回コホート FirstTimerSampleCount に採用されること
+      expect(snapshot?.SampleCount).toBe(0);
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      // 30日以内の除外ではないため全体 SkippedCount は 0
+      expect(snapshot?.SkippedCount).toBe(0);
+
+      // キャッシュファイルの内容を確認: スキップされた PR が not-first-timer-candidate として記録されていること
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const skippedEntries = savedCache.filter((e) => e.Type === "skipped");
+      expect(skippedEntries).toHaveLength(3);
+      for (const entry of skippedEntries) {
+        expect(entry.Reason).toBe("not-first-timer-candidate");
+      }
+      expect(skippedEntries.map((e) => e.Number).sort()).toEqual([501, 503, 504]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

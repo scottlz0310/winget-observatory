@@ -65,10 +65,16 @@ describe("Domain: parseSampleCache", () => {
     MergedAt: "2026-11-01T00:00:00.000Z",
     Reason: "no-ready",
   };
+  const skippedNotFirstTimer: SampleCacheEntry = {
+    Type: "skipped",
+    Number: 8,
+    MergedAt: "2026-10-15T00:00:00.000Z",
+    Reason: "not-first-timer-candidate",
+  };
 
   test("BOM 付き・空行を含む JSONL を、採用と除外の両方でパースする", () => {
-    const text = `﻿${JSON.stringify(entry())}\n\n${JSON.stringify(skipped)}\n`;
-    expect(parseSampleCache(text)).toEqual([entry(), skipped]);
+    const text = `﻿${JSON.stringify(entry())}\n\n${JSON.stringify(skipped)}\n${JSON.stringify(skippedNotFirstTimer)}\n`;
+    expect(parseSampleCache(text)).toEqual([entry(), skipped, skippedNotFirstTimer]);
   });
 
   test("空のテキストは空配列", () => {

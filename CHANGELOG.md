@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/domain/search-window.ts`, `test/domain/search-window.test.ts`: GitHub Search API の 1,000 件制限を回避するための日付窓（スライス）分割純粋関数 `buildDateWindowSlices` を追加（Issue #62）。探索期間（90日間）を指定幅（既定 14 日間）の隙間のない降順スライスに分割し、`merged:START..END` クエリフラグメントを生成することで、数千件規模のマージ済み PR を 1,000 件上限で打ち切られることなく安全に全件走査可能にする
+
+### Changed
+
+- `src/cli/progress.ts`, `src/domain/first-timer.ts`, `src/api/github.ts`, `src/api/graphql-adapters.ts`, `src/models/sample-cache.ts`, `src/domain/sample-cache.ts`, `test/domain/first-timer.test.ts`, `test/cli/progress.test.ts`, `test/domain/sample-cache.test.ts`: マージ済み PR 探索における Search API 1,000 件制限回避および「初回提出者専用フィルタリング（絞って取る）」による大幅な API 最適化を実施（Issue #62）。
+  - `SEARCH_ISSUES_QUERY` の PullRequest ノードに `commits(first: 1) { totalCount }` を追加し、検索一覧取得の時点でコミット数・作者・ドラフト状態・ラベルを軽量メタデータとして一括取得
+  - `progress.ts` のマージ済み PR 走査を 14 日単位の日付窓スライス分割走査へ刷新し、候補走査上限 `fetchLimit` の既定値を 1,000 から 5,000（上限 10,000）へ拡大
+  - 直近 30 日窓（全体実績）は従来通り全体母集団として取得・キャッシュしつつ、31〜90日前（初回提出者専用窓）については 1 コミットでない PR、Draft、阻害ラベル付き PR、同一走査期間内に複数回登場する常連 author を事前除外（`isCandidateEligibleForFirstTimerDetail` / `countCandidateAuthors`）
+  - 除外された PR は `Type: "skipped"`, `Reason: "not-first-timer-candidate"` としてサンプルキャッシュに永続化し、次回以降の無駄な再走査を防止。フィルターを通過した真の初回候補（数十〜100件程度）のみに詳細（タイムライン・PR詳細・累計マージ数照合）取得を限定することで、リクエスト数を約 97% 削減し、API レート制限（5,000pt/時）および Actions タイムアウト（30分）を回避しながら 90 日分の初回提出者母集団を安全かつ完全に網羅可能に改善
+
+### Added
+
 - `scripts/sync-worker-secrets.ts`, `test/scripts/sync-worker-secrets.test.ts`, `package.json`, `workers/observe-trigger/README.md`: Cloudflare Workers（`workers/observe-trigger`）へ GitHub App の Client ID と秘密鍵を安全に一括登録する同期スクリプト `sync:secrets`（`scripts/sync-worker-secrets.ts`）を追加（Issue #60）。`scottlz0310/renovate-config` の `GLOBAL_AUTOMERGE_CLIENT_ID` から Client ID を自動解決（明示指定や環境変数もサポート）し、秘密鍵（PKCS#1 または PKCS#8）を Web Crypto 互換の PKCS#8 PEM へ自動変換した上で、`wrangler secret bulk` に標準入力経由で安全に流し込むことで、ディスクやコマンドラインに平文の秘密鍵を残さず安全な一発登録を実現。単体テスト（13件）および README の手順ドキュメントを配備
 - `workers/observe-trigger/`: Cloudflare Workers の Cron Trigger から GitHub Actions ワークフロー（`observe.yml`）を定時起動するトリガー Worker（`winget-observatory-trigger`）を新設（Issue #58）。Web Crypto API（RS256）を用いた GitHub App の JWT 署名、短期間有効な Installation Access Token（`actions: write`）の動的取得（または固定 ID 参照）、`workflow_dispatch` 呼び出し、誤アクセス防止のための 404 レスポンス、および単体テスト・Wrangler 設定・README を配備
 

@@ -5,7 +5,9 @@ import { describeGuidance, describeOvertake } from "../domain/benchmark";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
 import {
   buildAuthorMergedCountQuery,
+  countCandidateAuthors,
   extractSingleHitCandidateLogins,
+  isCandidateEligibleForFirstTimerDetail,
   isFirstTimerSampleCandidate,
   parseAuthorMergedCounts,
 } from "../domain/first-timer";
@@ -30,6 +32,7 @@ import {
   serializeSampleCacheEntries,
   toCachedSample,
 } from "../domain/sample-cache";
+import { buildDateWindowSlices } from "../domain/search-window";
 import type {
   MergedCandidateSample,
   ProgressHistoryRow,
@@ -70,7 +73,7 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
   let lookbackDays = 30;
   let firstTimerLookbackDays = 90;
   let fetchBudget = 100;
-  let fetchLimit = 1000;
+  let fetchLimit = 5000;
   let logPath: string | undefined = process.env.WINGET_LOG_PATH;
   let snapshotPath: string | undefined = process.env.WINGET_SNAPSHOT_PATH;
   let cachePath: string | undefined = process.env.WINGET_CACHE_PATH;
@@ -93,9 +96,9 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
         365,
       );
     } else if (arg === "--fetch-budget") {
-      fetchBudget = parseBoundedInt(readOptionValue(argv, i++), "fetch-budget", 1, 100);
+      fetchBudget = parseBoundedInt(readOptionValue(argv, i++), "fetch-budget", 1, 1000);
     } else if (arg === "--fetch-limit") {
-      fetchLimit = parseBoundedInt(readOptionValue(argv, i++), "fetch-limit", 1, 1000);
+      fetchLimit = parseBoundedInt(readOptionValue(argv, i++), "fetch-limit", 1, 10000);
     } else if (arg === "--log-path") {
       logPath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--snapshot-path") {
@@ -257,7 +260,6 @@ export async function runProgressCli(
   const firstTimerLookbackDays = options.firstTimerLookbackDays ?? 90;
   const maxLookbackDays = Math.max(options.lookbackDays, firstTimerLookbackDays);
   const sinceDate = new Date(now.getTime() - maxLookbackDays * 24 * 60 * 60 * 1000);
-  const sinceIso = sinceDate.toISOString();
 
   const baseParts = buildHealthyQueryParts(options.repository);
 
@@ -304,48 +306,67 @@ export async function runProgressCli(
   }
 
   // 3. マージ済み候補のサンプリング
-  const mergedQuery = [
-    `repo:${options.repository}`,
-    "is:pr",
-    "is:merged",
-    `merged:>=${sinceIso}`,
-    ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
-  ].join(" ");
+  // 全体用集計窓（30日）と初回提出者専用窓（90日）の境界を定義
+  const overallSinceDate = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
+  // Search API の 1,000 件制限を回避するため、14 日単位の日付窓（スライス）に分割して走査する
+  const slices = buildDateWindowSlices(sinceDate, now, 14);
 
   const candidates: GitHubDetailedSearchItem[] = [];
+  const seenPrNumbers = new Set<number>();
   const perPage = 100;
-  let page = 1;
-  const maxPages = Math.ceil(options.fetchLimit / perPage);
 
-  let cursor: string | null = null;
-  while (candidates.length < options.fetchLimit && page <= maxPages) {
-    const mergedRes = await client.searchIssuesDetailed(
-      mergedQuery,
-      "updated",
-      "desc",
-      perPage,
-      page,
-      cursor,
-    );
-    if (!mergedRes.items || mergedRes.items.length === 0) {
+  for (const slice of slices) {
+    if (candidates.length >= options.fetchLimit) {
       break;
     }
-    for (const item of mergedRes.items) {
-      if (item.number !== options.targetPr && item.pull_request?.merged_at) {
-        candidates.push(item);
-        if (candidates.length >= options.fetchLimit) {
-          break;
+
+    const sliceMergedQuery = [
+      `repo:${options.repository}`,
+      "is:pr",
+      "is:merged",
+      slice.queryFilter,
+      ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
+    ].join(" ");
+
+    let cursor: string | null = null;
+    let page = 1;
+    // 各スライス内で 1,000 件（10 ページ）を上限に走査
+    const maxSlicePages = 10;
+
+    while (candidates.length < options.fetchLimit && page <= maxSlicePages) {
+      const mergedRes = await client.searchIssuesDetailed(
+        sliceMergedQuery,
+        "updated",
+        "desc",
+        perPage,
+        page,
+        cursor,
+      );
+      if (!mergedRes.items || mergedRes.items.length === 0) {
+        break;
+      }
+      for (const item of mergedRes.items) {
+        if (
+          item.number !== options.targetPr &&
+          item.pull_request?.merged_at &&
+          !seenPrNumbers.has(item.number)
+        ) {
+          seenPrNumbers.add(item.number);
+          candidates.push(item);
+          if (candidates.length >= options.fetchLimit) {
+            break;
+          }
         }
       }
+      const hasMore = mergedRes.pageInfo
+        ? Boolean(mergedRes.pageInfo.hasNextPage && mergedRes.pageInfo.endCursor)
+        : mergedRes.items.length >= perPage;
+      if (!hasMore) {
+        break;
+      }
+      cursor = mergedRes.pageInfo?.endCursor ?? null;
+      page++;
     }
-    const hasMore = mergedRes.pageInfo
-      ? Boolean(mergedRes.pageInfo.hasNextPage && mergedRes.pageInfo.endCursor)
-      : mergedRes.items.length >= perPage;
-    if (!hasMore) {
-      break;
-    }
-    cursor = mergedRes.pageInfo?.endCursor ?? null;
-    page++;
   }
 
   candidates.sort(
@@ -353,6 +374,9 @@ export async function runProgressCli(
       new Date(b.pull_request?.merged_at ?? b.updated_at).getTime() -
       new Date(a.pull_request?.merged_at ?? a.updated_at).getTime(),
   );
+
+  // 90 日間の候補母集団における作者ごとの出現頻度を集計（常連判定用）
+  const candidateAuthorCounts = countCandidateAuthors(candidates);
 
   const samples: MergedCandidateSample[] = [];
   const skippedCandidates: { number: number; mergedAt: Date }[] = [];
@@ -383,6 +407,38 @@ export async function runProgressCli(
         }
         continue;
       }
+
+      const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
+      const mergedAt = new Date(mergedAtStr);
+      const isWithinOverallWindow = mergedAt.getTime() >= overallSinceDate.getTime();
+
+      // 31〜90日前の PR は初回提出者専用窓。初回候補になり得ない場合は詳細取得をスキップしてキャッシュに skipped を記録
+      if (!isWithinOverallWindow) {
+        const isEligible = isCandidateEligibleForFirstTimerDetail(
+          {
+            commitCount: cand.commitCount,
+            isDraft: cand.is_draft,
+            labels: cand.labels,
+            author: cand.author,
+          },
+          candidateAuthorCounts,
+        );
+
+        if (!isEligible) {
+          skipped++;
+          skippedCandidates.push({ number: cand.number, mergedAt });
+          const skippedEntry: SampleCacheEntry = {
+            Type: "skipped",
+            Number: cand.number,
+            MergedAt: mergedAt.toISOString(),
+            Reason: "not-first-timer-candidate",
+          };
+          cacheIndex.set(cand.number, skippedEntry);
+          cacheModified = true;
+          continue;
+        }
+      }
+
       if (fetched >= options.fetchBudget) {
         deferred++;
         continue;

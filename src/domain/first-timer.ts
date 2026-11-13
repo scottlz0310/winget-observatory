@@ -40,6 +40,60 @@ export function hasBlockingOrDraftHistory(
 }
 
 /**
+ * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定するための入力。
+ */
+export interface CandidatePreFilterInput {
+  commitCount?: number;
+  isDraft?: boolean;
+  labels?: Array<{ name: string }>;
+  author?: string;
+}
+
+/**
+ * 候補一覧から作者ごとの出現頻度マップを集計する。
+ */
+export function countCandidateAuthors(candidates: Array<{ author?: string }>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const c of candidates) {
+    if (c.author) {
+      counts.set(c.author, (counts.get(c.author) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/**
+ * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定する。
+ *
+ * 以下のいずれかに該当する場合は初回提出者になり得ないため false を返す：
+ * 1. コミット数が判明しており、1 以外である（手直しあり）
+ * 2. Draft である
+ * 3. 阻害ラベルが付与されている
+ * 4. 作者が判明しており、同期間の全候補内で複数回出現している（常連）
+ *
+ * @param candidate 検査対象の候補メタデータ
+ * @param authorCounts 同期間の全候補における作者ごとの出現頻度マップ
+ */
+export function isCandidateEligibleForFirstTimerDetail(
+  candidate: CandidatePreFilterInput,
+  authorCounts: Map<string, number>,
+): boolean {
+  if (candidate.commitCount !== undefined && candidate.commitCount !== 1) {
+    return false;
+  }
+  if (candidate.isDraft) {
+    return false;
+  }
+  if (candidate.labels?.some((l) => isBlockedLabel(l.name))) {
+    return false;
+  }
+  if (candidate.author && (authorCounts.get(candidate.author) ?? 0) > 1) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * サンプルが初回提出者（1コミット・初期健康体）の前提条件を満たすか判定する。
  */
 export function isFirstTimerSampleCandidate(sample: {

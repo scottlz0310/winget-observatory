@@ -7,6 +7,9 @@ coverage/
 # Playwright MCP server artifacts
 .playwright-mcp/
 
+# Cloudflare Workers
+.wrangler/
+
 # Temporary & backup files
 *.tmp
 *.bak
