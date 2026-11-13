@@ -79,55 +79,148 @@ describe("collectMergedCandidates（カーソルスライド方式）", () => {
     expect(queries[1]).toContain(`merged:${since.toISOString()}..${until.toISOString()}`);
   });
 
-  it("上限（10ページ/1,000件）到達時に最古mergedAtへ窓をスライドして過去へ前進する", async () => {
-    const since = new Date("2026-08-01T00:00:00Z");
-    const until = new Date("2026-11-01T00:00:00Z");
-    const queries: string[] = [];
+  it("検索順（更新日時）とマージ日時が逆転していても、窓分割により未走査候補が欠落せず全件走査される（指摘1回帰テスト）", async () => {
+    const since = new Date("2026-10-01T00:00:00Z");
+    const until = new Date("2026-10-31T00:00:00Z");
+    const mid = new Date(Math.floor((since.getTime() + until.getTime()) / 2));
 
-    // テスト用に maxPagesPerWindow = 2, pageSize = 2 とし、4件取得でスライドをシミュレート
-    const slideDateIso = "2026-10-10T00:00:00.000Z";
-
+    // 全期間（since..until）は 1,001 件。
+    // そのうち、PR 1 は 10-02 マージ（古い）だが更新日時が最新（10-30）。
+    // PR 2 は 10-25 マージ（新しい）だが更新日時が古い（10-05）。
+    // 旧スライド方式だと PR 1 のマージ日時に飛んで PR 2 が欠落するが、
+    // 動的二分方式なら時間範囲で分割されるため漏れなく走査される。
     const mockClient: CandidateSearchClient = {
       searchIssuesDetailed: async (
         query,
         _sort,
         _order,
         _perPage,
-        page,
+        _page = 1,
       ): Promise<GitHubDetailedSearchResult> => {
-        queries.push(query);
-
-        if (query.includes(`..${until.toISOString()}`)) {
-          // 窓1 (until 〜 slideDate)
-          if (page === 1) {
-            return {
-              totalCount: 10,
-              pageInfo: { hasNextPage: true, endCursor: "c1" },
-              items: [
-                createMockItem(204, "2026-10-28T00:00:00Z"),
-                createMockItem(203, "2026-10-20T00:00:00Z"),
-              ],
-            };
-          }
-          // 窓1 の最終ページ (maxPagesPerWindow = 2 到達、さらに続きあり)
+        if (
+          query.includes(`..${until.toISOString()}`) &&
+          query.includes(`${since.toISOString()}..`)
+        ) {
+          // 全期間は 1,001 件として二分を促す
           return {
-            totalCount: 10,
-            pageInfo: { hasNextPage: true, endCursor: "c2" },
-            items: [
-              createMockItem(202, "2026-10-15T00:00:00Z"),
-              createMockItem(201, slideDateIso), // 最古
-            ],
+            totalCount: 1001,
+            pageInfo: { hasNextPage: true, endCursor: "c1" },
+            items: [],
           };
         }
 
-        // 窓2 (slideDate 〜 since)
+        if (
+          query.includes(`..${until.toISOString()}`) &&
+          query.includes(`${mid.toISOString()}..`)
+        ) {
+          // 後半（新しい期間 mid..until）: PR 2 (10-25 マージ)
+          return {
+            totalCount: 1,
+            pageInfo: { hasNextPage: false, endCursor: null },
+            items: [createMockItem(2, "2026-10-25T00:00:00Z")],
+          };
+        }
+
+        if (
+          query.includes(`..${mid.toISOString()}`) &&
+          query.includes(`${since.toISOString()}..`)
+        ) {
+          // 前半（古い期間 since..mid）: PR 1 (10-02 マージ)
+          return {
+            totalCount: 1,
+            pageInfo: { hasNextPage: false, endCursor: null },
+            items: [createMockItem(1, "2026-10-02T00:00:00Z")],
+          };
+        }
+
+        return { totalCount: 0, items: [] };
+      },
+    };
+
+    const results = await collectMergedCandidates({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 9999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 5000,
+      pageSize: 100,
+      maxPagesPerWindow: 10,
+    });
+
+    // PR 2 と PR 1 の両方が欠落せず収集されていること
+    expect(results).toHaveLength(2);
+    expect(results.map((r) => r.number)).toEqual([2, 1]);
+  });
+
+  it("fetchLimit が 1 や 100 の倍数でない場合でも、ページ内の超過アイテムを追加せず厳格に上限を守る（指摘2回帰テスト）", async () => {
+    const since = new Date("2026-10-01T00:00:00Z");
+    const until = new Date("2026-11-01T00:00:00Z");
+
+    const mockClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => {
+        // 1 ページで 100 件のアイテムを返す
+        const items = Array.from({ length: 100 }, (_, i) =>
+          createMockItem(i + 1, "2026-10-15T00:00:00Z"),
+        );
         return {
-          totalCount: 2,
+          totalCount: 100,
           pageInfo: { hasNextPage: false, endCursor: null },
-          items: [
-            createMockItem(201, slideDateIso), // 境界重複アイテム
-            createMockItem(200, "2026-09-01T00:00:00Z"),
-          ],
+          items,
+        };
+      },
+    };
+
+    // fetchLimit: 1 の場合、厳密に 1 件のみ返ること
+    const results1 = await collectMergedCandidates({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 1,
+    });
+    expect(results1).toHaveLength(1);
+
+    // fetchLimit: 25 の場合、厳密に 25 件のみ返ること
+    const results25 = await collectMergedCandidates({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 25,
+    });
+    expect(results25).toHaveLength(25);
+  });
+
+  it("ちょうど 1,000 件で hasNextPage: false の場合、例外を投げず全 1,000 件を正常に収集して完了する（指摘3回帰テスト）", async () => {
+    const since = new Date("2026-10-01T00:00:00Z");
+    const until = new Date("2026-11-01T00:00:00Z");
+    const fixedMergedAt = "2026-10-15T12:00:00.000Z";
+
+    const mockClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (
+        _query,
+        _sort,
+        _order,
+        _perPage,
+        page = 1,
+      ): Promise<GitHubDetailedSearchResult> => {
+        // 10 ページ各 100 件で計 1,000 件
+        const items = Array.from({ length: 100 }, (_, i) =>
+          createMockItem((page - 1) * 100 + i + 1, fixedMergedAt),
+        );
+        return {
+          totalCount: 1000,
+          pageInfo: {
+            hasNextPage: page < 10,
+            endCursor: page < 10 ? `c${page}` : null,
+          },
+          items,
         };
       },
     };
@@ -137,37 +230,26 @@ describe("collectMergedCandidates（カーソルスライド方式）", () => {
       repository: "microsoft/winget-pkgs",
       since,
       until,
-      targetPr: 999,
+      targetPr: 9999,
       requiredLabels: ["New-Package"],
-      fetchLimit: 100,
-      pageSize: 2,
-      maxPagesPerWindow: 2,
+      fetchLimit: 5000,
+      pageSize: 100,
+      maxPagesPerWindow: 10,
     });
 
-    // 204, 203, 202, 201, 200 (201の重複が除去され5件)
-    expect(results).toHaveLength(5);
-    expect(results.map((r) => r.number)).toEqual([204, 203, 202, 201, 200]);
-
-    // 窓2 のクエリ上限がスライド位置（slideDateIso）になっていること
-    expect(queries.some((q) => q.includes(`..${slideDateIso}`))).toBeTrue();
+    expect(results).toHaveLength(1000);
   });
 
-  it("同一タイムスタンプで上限超過し前進不能な場合は安全に例外をスローする", async () => {
-    const since = new Date("2026-10-01T00:00:00Z");
-    const until = new Date("2026-10-10T00:00:00Z");
+  it("最小時間幅（1秒以下）でも 1,000 件を超過している分割不能な極限状態では安全に例外をスローする", async () => {
+    const since = new Date("2026-10-10T12:00:00.000Z");
+    const until = new Date("2026-10-10T12:00:00.500Z"); // 500ms 幅
 
     const mockClient: CandidateSearchClient = {
-      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => {
-        // 全アイテムが until と同一時刻でマージされている
-        return {
-          totalCount: 1000,
-          pageInfo: { hasNextPage: true, endCursor: "c1" },
-          items: [
-            createMockItem(301, until.toISOString()),
-            createMockItem(302, until.toISOString()),
-          ],
-        };
-      },
+      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => ({
+        totalCount: 1200,
+        pageInfo: { hasNextPage: true, endCursor: "c1" },
+        items: [],
+      }),
     };
 
     await expect(
@@ -178,10 +260,10 @@ describe("collectMergedCandidates（カーソルスライド方式）", () => {
         until,
         targetPr: 999,
         requiredLabels: ["New-Package"],
-        pageSize: 2,
-        maxPagesPerWindow: 1,
+        pageSize: 100,
+        maxPagesPerWindow: 10,
       }),
-    ).rejects.toThrow("Search API の上限 1,000 件を超過しており");
+    ).rejects.toThrow("これ以上分割できないため安全に全件走査できません");
   });
 
   it("targetPr や since より古い PR は除外される", async () => {

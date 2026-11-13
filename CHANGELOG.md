@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `src/domain/search-window.ts`, `src/domain/sample-collector.ts`, `src/domain/progress-format.ts`, `src/cli/progress.ts`, `src/models/progress.ts`, `src/api/github.ts`, `test/domain/search-window.test.ts`, `test/domain/sample-collector.test.ts`, `test/domain/progress-format.test.ts`, `test/cli/progress.test.ts`: マージ済み PR 走査方式を「時間幅ベース（14日スライス＋再帰時間分割）」から、取得した最古の `merged_at` を基点に窓をスライドさせる「カーソルスライド方式（絶対数区切り）」へ刷新し、`progress.ts` の肥大化した責務を分離・モジュール化（Issue #68 Phase 3）。
-  - 時間幅の仮定や過密・過疎の偏りに左右されず、常に Search API の最大効率（100件/req × 最大10ページ）で過去へ前進する走査関数 `collectMergedCandidates` を導入。同一秒に 1,000 件集中した極限状態のエラーガードも配備
+- `src/domain/search-window.ts`, `src/domain/sample-collector.ts`, `src/domain/progress-format.ts`, `src/cli/progress.ts`, `src/models/progress.ts`, `src/api/github.ts`, `test/domain/search-window.test.ts`, `test/domain/sample-collector.test.ts`, `test/domain/progress-format.test.ts`, `test/cli/progress.test.ts`: マージ済み PR 走査方式を、更新日時順ソート下でのマージ日時逆転による未走査候補の欠落を原理的に排除しつつ、1,000 件以内の平常期間は単一窓で最速走査し過密窓のみ時間範囲を二分する「動的二分窓走査方式（Dynamic Bisecting Window Queue）」へ刷新し、`progress.ts` の肥大化した責務を分離・モジュール化（Issue #68 Phase 3）。
+  - 更新日時順とマージ日時の逆転による未取得 PR のスキップ欠落を防ぐ動的二分探索窓走査関数 `collectMergedCandidates` を導入。1 ページ内での `fetchLimit` の厳格な遵守および 1,000 件境界の安全な全件取得を保証
   - サンプルの収集・キャッシュ管理・初回提出者判定・詳細取得・累計マージ数照会のオーケストレーションを `src/domain/sample-collector.ts` へ純粋ドメイン関数として分離
   - コンソール出力およびログ整形の責務を `src/domain/progress-format.ts` へ分離
   - `src/cli/progress.ts` のコード行数を約 980 行から 538 行へ大幅にスリム化（約 440 行削減）し、保守性と単体テスト容易性を向上

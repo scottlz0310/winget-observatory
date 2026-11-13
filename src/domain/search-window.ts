@@ -23,13 +23,17 @@ export interface CollectMergedCandidatesParams {
   maxPagesPerWindow?: number;
 }
 
+interface WindowSlice {
+  since: Date;
+  until: Date;
+}
+
 /**
  * 探索期間内のマージ済み PR を GitHub Search API により全量走査する。
  *
  * Search API の 1,000 件上限（100件/page × 10ページ）を回避するため、
- * 1 走査窓で 1,000 件に到達し未取得 PR が残っている場合は、
- * その窓で取得できた最古の merged_at を次窓の until に設定して過去へ前進する
- * 「カーソルスライド方式（絶対数区切り）」を採用する。
+ * 1 走査窓で 1,000 件を超過する過密期間については、未走査範囲を捨てずに
+ * 時間範囲を二分（bisect）して再帰的に漏れなく走査する「動的二分窓走査方式」を採用する。
  *
  * @param params 探索パラメータ
  * @returns 収集されたマージ済み PR アイテム一覧（降順）
@@ -49,28 +53,97 @@ export async function collectMergedCandidates(
     maxPagesPerWindow = 10,
   } = params;
 
-  if (since.getTime() >= until.getTime()) {
+  if (since.getTime() >= until.getTime() || fetchLimit <= 0) {
     return [];
   }
 
   const candidates: GitHubDetailedSearchItem[] = [];
   const seenPrNumbers = new Set<number>();
-  let currentUntil = until;
 
-  while (currentUntil.getTime() > since.getTime() && candidates.length < fetchLimit) {
+  // LIFO スタック: 新しい期間から先に処理するため、二分時は古い方を先に push し新しい方を後に push する
+  const stack: WindowSlice[] = [{ since, until }];
+
+  while (stack.length > 0 && candidates.length < fetchLimit) {
+    const currentSlice = stack.pop();
+    if (!currentSlice) break;
+
+    const sliceSince = currentSlice.since;
+    const sliceUntil = currentSlice.until;
+    if (sliceSince.getTime() >= sliceUntil.getTime()) {
+      continue;
+    }
+
     const query = [
       `repo:${repository}`,
       "is:pr",
       "is:merged",
-      `merged:${since.toISOString()}..${currentUntil.toISOString()}`,
+      `merged:${sliceSince.toISOString()}..${sliceUntil.toISOString()}`,
       ...requiredLabels.map((l) => `label:"${l}"`),
     ].join(" ");
 
-    let cursor: string | null = null;
-    let page = 1;
-    let windowOldestMergedAt: Date | null = null;
-    let windowCount = 0;
-    let hasNextPage = true;
+    // 窓の 1 ページ目をまず取得
+    const firstPage = await client.searchIssuesDetailed(
+      query,
+      "updated",
+      "desc",
+      pageSize,
+      1,
+      null,
+    );
+
+    // 候補が 0 件ならこの窓は完了
+    if (firstPage.totalCount === 0) {
+      continue;
+    }
+
+    // 1 窓の収容上限（既定 1,000 件）を超過している場合は、この窓を二分する
+    const windowCapacity = maxPagesPerWindow * pageSize;
+    if (firstPage.totalCount > windowCapacity) {
+      const durationMs = sliceUntil.getTime() - sliceSince.getTime();
+      if (durationMs <= 1000) {
+        throw new Error(
+          `期間 (${sliceSince.toISOString()} .. ${sliceUntil.toISOString()}) のマージ済み PR 件数が Search API の上限 1,000 件を超過しており、これ以上分割できないため安全に全件走査できません。`,
+        );
+      }
+      const midMs = Math.floor((sliceSince.getTime() + sliceUntil.getTime()) / 2);
+      const mid = new Date(midMs);
+      // 古い方を先に push、新しい方を後に push（新しい方から pop される）
+      stack.push({ since: sliceSince, until: mid });
+      stack.push({ since: mid, until: sliceUntil });
+      continue;
+    }
+
+    if (!firstPage.items || firstPage.items.length === 0) {
+      continue;
+    }
+
+    // 1,000 件以内に収まっている窓: 1 ページ目のアイテムを追加し、残りをページネーション取得
+    const addItems = (items: GitHubDetailedSearchItem[]): boolean => {
+      for (const item of items) {
+        if (candidates.length >= fetchLimit) return false;
+        if (item.number !== targetPr && item.pull_request?.merged_at) {
+          const mergedDate = new Date(item.pull_request.merged_at);
+          if (mergedDate.getTime() >= since.getTime()) {
+            if (!seenPrNumbers.has(item.number)) {
+              seenPrNumbers.add(item.number);
+              candidates.push(item);
+              if (candidates.length >= fetchLimit) return false;
+            }
+          }
+        }
+      }
+      return true;
+    };
+
+    if (!addItems(firstPage.items)) {
+      break;
+    }
+
+    let hasNextPage = Boolean(
+      firstPage.pageInfo ? firstPage.pageInfo.hasNextPage : firstPage.items.length >= pageSize,
+    );
+    let cursor = firstPage.pageInfo?.endCursor ?? null;
+    let page = 2;
 
     while (hasNextPage && page <= maxPagesPerWindow && candidates.length < fetchLimit) {
       const res = await client.searchIssuesDetailed(
@@ -83,51 +156,30 @@ export async function collectMergedCandidates(
       );
 
       if (!res.items || res.items.length === 0) {
-        hasNextPage = false;
         break;
       }
 
-      for (const item of res.items) {
-        if (item.number !== targetPr && item.pull_request?.merged_at) {
-          const mergedDate = new Date(item.pull_request.merged_at);
-          if (mergedDate.getTime() >= since.getTime()) {
-            if (!seenPrNumbers.has(item.number)) {
-              seenPrNumbers.add(item.number);
-              candidates.push(item);
-            }
-            if (!windowOldestMergedAt || mergedDate.getTime() < windowOldestMergedAt.getTime()) {
-              windowOldestMergedAt = mergedDate;
-            }
-          }
-        }
+      if (!addItems(res.items)) {
+        break;
       }
 
-      windowCount += res.items.length;
-      hasNextPage = res.pageInfo
-        ? Boolean(res.pageInfo.hasNextPage && res.pageInfo.endCursor)
-        : res.items.length >= pageSize;
+      hasNextPage = Boolean(res.pageInfo ? res.pageInfo.hasNextPage : res.items.length >= pageSize);
       cursor = res.pageInfo?.endCursor ?? null;
       page++;
     }
 
-    // 候補が 1 件も得られなかった場合はこれ以上過去へ遡れないため終了
-    if (windowCount === 0) {
-      break;
-    }
-
-    // 1走査窓の上限（maxPagesPerWindow）に到達し、さらに未走査 PR が残っている場合
-    if (hasNextPage || windowCount >= maxPagesPerWindow * pageSize) {
-      if (!windowOldestMergedAt || windowOldestMergedAt.getTime() >= currentUntil.getTime()) {
-        // 同一タイムスタンプ付近で 1,000 件を超過しており前進不能な場合は安全に中断
+    // 万が一 totalCount の過小報告等で maxPagesPerWindow に達してなお未取得データが残っている場合
+    if (hasNextPage && page > maxPagesPerWindow) {
+      const durationMs = sliceUntil.getTime() - sliceSince.getTime();
+      if (durationMs <= 1000) {
         throw new Error(
-          `同一マージ時刻 (${currentUntil.toISOString()}) 付近のマージ済み PR 件数が Search API の上限 1,000 件を超過しており、これ以上カーソルを前進できないため安全に全件走査できません。`,
+          `期間 (${sliceSince.toISOString()} .. ${sliceUntil.toISOString()}) のマージ済み PR 件数が Search API の上限 1,000 件を超過しており、これ以上分割できないため安全に全件走査できません。`,
         );
       }
-      // 最古の merged_at を次の until にして過去へスライド！
-      currentUntil = windowOldestMergedAt;
-    } else {
-      // 期間内の全アイテムを走査完了
-      break;
+      const midMs = Math.floor((sliceSince.getTime() + sliceUntil.getTime()) / 2);
+      const mid = new Date(midMs);
+      stack.push({ since: sliceSince, until: mid });
+      stack.push({ since: mid, until: sliceUntil });
     }
   }
 

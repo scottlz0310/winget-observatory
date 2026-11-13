@@ -8,7 +8,7 @@ import type {
   ProgressPrDetail,
   ProgressTimelineEvent,
 } from "../../src/models/progress";
-import type { SampleCacheEntry } from "../../src/models/sample-cache";
+import type { CachedSkippedEntry, SampleCacheEntry } from "../../src/models/sample-cache";
 
 describe("orchestrateSampleCollection", () => {
   const createSearchItem = (
@@ -175,5 +175,101 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples).toHaveLength(1);
     expect(result.fetchedCount).toBe(1);
     expect(result.deferredCount).toBe(1);
+  });
+
+  it("条件成立日時が特定できない候補はスキップ（no-ready）として記録される", async () => {
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async (_repo, _num) => [], // no-ready
+      getPullRequestDetails: async (_repo, num) =>
+        createPrDetail(num, "2026-10-01T00:00:00Z", `author-${num}`),
+      graphql: async <T = unknown>() => ({}) as T,
+    };
+
+    const candidates = [createSearchItem(401, "2026-10-10T00:00:00Z", "author-401")];
+    const overallSinceDate = new Date("2026-09-01T00:00:00Z");
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 10,
+      initialCache: [],
+    });
+
+    expect(result.samples).toHaveLength(0);
+    expect(result.skippedCount).toBe(1);
+    const skipped401 = result.finalCache.find(
+      (c): c is CachedSkippedEntry => c.Number === 401 && c.Type === "skipped",
+    );
+    expect(skipped401?.Reason).toBe("no-ready");
+  });
+
+  it("走査期間内に別 PR が存在する作者は常連（recurring-author）として除外される", async () => {
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async (_repo, _num) => createTimeline("2026-10-02T00:00:00Z"),
+      getPullRequestDetails: async (_repo, num) =>
+        createPrDetail(num, "2026-10-01T00:00:00Z", "repeat-user"),
+      graphql: async <T = unknown>() => ({}) as T,
+    };
+
+    const candidates = [
+      createSearchItem(501, "2026-10-10T00:00:00Z", "repeat-user"),
+      createSearchItem(502, "2026-10-11T00:00:00Z", "repeat-user"),
+    ];
+    const overallSinceDate = new Date("2026-09-01T00:00:00Z");
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 10,
+      initialCache: [],
+    });
+
+    expect(result.samples).toHaveLength(2);
+    for (const sample of result.samples) {
+      expect(sample.isFirstTimer).toBeFalse();
+      expect(sample.firstTimerReason).toBe("recurring-author");
+    }
+  });
+
+  it("全体窓（30日）外で初回候補になり得ない候補は詳細取得をスキップして除外記録される", async () => {
+    let detailCalled = false;
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async () => {
+        detailCalled = true;
+        return [];
+      },
+      getPullRequestDetails: async () => {
+        detailCalled = true;
+        return {} as ProgressPrDetail;
+      },
+      graphql: async <T = unknown>() => ({}) as T,
+    };
+
+    // 60日前の PR で draft 状態（初回候補にならない）
+    const item = createSearchItem(601, "2026-09-01T00:00:00Z", "draft-user");
+    item.is_draft = true;
+
+    const overallSinceDate = new Date("2026-10-01T00:00:00Z"); // 30日前
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [item],
+      overallSinceDate,
+      fetchBudget: 10,
+      initialCache: [],
+    });
+
+    expect(detailCalled).toBeFalse();
+    expect(result.samples).toHaveLength(0);
+    expect(result.skippedCount).toBe(1);
+    const skipped601 = result.finalCache.find(
+      (c): c is CachedSkippedEntry => c.Number === 601 && c.Type === "skipped",
+    );
+    expect(skipped601?.Reason).toBe("not-first-timer-candidate");
   });
 });
