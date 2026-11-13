@@ -32,7 +32,7 @@ import {
   serializeSampleCacheEntries,
   toCachedSample,
 } from "../domain/sample-cache";
-import { buildDateWindowSlices } from "../domain/search-window";
+import { buildDateWindowSlices, type DateWindowSlice } from "../domain/search-window";
 import type {
   MergedCandidateSample,
   ProgressHistoryRow,
@@ -308,17 +308,18 @@ export async function runProgressCli(
   // 3. マージ済み候補のサンプリング
   // 全体用集計窓（30日）と初回提出者専用窓（90日）の境界を定義
   const overallSinceDate = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
-  // Search API の 1,000 件制限を回避するため、14 日単位の日付窓（スライス）に分割して走査する
-  const slices = buildDateWindowSlices(sinceDate, now, 14);
+  // Search API の 1,000 件制限を回避するため、日付窓（スライス）に分割して走査する。
+  // 単一スライスが 1,000 件を超える場合は自動的に時間範囲を追加分割（bisecting）して漏れを防ぐ。
+  const initialSlices = buildDateWindowSlices(sinceDate, now, 14);
+  const sliceQueue: DateWindowSlice[] = [...initialSlices];
 
   const candidates: GitHubDetailedSearchItem[] = [];
   const seenPrNumbers = new Set<number>();
   const perPage = 100;
 
-  for (const slice of slices) {
-    if (candidates.length >= options.fetchLimit) {
-      break;
-    }
+  while (sliceQueue.length > 0 && candidates.length < options.fetchLimit) {
+    const slice = sliceQueue.shift();
+    if (!slice) break;
 
     const sliceMergedQuery = [
       `repo:${options.repository}`,
@@ -328,12 +329,62 @@ export async function runProgressCli(
       ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
     ].join(" ");
 
-    let cursor: string | null = null;
-    let page = 1;
-    // 各スライス内で 1,000 件（10 ページ）を上限に走査
+    // まず 1 ページ目を取得して総件数を確認
+    const firstRes = await client.searchIssuesDetailed(
+      sliceMergedQuery,
+      "updated",
+      "desc",
+      perPage,
+      1,
+      null,
+    );
+
+    // 1,000 件を超えており、かつ分割可能な幅（例: 1時間以上）であれば、スライスを半分に分割して再キューイング
+    const sliceDurationMs = slice.until.getTime() - slice.since.getTime();
+    if (firstRes.totalCount > 1000 && sliceDurationMs > 3600000) {
+      const midMs = slice.since.getTime() + Math.floor(sliceDurationMs / 2);
+      const midDate = new Date(midMs);
+      const sliceNewer: DateWindowSlice = {
+        since: midDate,
+        until: slice.until,
+        queryFilter: `merged:${midDate.toISOString()}..${slice.until.toISOString()}`,
+      };
+      const sliceOlder: DateWindowSlice = {
+        since: slice.since,
+        until: midDate,
+        queryFilter: `merged:${slice.since.toISOString()}..${midDate.toISOString()}`,
+      };
+      // 降順を維持するため新しい方を先に処理
+      sliceQueue.unshift(sliceNewer, sliceOlder);
+      continue;
+    }
+
+    // 1 ページ目のアイテムを収集
+    if (firstRes.items && firstRes.items.length > 0) {
+      for (const item of firstRes.items) {
+        if (
+          item.number !== options.targetPr &&
+          item.pull_request?.merged_at &&
+          !seenPrNumbers.has(item.number)
+        ) {
+          seenPrNumbers.add(item.number);
+          candidates.push(item);
+          if (candidates.length >= options.fetchLimit) {
+            break;
+          }
+        }
+      }
+    }
+
+    // 2 ページ目以降をカーソルページネーションで取得
+    let hasMore = firstRes.pageInfo
+      ? Boolean(firstRes.pageInfo.hasNextPage && firstRes.pageInfo.endCursor)
+      : firstRes.items.length >= perPage;
+    let cursor: string | null = firstRes.pageInfo?.endCursor ?? null;
+    let page = 2;
     const maxSlicePages = 10;
 
-    while (candidates.length < options.fetchLimit && page <= maxSlicePages) {
+    while (hasMore && candidates.length < options.fetchLimit && page <= maxSlicePages) {
       const mergedRes = await client.searchIssuesDetailed(
         sliceMergedQuery,
         "updated",
@@ -358,12 +409,9 @@ export async function runProgressCli(
           }
         }
       }
-      const hasMore = mergedRes.pageInfo
+      hasMore = mergedRes.pageInfo
         ? Boolean(mergedRes.pageInfo.hasNextPage && mergedRes.pageInfo.endCursor)
         : mergedRes.items.length >= perPage;
-      if (!hasMore) {
-        break;
-      }
       cursor = mergedRes.pageInfo?.endCursor ?? null;
       page++;
     }
@@ -392,25 +440,34 @@ export async function runProgressCli(
     // 新しくマージされた順。キャッシュ済みは API を使わずに採用し、未取得の候補は予算の範囲で取得する
     for (const cand of candidates) {
       const cached = cacheIndex.get(cand.number);
-      if (cached) {
-        if (cached.Type === "sample") {
-          const s = fromCachedSample(cached);
-          if (s.isFirstTimer === undefined && s.commitCount > 1) {
-            s.isFirstTimer = false;
-            cached.IsFirstTimer = false;
-            cacheModified = true;
-          }
-          samples.push(s);
-        } else {
-          skipped++;
-          skippedCandidates.push({ number: cand.number, mergedAt: new Date(cached.MergedAt) });
-        }
-        continue;
-      }
-
       const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
       const mergedAt = new Date(mergedAtStr);
       const isWithinOverallWindow = mergedAt.getTime() >= overallSinceDate.getTime();
+
+      if (cached) {
+        // not-first-timer-candidate で除外された PR が、lookbackDays の変更等により
+        // 現在の全体集計窓内に入った場合は再評価する（キャッシュのスキップを解除して詳細取得へ）
+        const needsReevaluation =
+          cached.Type === "skipped" &&
+          cached.Reason === "not-first-timer-candidate" &&
+          isWithinOverallWindow;
+
+        if (!needsReevaluation) {
+          if (cached.Type === "sample") {
+            const s = fromCachedSample(cached);
+            if (s.isFirstTimer === undefined && s.commitCount > 1) {
+              s.isFirstTimer = false;
+              cached.IsFirstTimer = false;
+              cacheModified = true;
+            }
+            samples.push(s);
+          } else {
+            skipped++;
+            skippedCandidates.push({ number: cand.number, mergedAt: new Date(cached.MergedAt) });
+          }
+          continue;
+        }
+      }
 
       // 31〜90日前の PR は初回提出者専用窓。初回候補になり得ない場合は詳細取得をスキップしてキャッシュに skipped を記録
       if (!isWithinOverallWindow) {
@@ -527,7 +584,7 @@ export async function runProgressCli(
     }
 
     // 初回提出者（1コミット・初期健康体・単発・累計マージ1件）の判定
-    // 1. バッチ内に複数回登場する author は常連として除外（isFirstTimer = false）
+    // 1. バッチ内に複数回登場する author、または走査した全 candidates 内で複数回登場する author は常連として除外（isFirstTimer = false）
     const authorCounts = new Map<string, number>();
     for (const s of samples) {
       if (s.author) {
@@ -535,7 +592,9 @@ export async function runProgressCli(
       }
     }
     for (const s of samples) {
-      if (s.author && (authorCounts.get(s.author) ?? 0) > 1) {
+      const countInCandidates = s.author ? (candidateAuthorCounts.get(s.author) ?? 0) : 0;
+      const countInSamples = s.author ? (authorCounts.get(s.author) ?? 0) : 0;
+      if (countInCandidates > 1 || countInSamples > 1) {
         if (s.isFirstTimer !== false) {
           s.isFirstTimer = false;
           const cached = cacheIndex.get(s.number);
