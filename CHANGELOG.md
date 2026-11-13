@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `scripts/compare-rest-graphql.ts`, `scripts/rest-client.ts`, `src/domain/compare-api.ts`, `src/models/api-compare.ts`, `test/scripts/compare-rest-graphql.test.ts`, `test/scripts/rest-client.test.ts`, `test/domain/compare-api.test.ts`, `package.json`: GraphQL 一本化（Phase 4 / #53）完了により役目を終えた REST vs GraphQL 比較検証用スクリプト群、REST クライアント、ドメイン比較モジュール、および関連テスト（計 7 ファイル、約 2,800 行）を全廃（Issue #68）。リポジトリを軽量化し、保守コストおよびテスト実行時間を削減
+
 ### Fixed
 
 - `src/api/github.ts`, `test/api/github.test.ts`: GitHub GraphQL API において HTTP 200 応答だが空文字・空白のみ・HTML エラー画面・不完全構文等で JSON パースに失敗した場合に、一時的通信エラーとして指数バックオフ付きで自動リトライするよう耐障害性を強化（Issue #68）。ロードバランサーやプロキシの一時的な瞬断（空ボディ返却）によるワークフロー中断を解消
