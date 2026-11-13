@@ -1,19 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { GitHubApiClient, type GitHubDetailedSearchItem } from "../api/github";
-import { describeGuidance, describeOvertake } from "../domain/benchmark";
+import { GitHubApiClient } from "../api/github";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
-import {
-  buildAuthorMergedCountQuery,
-  CURRENT_FIRST_TIMER_VERSION,
-  countCandidateAuthors,
-  extractSingleHitCandidateLogins,
-  isCandidateEligibleForFirstTimerDetail,
-  isFirstTimerSampleCandidate,
-  parseAuthorMergedCounts,
-  shouldReevaluateCachedSample,
-  shouldReevaluateSkippedCandidate,
-} from "../domain/first-timer";
 import {
   buildHealthyQueryParts,
   calculateProgressStats,
@@ -29,20 +17,19 @@ import {
   simulateReadySince,
 } from "../domain/progress";
 import {
-  fromCachedSample,
-  indexSampleCache,
-  parseSampleCache,
-  serializeSampleCacheEntries,
-  toCachedSample,
-} from "../domain/sample-cache";
-import { buildDateWindowSlices, type DateWindowSlice } from "../domain/search-window";
+  formatFrontDeltaText,
+  logBenchmark,
+  logRivals,
+  reportSkippedObservation,
+} from "../domain/progress-format";
+import { parseSampleCache, serializeSampleCacheEntries } from "../domain/sample-cache";
+import { orchestrateSampleCollection } from "../domain/sample-collector";
+import { collectMergedCandidates } from "../domain/search-window";
 import type {
-  MergedCandidateSample,
   ProgressHistoryRow,
   ProgressQueueInfo,
   ProgressRivalPr,
   ProgressSnapshot,
-  ReferenceGuidance,
 } from "../models/progress";
 import type { SampleCacheEntry } from "../models/sample-cache";
 import {
@@ -52,6 +39,8 @@ import {
   readOptionValue,
   resolveDefaultTargetPr,
 } from "./args";
+
+export { reportSkippedObservation };
 
 export interface ProgressCliOptions {
   targetPr: number;
@@ -68,6 +57,8 @@ export interface ProgressCliOptions {
   snapshotPath?: string;
   noLog: boolean;
   asJson: boolean;
+  /** テスト用等で基準時刻を固定する場合に指定 */
+  now?: Date;
 }
 
 export function parseArgs(argv: string[]): ProgressCliOptions {
@@ -157,7 +148,7 @@ export async function runProgressCli(
   client: GitHubApiClient = new GitHubApiClient(),
   log: (msg: string) => void = console.log,
 ): Promise<{ snapshot: ProgressSnapshot | null }> {
-  const now = new Date();
+  const now = options.now ?? new Date();
   log(`=== ${options.repository} PR #${options.targetPr} ===`);
 
   const pr = await client.getPullRequestDetails(options.repository, options.targetPr);
@@ -311,404 +302,37 @@ export async function runProgressCli(
   // 3. マージ済み候補のサンプリング
   // 全体用集計窓（30日）と初回提出者専用窓（90日）の境界を定義
   const overallSinceDate = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
-  // Search API の 1,000 件制限を回避するため、日付窓（スライス）に分割して走査する。
-  // 単一スライスが 1,000 件を超える場合は自動的に時間範囲を追加分割（bisecting）して漏れを防ぐ。
-  const initialSlices = buildDateWindowSlices(sinceDate, now, 14);
-  const sliceQueue: DateWindowSlice[] = [...initialSlices];
-
-  const candidates: GitHubDetailedSearchItem[] = [];
-  const seenPrNumbers = new Set<number>();
-  const perPage = 100;
-
-  while (sliceQueue.length > 0 && candidates.length < options.fetchLimit) {
-    const slice = sliceQueue.shift();
-    if (!slice) break;
-
-    const sliceMergedQuery = [
-      `repo:${options.repository}`,
-      "is:pr",
-      "is:merged",
-      slice.queryFilter,
-      ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
-    ].join(" ");
-
-    // まず 1 ページ目を取得して総件数を確認
-    const firstRes = await client.searchIssuesDetailed(
-      sliceMergedQuery,
-      "updated",
-      "desc",
-      perPage,
-      1,
-      null,
-    );
-
-    // 1,000 件を超えており、かつ分割可能な幅（1秒以上）であれば、スライスを半分に分割して再キューイング
-    const sliceDurationMs = slice.until.getTime() - slice.since.getTime();
-    if (firstRes.totalCount > 1000) {
-      if (sliceDurationMs > 1000) {
-        const midMs = slice.since.getTime() + Math.floor(sliceDurationMs / 2);
-        const midDate = new Date(midMs);
-        const sliceNewer: DateWindowSlice = {
-          since: midDate,
-          until: slice.until,
-          queryFilter: `merged:${midDate.toISOString()}..${slice.until.toISOString()}`,
-        };
-        const sliceOlder: DateWindowSlice = {
-          since: slice.since,
-          until: midDate,
-          queryFilter: `merged:${slice.since.toISOString()}..${midDate.toISOString()}`,
-        };
-        // 降順を維持するため新しい方を先に処理
-        sliceQueue.unshift(sliceNewer, sliceOlder);
-        continue;
-      }
-      // 1 秒以下の極小時間範囲でも 1,000 件を超過している場合は、Search API の制限により欠落が発生するため明示的に失敗させる
-      throw new Error(
-        `時間範囲 (${slice.since.toISOString()} .. ${slice.until.toISOString()}) のマージ済み PR 件数 (${firstRes.totalCount} 件) が Search API の上限 1,000 件を超過しており、これ以上分割できないため安全に全件走査できません。`,
-      );
-    }
-
-    // 1 ページ目のアイテムを収集
-    if (firstRes.items && firstRes.items.length > 0) {
-      for (const item of firstRes.items) {
-        if (
-          item.number !== options.targetPr &&
-          item.pull_request?.merged_at &&
-          !seenPrNumbers.has(item.number)
-        ) {
-          seenPrNumbers.add(item.number);
-          candidates.push(item);
-          if (candidates.length >= options.fetchLimit) {
-            break;
-          }
-        }
-      }
-    }
-
-    // 2 ページ目以降をカーソルページネーションで取得
-    let hasMore = firstRes.pageInfo
-      ? Boolean(firstRes.pageInfo.hasNextPage && firstRes.pageInfo.endCursor)
-      : firstRes.items.length >= perPage;
-    let cursor: string | null = firstRes.pageInfo?.endCursor ?? null;
-    let page = 2;
-    const maxSlicePages = 10;
-
-    while (hasMore && candidates.length < options.fetchLimit && page <= maxSlicePages) {
-      const mergedRes = await client.searchIssuesDetailed(
-        sliceMergedQuery,
-        "updated",
-        "desc",
-        perPage,
-        page,
-        cursor,
-      );
-      if (!mergedRes.items || mergedRes.items.length === 0) {
-        break;
-      }
-      for (const item of mergedRes.items) {
-        if (
-          item.number !== options.targetPr &&
-          item.pull_request?.merged_at &&
-          !seenPrNumbers.has(item.number)
-        ) {
-          seenPrNumbers.add(item.number);
-          candidates.push(item);
-          if (candidates.length >= options.fetchLimit) {
-            break;
-          }
-        }
-      }
-      hasMore = mergedRes.pageInfo
-        ? Boolean(mergedRes.pageInfo.hasNextPage && mergedRes.pageInfo.endCursor)
-        : mergedRes.items.length >= perPage;
-      cursor = mergedRes.pageInfo?.endCursor ?? null;
-      page++;
-    }
-  }
-
-  candidates.sort(
-    (a, b) =>
-      new Date(b.pull_request?.merged_at ?? b.updated_at).getTime() -
-      new Date(a.pull_request?.merged_at ?? a.updated_at).getTime(),
-  );
-
-  // 90 日間の候補母集団における作者ごとの出現頻度を集計（常連判定用）
-  const candidateAuthorCounts = countCandidateAuthors(candidates);
-
-  const samples: MergedCandidateSample[] = [];
-  const skippedCandidates: { number: number; mergedAt: Date }[] = [];
-  let skipped = 0;
+  // Search API の 1,000 件制限を回避するため、カーソルスライド方式（最古 merged_at による絶対数区切り）で全量走査
+  const candidates = await collectMergedCandidates({
+    client,
+    repository: options.repository,
+    since: sinceDate,
+    until: now,
+    targetPr: options.targetPr,
+    requiredLabels: REQUIRED_LABELS,
+    fetchLimit: options.fetchLimit,
+  });
 
   const rawCache = options.cachePath ? readSampleCache(options.cachePath) : [];
-  const cacheIndex = indexSampleCache(rawCache);
-  let cacheModified = false;
-  let fetched = 0;
-  let deferred = 0;
-
-  try {
-    // 新しくマージされた順。キャッシュ済みは API を使わずに採用し、未取得の候補は予算の範囲で取得する
-    for (const cand of candidates) {
-      const cached = cacheIndex.get(cand.number);
-      const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
-      const mergedAt = new Date(mergedAtStr);
-      const isWithinOverallWindow = mergedAt.getTime() >= overallSinceDate.getTime();
-      const candAuthor = cand.author;
-      const candAuthorCount = candAuthor ? (candidateAuthorCounts.get(candAuthor) ?? 0) : 0;
-
-      if (cached) {
-        let needsReevaluation = false;
-
-        if (cached.Type === "skipped" && cached.Reason === "not-first-timer-candidate") {
-          // not-first-timer-candidate で除外された PR が、全体集計窓内に入ったか、
-          // またはコミット数制限撤廃により初回詳細適格になった場合は再評価
-          const isEligibleNow = isCandidateEligibleForFirstTimerDetail(
-            {
-              commitCount: cand.commitCount,
-              isDraft: cand.is_draft,
-              labels: cand.labels,
-              author: cand.author,
-            },
-            candidateAuthorCounts,
-          );
-          needsReevaluation = shouldReevaluateSkippedCandidate({
-            isWithinOverallWindow,
-            isEligibleForDetail: isEligibleNow,
-          });
-        } else if (cached.Type === "sample") {
-          // 旧版でコミット数制限により除外された可能性があるサンプルの再評価判定
-          const shouldReevaluate = shouldReevaluateCachedSample({
-            isFirstTimer: cached.IsFirstTimer,
-            firstTimerReason: cached.FirstTimerReason,
-            firstTimerVersion: cached.FirstTimerVersion,
-            commitCount: cached.CommitCount,
-            authorCountInCandidates: candAuthorCount,
-          });
-
-          if (shouldReevaluate) {
-            // 取得予算が残っている場合のみ再評価へ進む。
-            // 予算が残っていない場合は、キャッシュの値をそのまま採用して全体実績の欠落を防ぐ
-            if (fetched < options.fetchBudget) {
-              needsReevaluation = true;
-            }
-          } else if (
-            cached.IsFirstTimer === false &&
-            (cached.FirstTimerVersion === undefined ||
-              cached.FirstTimerVersion < CURRENT_FIRST_TIMER_VERSION) &&
-            cached.FirstTimerReason === undefined &&
-            cached.CommitCount > 1 &&
-            candAuthorCount > 1
-          ) {
-            // 走査期間内に別 PR がある常連は再取得せず理由を確定させてキャッシュ更新
-            cached.FirstTimerReason = "recurring-author";
-            cached.FirstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
-            cacheModified = true;
-          }
-        }
-
-        if (!needsReevaluation) {
-          if (cached.Type === "sample") {
-            const s = fromCachedSample(cached);
-            samples.push(s);
-          } else {
-            skipped++;
-            skippedCandidates.push({ number: cand.number, mergedAt: new Date(cached.MergedAt) });
-          }
-          continue;
-        }
+  const {
+    samples,
+    skippedCandidates,
+    skippedCount: skipped,
+    fetchedCount: fetched,
+    deferredCount: deferred,
+  } = await orchestrateSampleCollection({
+    client,
+    repository: options.repository,
+    candidates,
+    overallSinceDate,
+    fetchBudget: options.fetchBudget,
+    initialCache: rawCache,
+    onCacheUpdated: (entries) => {
+      if (options.cachePath) {
+        saveSampleCache(options.cachePath, entries);
       }
-
-      // 31〜90日前の PR は初回提出者専用窓。初回候補になり得ない場合は詳細取得をスキップしてキャッシュに skipped を記録
-      if (!isWithinOverallWindow) {
-        const isEligible = isCandidateEligibleForFirstTimerDetail(
-          {
-            commitCount: cand.commitCount,
-            isDraft: cand.is_draft,
-            labels: cand.labels,
-            author: cand.author,
-          },
-          candidateAuthorCounts,
-        );
-
-        if (!isEligible) {
-          skipped++;
-          skippedCandidates.push({ number: cand.number, mergedAt });
-          const skippedEntry: SampleCacheEntry = {
-            Type: "skipped",
-            Number: cand.number,
-            MergedAt: mergedAt.toISOString(),
-            Reason: "not-first-timer-candidate",
-          };
-          cacheIndex.set(cand.number, skippedEntry);
-          cacheModified = true;
-          continue;
-        }
-      }
-
-      if (fetched >= options.fetchBudget) {
-        deferred++;
-        continue;
-      }
-      fetched++;
-
-      try {
-        const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
-        const mergedAt = new Date(mergedAtStr);
-        const candTimeline = await client.getIssueTimeline(options.repository, cand.number);
-
-        const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
-        if (!readyAt) {
-          skipped++;
-          skippedCandidates.push({ number: cand.number, mergedAt });
-          const skippedEntry: SampleCacheEntry = {
-            Type: "skipped",
-            Number: cand.number,
-            MergedAt: mergedAt.toISOString(),
-            Reason: "no-ready",
-          };
-          cacheIndex.set(cand.number, skippedEntry);
-          cacheModified = true;
-          continue;
-        }
-
-        const readyDays = (mergedAt.getTime() - readyAt.getTime()) / (1000 * 60 * 60 * 24);
-        if (readyDays < 0) {
-          skipped++;
-          skippedCandidates.push({ number: cand.number, mergedAt });
-          const skippedEntry: SampleCacheEntry = {
-            Type: "skipped",
-            Number: cand.number,
-            MergedAt: mergedAt.toISOString(),
-            Reason: "negative-ready",
-          };
-          cacheIndex.set(cand.number, skippedEntry);
-          cacheModified = true;
-          continue;
-        }
-
-        const candDetail = await client.getPullRequestDetails(options.repository, cand.number);
-        const candCreatedAt = new Date(candDetail.createdAt);
-        const candCommits = candDetail.commits;
-        const candLatestCommit =
-          candCommits.length > 0 ? candCommits[candCommits.length - 1] : null;
-        const candLatestCommittedDate = candLatestCommit
-          ? new Date(candLatestCommit.committedDate)
-          : candCreatedAt;
-
-        const totalDays = (mergedAt.getTime() - candCreatedAt.getTime()) / (1000 * 60 * 60 * 24);
-        const turnDays =
-          (mergedAt.getTime() - candLatestCommittedDate.getTime()) / (1000 * 60 * 60 * 24);
-
-        const isCandidate = isFirstTimerSampleCandidate({
-          commitCount: candCommits.length,
-          timeline: candTimeline,
-          isDraft: Boolean(cand.is_draft),
-        });
-
-        const sample: MergedCandidateSample = {
-          number: cand.number,
-          title: cand.title,
-          createdAt: candDetail.createdAt,
-          latestCommittedDate: candLatestCommittedDate.toISOString(),
-          commitCount: candCommits.length,
-          readyAt: readyAt.toISOString(),
-          mergedAt: mergedAt.toISOString(),
-          totalDays: Number(totalDays.toFixed(2)),
-          turnDays: Number(turnDays.toFixed(2)),
-          days: Number(readyDays.toFixed(2)),
-          author: candDetail.author,
-          firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
-          ...(!isCandidate
-            ? {
-                isFirstTimer: false,
-                firstTimerReason: "timeline-blocking",
-              }
-            : {}),
-        };
-        samples.push(sample);
-        const newCached = toCachedSample(sample);
-        cacheIndex.set(cand.number, newCached);
-        cacheModified = true;
-      } catch (err: unknown) {
-        // 一部だけ欠けた統計は誤った比較値になるため、握りつぶさず中断する
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(`マージ済み PR #${cand.number} のサンプル計測に失敗しました: ${msg}`, {
-          cause: err,
-        });
-      }
-    }
-
-    // 初回提出者（1コミット・初期健康体・単発・累計マージ1件）の判定
-    // 1. バッチ内に複数回登場する author、または走査した全 candidates 内で複数回登場する author は常連として除外（isFirstTimer = false）
-    const authorCounts = new Map<string, number>();
-    for (const s of samples) {
-      if (s.author) {
-        authorCounts.set(s.author, (authorCounts.get(s.author) ?? 0) + 1);
-      }
-    }
-    for (const s of samples) {
-      const countInCandidates = s.author ? (candidateAuthorCounts.get(s.author) ?? 0) : 0;
-      const countInSamples = s.author ? (authorCounts.get(s.author) ?? 0) : 0;
-      if (countInCandidates > 1 || countInSamples > 1) {
-        if (s.isFirstTimer !== false) {
-          s.isFirstTimer = false;
-          s.firstTimerReason = "recurring-author";
-          s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
-          const cached = cacheIndex.get(s.number);
-          if (cached && cached.Type === "sample") {
-            cached.IsFirstTimer = false;
-            cached.FirstTimerReason = "recurring-author";
-            cached.FirstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
-            cacheModified = true;
-          }
-        }
-      }
-    }
-
-    // 2. 単発 author かつ 1 コミットの未判定候補の累計マージ数を GraphQL エイリアスで一括照会
-    const candidateAuthors = extractSingleHitCandidateLogins(samples);
-    if (candidateAuthors.length > 0) {
-      const CHUNK_SIZE = 30;
-      const authorMergedCounts = new Map<string, number>();
-      for (let i = 0; i < candidateAuthors.length; i += CHUNK_SIZE) {
-        const chunk = candidateAuthors.slice(i, i + CHUNK_SIZE);
-        const query = buildAuthorMergedCountQuery(options.repository, chunk);
-        if (query) {
-          const data = await client.graphql<Record<string, { issueCount?: number }>>(query);
-          const counts = parseAuthorMergedCounts(chunk, data);
-          for (const [author, count] of counts) {
-            authorMergedCounts.set(author, count);
-          }
-        }
-      }
-
-      for (const s of samples) {
-        if (s.author && authorMergedCounts.has(s.author)) {
-          const count = authorMergedCounts.get(s.author);
-          if (count !== undefined) {
-            s.isFirstTimer = count === 1;
-            s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
-            if (count !== 1) {
-              s.firstTimerReason = "lifetime-merged";
-            }
-            const cached = cacheIndex.get(s.number);
-            if (cached && cached.Type === "sample") {
-              cached.IsFirstTimer = s.isFirstTimer;
-              cached.FirstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
-              if (count !== 1) {
-                cached.FirstTimerReason = "lifetime-merged";
-              }
-              cacheModified = true;
-            }
-          }
-        }
-      }
-    }
-  } finally {
-    // マージ済み PR の履歴は後から変わらないので、途中で失敗しても取得済みの分は保存し、次回の再取得を避ける
-    if (options.cachePath && cacheModified) {
-      saveSampleCache(options.cachePath, Array.from(cacheIndex.values()));
-    }
-  }
+    },
+  });
 
   log(
     `サンプル         : 採用 ${samples.length} 件・除外 ${skipped} 件（キャッシュ ${samples.length + skipped - fetched} 件を再利用、今回の新規取得 ${fetched} 件／予算 ${options.fetchBudget} 件）`,
@@ -737,18 +361,8 @@ export async function runProgressCli(
   // 前回行が旧定義（QueueBasis 列なし）の場合、ActiveAhead の定義が異なるため前回比は出さない
   const prev = prevRecord && prevRecord.QueueBasis === QUEUE_BASIS ? prevRecord : null;
   const front = queueInfo.front;
-  let frontDeltaText = "";
-  if (prev && prev.FrontNumber !== "") {
-    const prevFrontNum = Number(prev.FrontNumber);
-    const frontDiff = front.number - prevFrontNum;
-    if (frontDiff > 0) {
-      frontDeltaText = ` [前回 #${prevFrontNum} から +${frontDiff} 件前進]`;
-    } else if (frontDiff === 0) {
-      frontDeltaText = " [前回から変動なし]";
-    } else {
-      frontDeltaText = ` [前回 #${prevFrontNum}]`;
-    }
-  }
+  const prevFrontNum = prev && prev.FrontNumber !== "" ? Number(prev.FrontNumber) : undefined;
+  const frontDeltaText = formatFrontDeltaText(front.number, prevFrontNum);
   const deltaOf = (current: number, previous: number | string | undefined): string =>
     prev && previous !== undefined && previous !== ""
       ? ` ${formatDelta(current, Number(previous))}`
@@ -895,158 +509,6 @@ export async function runProgressCli(
   }
 
   return { snapshot };
-}
-
-function logRivals(rivals: ProgressRivalPr[], log: (msg: string) => void): void {
-  if (rivals.length === 0) return;
-  log("");
-  log(`直前のライバルPR（あなたの直前に並んでいるPR TOP ${rivals.length}）:`);
-  for (const r of rivals) {
-    log(
-      `  #${r.number}  起票: ${formatDateTimeWithDay(r.createdAt)} / 更新: ${formatDateTimeWithDay(r.updatedAt)}  ${r.title}`,
-    );
-  }
-}
-
-/** 過去のマージ実績との比較（統計・位置づけ・追い越し・サンプル一覧）を出力する */
-function logBenchmark(
-  snapshot: ProgressSnapshot,
-  options: ProgressCliOptions,
-  current: { totalLifetimeDays: number; turnLatencyDays: number; waitDays: number },
-  log: (msg: string) => void,
-): void {
-  log("----------------------------------------");
-  log(`比較対象         : 過去 ${options.lookbackDays} 日間のマージ済みPR`);
-  log(`採用サンプル     : ${snapshot.SampleCount} 件`);
-  log(`条件不成立で除外 : ${snapshot.SkippedCount} 件`);
-
-  const { Guidance: guidance, Comparison: comparison } = snapshot;
-  if (snapshot.SampleCount === 0 || !guidance || !comparison) {
-    log("比較可能なサンプルがありませんでした。");
-    return;
-  }
-
-  const block = (
-    title: string,
-    median: number | null,
-    p75: number | null,
-    max: number | null,
-    currentDays: number,
-    note = "",
-  ): void => {
-    log(title);
-    log(
-      `   中央値: ${formatHumanDays(median ?? 0)} | 75%点: ${formatHumanDays(p75 ?? 0)} | 最大: ${formatHumanDays(max ?? 0)}`,
-    );
-    log(`   あなたの待機 : ${formatHumanDays(currentDays)}${note}`);
-  };
-
-  log("");
-  log("【過去実績との統計比較】");
-  block(
-    "1. 通算日数 (Total Lifetime: 作成→マージ)",
-    snapshot.TotalMedianDays,
-    snapshot.TotalP75Days,
-    snapshot.TotalMaxDays,
-    current.totalLifetimeDays,
-  );
-  if (snapshot.FirstTimerMedianDays !== null && snapshot.FirstTimerMedianDays !== undefined) {
-    const ftDays = snapshot.FirstTimerLookbackDays ?? options.firstTimerLookbackDays;
-    log(
-      `   [初回提出者コホート実績 (過去 ${ftDays} 日間・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)]`,
-    );
-    log(
-      `     通算所要日数   : 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
-    );
-    if (
-      snapshot.FirstTimerTurnMedianDays !== null &&
-      snapshot.FirstTimerTurnMedianDays !== undefined
-    ) {
-      log(
-        `     最終コミット後 : 中央値: ${formatHumanDays(snapshot.FirstTimerTurnMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerTurnP75Days ?? snapshot.FirstTimerTurnMedianDays)}`,
-      );
-    }
-  }
-  log("");
-  block(
-    "2. レビュー待ち (Turn Latency: 最新コミット→マージ)",
-    snapshot.TurnMedianDays,
-    snapshot.TurnP75Days,
-    snapshot.TurnMaxDays,
-    current.turnLatencyDays,
-    snapshot.CommitCount <= 1 ? " [初手から手直しなし]" : "",
-  );
-  log("");
-  block(
-    "3. （参考）条件成立後 (ReadyAt→マージ)",
-    snapshot.ReadyMedianDays,
-    snapshot.ReadyP75Days,
-    snapshot.ReadyMaxDays,
-    current.waitDays,
-  );
-
-  if (snapshot.SampleCount < 10) {
-    log("※ サンプルが少ないため、数値は変動しやすくなっています。");
-  }
-
-  log("----------------------------------------");
-  log("参考目安:");
-  const guide = (label: string, g: ReferenceGuidance): void =>
-    log(
-      `  [${label}] ${describeGuidance(g, formatHumanDays)} （サンプルの ${g.ShorterSharePct}% はこれより短い期間でマージ済み）`,
-    );
-  guide("レビュー待ち", guidance.Turn);
-  guide("通算日数    ", guidance.Total);
-  guide("条件成立後  ", guidance.Ready);
-
-  log("");
-  log("【条件成立日時の比較（ReadyAt）】");
-  log(`  採用サンプル内で、自分より後に条件が整いマージ済み : ${comparison.LaterReady} 件`);
-  log("");
-  log("【作成日・PR番号の比較（CreatedAt / PR番号）】");
-  log(`  自分より後に作成されマージ済み   : ${comparison.LaterCreated} 件`);
-  if (
-    comparison.FirstTimerLaterCreated !== undefined &&
-    comparison.RepeatOrExpressLaterCreated !== undefined
-  ) {
-    log(`    うち初回提出者による追い越し   : ${comparison.FirstTimerLaterCreated} 件`);
-    log(`    うち常連・特急レーンによる追い越し: ${comparison.RepeatOrExpressLaterCreated} 件`);
-    if (comparison.UnknownLaterCreated !== undefined && comparison.UnknownLaterCreated > 0) {
-      log(`    うち未判定による追い越し       : ${comparison.UnknownLaterCreated} 件`);
-    }
-  }
-  log(`  自分より前に作成されマージ済み   : ${comparison.EarlierCreated} 件`);
-  log(`  自分より新しいPR番号 (>${options.targetPr}) : ${comparison.NewerNumber} 件`);
-  log(`  自分より古いPR番号   (<${options.targetPr}) : ${comparison.OlderNumber} 件`);
-  log(`  ※ ${describeOvertake(comparison)}`);
-
-  log("");
-  log("参考サンプル（マージ日時順）:");
-  for (const s of snapshot.Samples) {
-    const relation = s.Relation === "older" ? "古い  " : "新しい";
-    const cohort = s.IsFirstTimer === true ? "初回" : s.IsFirstTimer === false ? "常連" : "    ";
-    log(
-      `  #${s.Number} ${relation} [${cohort}] ${s.CommitCount}コミット  レビュー待ち ${s.TurnDays.toFixed(1)}日 / 通算 ${s.TotalDays.toFixed(1)}日 / 成立後 ${s.ReadyDays.toFixed(1)}日  最新コミット ${formatDateTimeWithDay(s.LatestCommittedDate)}  マージ ${formatDateTimeWithDay(s.MergedAt)}`,
-    );
-  }
-  log("※ 待機はラベルとDraftの履歴に基づきます。レビュー本文・チェック履歴は解析しません。");
-  log("※ 候補検索は現在の必須ラベルを使うため、マージ後にそれらが外れたPRは含まれません。");
-  log("※ 日数差は実績との比較であり、残り待ち時間の予測ではありません。");
-}
-
-/**
- * 基準 PR が観測対象外で記録をスキップしたことを、Actions 上で見落とさないよう warning として出力する。
- */
-export function reportSkippedObservation(
-  snapshot: ProgressSnapshot | null,
-  env: NodeJS.ProcessEnv,
-  log: (msg: string) => void = console.log,
-): void {
-  if (snapshot === null && env.GITHUB_ACTIONS) {
-    log(
-      "::warning::基準 PR が観測対象外（クローズ済み・Draft・比較条件未達）のため、今回は履歴とスナップショットを記録していません",
-    );
-  }
 }
 
 /**
