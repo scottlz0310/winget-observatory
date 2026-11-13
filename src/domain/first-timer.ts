@@ -5,6 +5,9 @@
 
 import { isBlockedLabel } from "./progress";
 
+/** 現在の初回提出者判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃新版） */
+export const CURRENT_FIRST_TIMER_VERSION = 2;
+
 export interface TimelineEventLike {
   event: string;
   created_at?: string;
@@ -169,4 +172,55 @@ export function parseAuthorMergedCounts(
     counts.set(author, issueCount);
   }
   return counts;
+}
+
+/**
+ * キャッシュ済みのサンプルが、初回判定ロジックの改定（コミット数制限撤廃）に伴い
+ * 再評価（タイムライン・詳細の再取得）を必要とするか判定する純粋関数。
+ *
+ * 旧版で IsFirstTimer: false と判定された複数コミットの PR は、
+ * 「コミット数 > 1」のみを理由に除外されていた可能性がある。
+ * 一方、タイムラインに阻害履歴があることが確定している場合（FirstTimerReason: "timeline-blocking"）や、
+ * 累計マージ数が2件以上と確定している場合（FirstTimerReason: "lifetime-merged"）、
+ * あるいは走査期間内に別 PR が存在する常連（authorCountInCandidates > 1）は、
+ * コミット数制限に関係なく除外が確定しているため再評価不要。
+ */
+export function shouldReevaluateCachedSample(params: {
+  isFirstTimer?: boolean;
+  firstTimerReason?: string;
+  firstTimerVersion?: number;
+  commitCount: number;
+  authorCountInCandidates: number;
+}): boolean {
+  if (
+    params.firstTimerVersion !== undefined &&
+    params.firstTimerVersion >= CURRENT_FIRST_TIMER_VERSION
+  ) {
+    return false;
+  }
+  if (
+    params.firstTimerReason === "timeline-blocking" ||
+    params.firstTimerReason === "lifetime-merged" ||
+    params.firstTimerReason === "recurring-author"
+  ) {
+    return false;
+  }
+
+  // 旧版で IsFirstTimer: false と判定された複数コミットのサンプル
+  if (params.isFirstTimer === false && params.commitCount > 1) {
+    return params.authorCountInCandidates <= 1;
+  }
+
+  return false;
+}
+
+/**
+ * キャッシュ済みのスキップ済み PR（Reason: "not-first-timer-candidate"）が、
+ * 再評価（詳細取得）を必要とするか判定する純粋関数。
+ */
+export function shouldReevaluateSkippedCandidate(params: {
+  isWithinOverallWindow: boolean;
+  isEligibleForDetail: boolean;
+}): boolean {
+  return params.isWithinOverallWindow || params.isEligibleForDetail;
 }

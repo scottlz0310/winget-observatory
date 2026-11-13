@@ -980,4 +980,31 @@ describe("buildDashboard: 過去実績との比較", () => {
 
     rmSync(tempDir, { recursive: true, force: true });
   });
+
+  test("renderFirstTimerHeroSummary: FirstTimerTurnMedianDays と FirstTimerTurnP75Days が設定されている場合に最終コミット後 (Turn) が出力される", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-ft-turn-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        TargetPr: 123456,
+        LookbackDays: 30,
+        FirstTimerLookbackDays: 90,
+        FirstTimerMedianDays: 37.0,
+        FirstTimerP75Days: 39.0,
+        FirstTimerTurnMedianDays: 5.5,
+        FirstTimerTurnP75Days: 8.2,
+        FirstTimerSampleCount: 8,
+      }),
+      "utf-8",
+    );
+    const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+    expect(html).toContain("最終コミット後 (Turn): <strong>5.5</strong> 日");
+    expect(html).toContain("最終コミット後 (Turn): <strong>8.2</strong> 日");
+
+    rmSync(tempDir, { recursive: true, force: true });
+  });
 });

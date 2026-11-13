@@ -12,7 +12,7 @@ import {
 } from "../../src/cli/progress";
 import { REQUIRED_LABELS } from "../../src/domain/progress";
 import { parseSampleCache, serializeSampleCacheEntries } from "../../src/domain/sample-cache";
-import type { SampleCacheEntry } from "../../src/models/sample-cache";
+import type { CachedSampleEntry, SampleCacheEntry } from "../../src/models/sample-cache";
 
 describe("CLI: progress parseArgs", () => {
   test("デフォルト値が正しく設定される", () => {
@@ -2572,6 +2572,558 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const logText = logs.join("\n");
       expect(logText).toContain("通算所要日数   : 中央値: 15.0日");
       expect(logText).toContain("最終コミット後 : 中央値: 5.0日");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("旧版キャッシュの再評価: sample/IsFirstTimer:false（複数コミット・健康体・生涯マージ1件）が事前投入されている場合に再評価されてコホートに採用される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-sample-"));
+    try {
+      const cachePath = join(tmpDir, "merged-samples.jsonl");
+      const dayMs = 24 * 60 * 60 * 1000;
+      const now = new Date("2026-11-01T00:00:00Z");
+
+      const labels = [
+        { name: "New-Package" },
+        { name: "Azure-Pipeline-Passed" },
+        { name: "Validation-Completed" },
+      ];
+
+      // 旧版キャッシュ: 複数コミット（CommitCount: 3）のため IsFirstTimer: false として記録されていた
+      const legacySample: CachedSampleEntry = {
+        Type: "sample",
+        Number: 801,
+        Title: "PR 801",
+        CreatedAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
+        LatestCommittedDate: new Date(now.getTime() - 25 * dayMs).toISOString(),
+        CommitCount: 3,
+        ReadyAt: new Date(now.getTime() - 34 * dayMs).toISOString(),
+        MergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+        TotalDays: 15.0,
+        TurnDays: 5.0,
+        ReadyDays: 14.0,
+        Author: "newbie-dev",
+        IsFirstTimer: false, // 旧版の判定（由来記録なし）
+      };
+      writeFileSync(cachePath, `${JSON.stringify(legacySample)}\n`, "utf-8");
+
+      let timelineFetched = false;
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 1,
+              items: [
+                {
+                  number: 801,
+                  title: "PR 801",
+                  html_url: "https://github.com/test/repo/pull/801",
+                  created_at: new Date(now.getTime() - 35 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
+                  labels,
+                  is_draft: false,
+                  author: "newbie-dev",
+                  commitCount: 3,
+                  pull_request: {
+                    merged_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
+                  },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: labels.map((l) => l.name),
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          return {
+            number: num,
+            title: `PR ${num}`,
+            url: `u${num}`,
+            state: "MERGED" as const,
+            isDraft: false,
+            createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
+            updatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            mergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            closedAt: null,
+            labels: labels.map((l) => l.name),
+            commits: [
+              { oid: "c1", committedDate: new Date(now.getTime() - 35 * dayMs).toISOString() },
+              { oid: "c2", committedDate: new Date(now.getTime() - 30 * dayMs).toISOString() },
+              { oid: "c3", committedDate: new Date(now.getTime() - 25 * dayMs).toISOString() },
+            ],
+            author: "newbie-dev",
+          };
+        },
+        getIssueTimeline: async () => {
+          timelineFetched = true;
+          return labels.map((l) => ({
+            event: "labeled",
+            created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+            label: { name: l.name },
+          }));
+        },
+        graphql: async () => {
+          return { u_0: { issueCount: 1 } };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 10,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // 旧キャッシュの IsFirstTimer: false が再評価され、コホートに採用されたこと！
+      expect(timelineFetched).toBe(true);
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      expect(snapshot?.FirstTimerMedianDays).toBe(15.0);
+      expect(snapshot?.FirstTimerTurnMedianDays).toBe(5.0);
+
+      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 2 で更新されたこと
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached801 = savedCache.find((e) => e.Number === 801);
+      expect(cached801?.Type).toBe("sample");
+      if (cached801?.Type === "sample") {
+        expect(cached801.IsFirstTimer).toBe(true);
+        expect(cached801.FirstTimerVersion).toBe(2);
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("旧版キャッシュの再評価: sample/IsFirstTimer:false（阻害履歴あり）は再評価されても除外が正当に保持される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-blocked-"));
+    try {
+      const cachePath = join(tmpDir, "merged-samples.jsonl");
+      const dayMs = 24 * 60 * 60 * 1000;
+      const now = new Date("2026-11-01T00:00:00Z");
+
+      const labels = [
+        { name: "New-Package" },
+        { name: "Azure-Pipeline-Passed" },
+        { name: "Validation-Completed" },
+      ];
+
+      // 旧版キャッシュ: IsFirstTimer: false
+      const legacySample: CachedSampleEntry = {
+        Type: "sample",
+        Number: 802,
+        Title: "PR 802",
+        CreatedAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
+        LatestCommittedDate: new Date(now.getTime() - 25 * dayMs).toISOString(),
+        CommitCount: 3,
+        ReadyAt: new Date(now.getTime() - 34 * dayMs).toISOString(),
+        MergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+        TotalDays: 15.0,
+        TurnDays: 5.0,
+        ReadyDays: 14.0,
+        Author: "blocked-dev",
+        IsFirstTimer: false,
+      };
+      writeFileSync(cachePath, `${JSON.stringify(legacySample)}\n`, "utf-8");
+
+      let graphqlCalled = false;
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 1,
+              items: [
+                {
+                  number: 802,
+                  title: "PR 802",
+                  html_url: "https://github.com/test/repo/pull/802",
+                  created_at: new Date(now.getTime() - 35 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
+                  labels,
+                  is_draft: false,
+                  author: "blocked-dev",
+                  commitCount: 3,
+                  pull_request: {
+                    merged_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
+                  },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: labels.map((l) => l.name),
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          return {
+            number: num,
+            title: `PR ${num}`,
+            url: `u${num}`,
+            state: "MERGED" as const,
+            isDraft: false,
+            createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
+            updatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            mergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            closedAt: null,
+            labels: labels.map((l) => l.name),
+            commits: [
+              { oid: "c1", committedDate: new Date(now.getTime() - 35 * dayMs).toISOString() },
+              { oid: "c2", committedDate: new Date(now.getTime() - 30 * dayMs).toISOString() },
+              { oid: "c3", committedDate: new Date(now.getTime() - 25 * dayMs).toISOString() },
+            ],
+            author: "blocked-dev",
+          };
+        },
+        getIssueTimeline: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return labels.map((l) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+              label: { name: l.name },
+            }));
+          }
+          // PR 802 のタイムラインに阻害ラベル履歴が存在する（付与後に解除されてマージ）
+          return [
+            {
+              event: "labeled",
+              created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+              label: { name: "Needs-Author-Feedback" }, // 阻害ラベル
+            },
+            {
+              event: "unlabeled",
+              created_at: new Date(now.getTime() - 33 * dayMs).toISOString(),
+              label: { name: "Needs-Author-Feedback" }, // 解除
+            },
+            ...labels.map((l) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 32 * dayMs).toISOString(),
+              label: { name: l.name },
+            })),
+          ];
+        },
+        graphql: async () => {
+          graphqlCalled = true;
+          return {};
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 10,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // 阻害履歴があるためコホートから除外されたままであること
+      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+      expect(graphqlCalled).toBe(false); // 阻害確定のため GraphQL 照会は呼ばれない
+
+      // キャッシュファイルで FirstTimerReason: "timeline-blocking", FirstTimerVersion: 2 で更新されたこと
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached802 = savedCache.find((e) => e.Number === 802);
+      expect(cached802?.Type).toBe("sample");
+      if (cached802?.Type === "sample") {
+        expect(cached802.IsFirstTimer).toBe(false);
+        expect(cached802.FirstTimerReason).toBe("timeline-blocking");
+        expect(cached802.FirstTimerVersion).toBe(2);
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("旧版キャッシュの再評価: skipped/Reason:not-first-timer-candidate（31〜90日前・複数コミット・健康体・生涯マージ1件）が事前投入されている場合に再評価されてコホートに採用される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-skipped-"));
+    try {
+      const cachePath = join(tmpDir, "merged-samples.jsonl");
+      const dayMs = 24 * 60 * 60 * 1000;
+      const now = new Date("2026-11-01T00:00:00Z");
+
+      const labels = [
+        { name: "New-Package" },
+        { name: "Azure-Pipeline-Passed" },
+        { name: "Validation-Completed" },
+      ];
+
+      // 45日前（全体集計窓30日外、90日初回窓内）の PR が旧版で not-first-timer-candidate として除外されていた
+      const legacySkipped: SampleCacheEntry = {
+        Type: "skipped",
+        Number: 803,
+        MergedAt: new Date(now.getTime() - 45 * dayMs).toISOString(),
+        Reason: "not-first-timer-candidate",
+      };
+      writeFileSync(cachePath, `${JSON.stringify(legacySkipped)}\n`, "utf-8");
+
+      let detailsFetched = false;
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 1,
+              items: [
+                {
+                  number: 803,
+                  title: "PR 803",
+                  html_url: "https://github.com/test/repo/pull/803",
+                  created_at: new Date(now.getTime() - 55 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
+                  labels,
+                  is_draft: false,
+                  author: "older-first-timer",
+                  commitCount: 3, // 複数コミット
+                  pull_request: {
+                    merged_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
+                  },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: labels.map((l) => l.name),
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          detailsFetched = true;
+          return {
+            number: num,
+            title: `PR ${num}`,
+            url: `u${num}`,
+            state: "MERGED" as const,
+            isDraft: false,
+            createdAt: new Date(now.getTime() - 55 * dayMs).toISOString(),
+            updatedAt: new Date(now.getTime() - 45 * dayMs).toISOString(),
+            mergedAt: new Date(now.getTime() - 45 * dayMs).toISOString(),
+            closedAt: null,
+            labels: labels.map((l) => l.name),
+            commits: [
+              { oid: "c1", committedDate: new Date(now.getTime() - 55 * dayMs).toISOString() },
+              { oid: "c2", committedDate: new Date(now.getTime() - 50 * dayMs).toISOString() },
+              { oid: "c3", committedDate: new Date(now.getTime() - 48 * dayMs).toISOString() },
+            ],
+            author: "older-first-timer",
+          };
+        },
+        getIssueTimeline: async () => {
+          return labels.map((l) => ({
+            event: "labeled",
+            created_at: new Date(now.getTime() - 54 * dayMs).toISOString(),
+            label: { name: l.name },
+          }));
+        },
+        graphql: async () => {
+          return { u_0: { issueCount: 1 } };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 10,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // 全体窓外（45日前）であってもスキップが解除されて詳細取得が実行され、コホートに採用されたこと！
+      expect(detailsFetched).toBe(true);
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      expect(snapshot?.FirstTimerMedianDays).toBe(10.0); // 通算 10日
+      expect(snapshot?.FirstTimerTurnMedianDays).toBe(3.0); // Turn Latency 3日
+
+      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 2 で記録されたこと
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached803 = savedCache.find((e) => e.Number === 803);
+      expect(cached803?.Type).toBe("sample");
+      if (cached803?.Type === "sample") {
+        expect(cached803.IsFirstTimer).toBe(true);
+        expect(cached803.FirstTimerVersion).toBe(2);
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("旧版キャッシュの再評価: skipped/Reason:not-first-timer-candidate（31〜90日前・Draftあり）は依然として不適格のため再取得されずスキップが維持される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-draft-skipped-"));
+    try {
+      const cachePath = join(tmpDir, "merged-samples.jsonl");
+      const dayMs = 24 * 60 * 60 * 1000;
+      const now = new Date("2026-11-01T00:00:00Z");
+
+      const labels = [
+        { name: "New-Package" },
+        { name: "Azure-Pipeline-Passed" },
+        { name: "Validation-Completed" },
+      ];
+
+      // 45日前（全体窓外、90日初回窓内）の PR が not-first-timer-candidate として除外されていた
+      const legacySkipped: SampleCacheEntry = {
+        Type: "skipped",
+        Number: 804,
+        MergedAt: new Date(now.getTime() - 45 * dayMs).toISOString(),
+        Reason: "not-first-timer-candidate",
+      };
+      writeFileSync(cachePath, `${JSON.stringify(legacySkipped)}\n`, "utf-8");
+
+      let detailsFetched = false;
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 1,
+              items: [
+                {
+                  number: 804,
+                  title: "PR 804",
+                  html_url: "https://github.com/test/repo/pull/804",
+                  created_at: new Date(now.getTime() - 55 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
+                  labels,
+                  is_draft: true, // Draft のため依然として不適格
+                  author: "draft-dev",
+                  commitCount: 2,
+                  pull_request: {
+                    merged_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
+                  },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: labels.map((l) => l.name),
+              commits: [
+                {
+                  oid: "oid500",
+                  messageHeadline: "initial",
+                  committedDate: "2026-11-01T00:00:00Z",
+                },
+              ],
+            };
+          }
+          detailsFetched = true;
+          throw new Error("不適格なため詳細フェッチは呼ばれないはず");
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 10,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // Draft のため再取得されず、スキップが維持されること
+      expect(detailsFetched).toBe(false);
+      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+
+      // キャッシュファイルで skipped のまま維持されていること
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached804 = savedCache.find((e) => e.Number === 804);
+      expect(cached804?.Type).toBe("skipped");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

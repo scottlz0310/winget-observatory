@@ -3,6 +3,8 @@
  * 外部依存を持たない純粋な TypeScript 型定義のみを提供する。
  */
 
+import type { FirstTimerDisqualificationReason } from "./sample-cache";
+
 export interface ProgressCommitSummary {
   oid?: string;
   messageHeadline?: string;
@@ -70,6 +72,8 @@ export interface MergedCandidateSample {
   days: number;
   author?: string;
   isFirstTimer?: boolean;
+  firstTimerReason?: FirstTimerDisqualificationReason;
+  firstTimerVersion?: number;
 }
 
 export interface ProgressPercentileMetrics {
