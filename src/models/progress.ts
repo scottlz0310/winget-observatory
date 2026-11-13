@@ -237,6 +237,10 @@ export interface ProgressSnapshot {
   FirstTimerMedianDays?: number | null;
   /** 初回提出者コホートの通算所要日数75%点（サンプル不足時は null） */
   FirstTimerP75Days?: number | null;
+  /** 初回提出者コホートの最終コミット後所要日数（Turn Latency）中央値（サンプル不足時は null） */
+  FirstTimerTurnMedianDays?: number | null;
+  /** 初回提出者コホートの最終コミット後所要日数（Turn Latency）75%点（サンプル不足時は null） */
+  FirstTimerTurnP75Days?: number | null;
   /** 初回提出者サンプルの採用件数 */
   FirstTimerSampleCount?: number;
 }

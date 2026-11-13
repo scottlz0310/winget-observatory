@@ -66,10 +66,11 @@ export function countCandidateAuthors(candidates: Array<{ author?: string }>): M
  * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定する。
  *
  * 以下のいずれかに該当する場合は初回提出者になり得ないため false を返す：
- * 1. コミット数が判明しており、1 以外である（手直しあり）
- * 2. Draft である
- * 3. 阻害ラベルが付与されている
- * 4. 作者が判明しており、同期間の全候補内で複数回出現している（常連）
+ * 1. Draft である
+ * 2. 阻害ラベルが付与されている
+ * 3. 作者が判明しており、同期間の全候補内で複数回出現している（常連）
+ *
+ * コミット数は手直し（2〜7コミット）を含む初回提出者全体を対象とするため制限しない。
  *
  * @param candidate 検査対象の候補メタデータ
  * @param authorCounts 同期間の全候補における作者ごとの出現頻度マップ
@@ -78,9 +79,6 @@ export function isCandidateEligibleForFirstTimerDetail(
   candidate: CandidatePreFilterInput,
   authorCounts: Map<string, number>,
 ): boolean {
-  if (candidate.commitCount !== undefined && candidate.commitCount !== 1) {
-    return false;
-  }
   if (candidate.isDraft) {
     return false;
   }
@@ -94,16 +92,14 @@ export function isCandidateEligibleForFirstTimerDetail(
 }
 
 /**
- * サンプルが初回提出者（1コミット・初期健康体）の前提条件を満たすか判定する。
+ * サンプルが初回提出者（初期健康体）の前提条件を満たすか判定する。
+ * コミット数は手直しを含む初回提出者全体を対象とするため制限しない。
  */
 export function isFirstTimerSampleCandidate(sample: {
-  commitCount: number;
+  commitCount?: number;
   timeline?: TimelineEventLike[];
   isDraft?: boolean;
 }): boolean {
-  if (sample.commitCount !== 1) {
-    return false;
-  }
   if (sample.isDraft) {
     return false;
   }
@@ -115,10 +111,10 @@ export function isFirstTimerSampleCandidate(sample: {
 
 /**
  * サンプル一覧から「作者が判明しており、同一サンプル内で1件しか登場しない（単発）」
- * かつ 1 コミットの候補作者 login の一意なリストを抽出する。
+ * 候補作者 login の一意なリストを抽出する。
  */
 export function extractSingleHitCandidateLogins(
-  samples: Array<{ author?: string; commitCount: number; isFirstTimer?: boolean }>,
+  samples: Array<{ author?: string; commitCount?: number; isFirstTimer?: boolean }>,
 ): string[] {
   const authorCounts = new Map<string, number>();
   for (const s of samples) {
@@ -129,8 +125,8 @@ export function extractSingleHitCandidateLogins(
 
   const singleHitLogins = new Set<string>();
   for (const s of samples) {
-    if (s.author && authorCounts.get(s.author) === 1 && s.commitCount === 1) {
-      // 既に isFirstTimer が確定していない候補
+    if (s.author && authorCounts.get(s.author) === 1) {
+      // 既に isFirstTimer が確定（true/false 明確に判定済み）していない候補
       if (s.isFirstTimer === undefined) {
         singleHitLogins.add(s.author);
       }

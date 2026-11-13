@@ -461,11 +461,6 @@ export async function runProgressCli(
         if (!needsReevaluation) {
           if (cached.Type === "sample") {
             const s = fromCachedSample(cached);
-            if (s.isFirstTimer === undefined && s.commitCount > 1) {
-              s.isFirstTimer = false;
-              cached.IsFirstTimer = false;
-              cacheModified = true;
-            }
             samples.push(s);
           } else {
             skipped++;
@@ -893,8 +888,19 @@ function logBenchmark(
   if (snapshot.FirstTimerMedianDays !== null && snapshot.FirstTimerMedianDays !== undefined) {
     const ftDays = snapshot.FirstTimerLookbackDays ?? options.firstTimerLookbackDays;
     log(
-      `   [初回提出者コホート実績 (過去 ${ftDays} 日間・1コミット・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)] 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
+      `   [初回提出者コホート実績 (過去 ${ftDays} 日間・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)]`,
     );
+    log(
+      `     通算所要日数   : 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
+    );
+    if (
+      snapshot.FirstTimerTurnMedianDays !== null &&
+      snapshot.FirstTimerTurnMedianDays !== undefined
+    ) {
+      log(
+        `     最終コミット後 : 中央値: ${formatHumanDays(snapshot.FirstTimerTurnMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerTurnP75Days ?? snapshot.FirstTimerTurnMedianDays)}`,
+      );
+    }
   }
   log("");
   block(

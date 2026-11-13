@@ -422,8 +422,8 @@ ${Object.values(oldRow).join(",")}
         sampleCount: 5,
         skippedCount: 0,
         total: { median: 37.0, p75: 39.0, max: 45.0 },
-        turn: { median: 37.0, p75: 39.0, max: 45.0 },
-        ready: { median: 37.0, p75: 39.0, max: 45.0 },
+        turn: { median: 12.5, p75: 15.0, max: 20.0 },
+        ready: { median: 10.0, p75: 14.0, max: 18.0 },
       },
       firstTimerSampleCount: 5,
       skippedCount: 0,
@@ -436,6 +436,8 @@ ${Object.values(oldRow).join(",")}
     expect(snapshot.FirstTimerLookbackDays).toBe(90);
     expect(snapshot.FirstTimerMedianDays).toBe(37.0);
     expect(snapshot.FirstTimerP75Days).toBe(39.0);
+    expect(snapshot.FirstTimerTurnMedianDays).toBe(12.5);
+    expect(snapshot.FirstTimerTurnP75Days).toBe(15.0);
     expect(snapshot.FirstTimerSampleCount).toBe(5);
   });
 });

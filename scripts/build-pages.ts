@@ -270,11 +270,23 @@ function renderFirstTimerHeroSummary(
           <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">予想マージ日 (P50 中央値)</div>
           <div style="font-size: 1.25rem; font-weight: 700;">${escapeHtml(p50DateStr)} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">${p50EtaStr}</span></div>
           <div class="card-subtext">通算実績: <strong>${p50 ?? "-"}</strong> 日（基準 PR 現在: ${currentLifetime} 日）</div>
+          ${
+            progress?.FirstTimerTurnMedianDays !== undefined &&
+            progress?.FirstTimerTurnMedianDays !== null
+              ? `<div class="card-subtext" style="margin-top: 0.15rem; font-size: 0.75rem; color: var(--text-muted);">最終コミット後 (Turn): <strong>${progress.FirstTimerTurnMedianDays}</strong> 日</div>`
+              : ""
+          }
         </div>
         <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
           <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">予想マージ日 (P75 75%点)</div>
           <div style="font-size: 1.25rem; font-weight: 700;">${escapeHtml(p75DateStr)} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">${p75EtaStr}</span></div>
           <div class="card-subtext">通算実績: <strong>${p75 ?? "-"}</strong> 日（過去 ${firstTimerDays} 日間 / サンプル ${sampleCount} 件）</div>
+          ${
+            progress?.FirstTimerTurnP75Days !== undefined &&
+            progress?.FirstTimerTurnP75Days !== null
+              ? `<div class="card-subtext" style="margin-top: 0.15rem; font-size: 0.75rem; color: var(--text-muted);">最終コミット後 (Turn): <strong>${progress.FirstTimerTurnP75Days}</strong> 日</div>`
+              : ""
+          }
         </div>
         <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
           <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">追い越し実態の分離内訳</div>
@@ -284,7 +296,7 @@ function renderFirstTimerHeroSummary(
         </div>
       </div>
       <div class="card-subtext" style="margin-top: 0.5rem;">
-        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、純粋な初回提出者（1コミット・健康体）の観測値に基づきます。
+        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、初回提出者（生涯マージ1件）の観測値に基づきます。手直しを含む初回全体の通算所要日数および最終コミット後の所要日数（Turn Latency）を測定しています。
       </div>
     </section>`;
 }
@@ -332,19 +344,28 @@ function renderFirstTimerCohortBlock(progress: LatestProgress | null): string {
         <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間・採用 ${count} 件</span>
       </div>
       <p class="section-note" style="margin-bottom: 0.75rem;">
-        常連の大量まとめマージや特急レーンを除外した「初回提出者（1コミット・累計マージ1件）」の通算所要日数です。ノイズがないため、所要日数が非常に狭いレンジ（約36〜39日）に収束します。
+        常連の大量まとめマージや特急レーンを除外した「初回提出者（生涯マージ1件）」の実績です。手直しコミットを含む初回提出者全体の「通算所要日数（起票→マージ）」と「最終コミット後所要日数（Turn Latency）」の両方を集計しています。
       </p>
       <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: baseline;">
         <div>
-          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">中央値 (P50)</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">通算 P50 (中央値)</span>
           <span style="font-size: 1.5rem; font-weight: 700;">${formatDaysStat(progress.FirstTimerMedianDays)}</span>
         </div>
         <div>
-          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">75%点 (P75)</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">通算 P75 (75%点)</span>
           <span style="font-size: 1.5rem; font-weight: 700;">${formatDaysStat(progress.FirstTimerP75Days)}</span>
         </div>
+        <div>
+          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">最終コミット後 P50</span>
+          <span style="font-size: 1.5rem; font-weight: 700;">${formatDaysStat(progress.FirstTimerTurnMedianDays)}</span>
+        </div>
+        <div>
+          <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">最終コミット後 P75</span>
+          <span style="font-size: 1.5rem; font-weight: 700;">${formatDaysStat(progress.FirstTimerTurnP75Days)}</span>
+        </div>
         <div style="margin-left: auto; align-self: center;">
-          <div class="card-subtext">基準 PR の現在: <strong>${escapeHtml(progress.TotalLifetimeDays)}</strong> 日</div>
+          <div class="card-subtext">基準 PR 通算: <strong>${escapeHtml(progress.TotalLifetimeDays)}</strong> 日</div>
+          <div class="card-subtext">基準 PR Turn: <strong>${escapeHtml(progress.TurnLatencyDays)}</strong> 日</div>
         </div>
       </div>
     </div>`;

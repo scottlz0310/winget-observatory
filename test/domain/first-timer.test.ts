@@ -36,14 +36,14 @@ describe("Domain: countCandidateAuthors & isCandidateEligibleForFirstTimerDetail
     expect(isCandidateEligibleForFirstTimerDetail(candidate, authorCounts)).toBe(true);
   });
 
-  test("コミット数が 2 以上の場合は ineligible", () => {
+  test("コミット数が 2 以上（手直しあり）でも非Draft・阻害ラベルなし・単発authorなら eligible", () => {
     const authorCounts = new Map([["alice", 1]]);
     expect(
       isCandidateEligibleForFirstTimerDetail(
         { commitCount: 2, isDraft: false, author: "alice" },
         authorCounts,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("Draft の場合は ineligible", () => {
@@ -141,9 +141,19 @@ describe("Domain: isFirstTimerSampleCandidate", () => {
     ).toBe(true);
   });
 
-  test("commitCount が 1 以外なら false", () => {
-    expect(isFirstTimerSampleCandidate({ commitCount: 2 })).toBe(false);
-    expect(isFirstTimerSampleCandidate({ commitCount: 0 })).toBe(false);
+  test("コミット数が 2 以上（手直しあり）でもタイムライン阻害なしなら true", () => {
+    expect(
+      isFirstTimerSampleCandidate({
+        commitCount: 2,
+        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
+      }),
+    ).toBe(true);
+    expect(
+      isFirstTimerSampleCandidate({
+        commitCount: 5,
+        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
+      }),
+    ).toBe(true);
   });
 
   test("タイムラインに阻害ラベル履歴があれば解除されていても false", () => {
@@ -193,18 +203,18 @@ describe("Domain: extractSingleHitCandidateLogins", () => {
     expect(extractSingleHitCandidateLogins(samples)).toEqual(["userB"]);
   });
 
-  test("commitCount が 2 以上の author は除外される", () => {
+  test("commitCount が 2 以上の author も単発であれば抽出対象に含まれる", () => {
     const samples = [
       { author: "userA", commitCount: 2 },
       { author: "userB", commitCount: 1 },
     ];
-    expect(extractSingleHitCandidateLogins(samples)).toEqual(["userB"]);
+    expect(extractSingleHitCandidateLogins(samples)).toEqual(["userA", "userB"]);
   });
 
   test("既に isFirstTimer が確定している author は除外される", () => {
     const samples = [
       { author: "userA", commitCount: 1, isFirstTimer: true },
-      { author: "userB", commitCount: 1, isFirstTimer: false },
+      { author: "userB", commitCount: 2, isFirstTimer: false },
       { author: "userC", commitCount: 1 },
     ];
     expect(extractSingleHitCandidateLogins(samples)).toEqual(["userC"]);

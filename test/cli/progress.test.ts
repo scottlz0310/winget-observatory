@@ -792,6 +792,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
 
   const buildClient = (): GitHubApiClient =>
     ({
+      graphql: async <T = unknown>(_query: string): Promise<T> => ({}) as T,
       getPullRequestDetails: async (_repo: string, num: number) => ({
         number: num,
         title: `PR ${num}`,
@@ -1462,9 +1463,9 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.Comparison?.RepeatOrExpressLaterCreated).toBe(0); // 常連に誤合算されない！
       expect(snapshot?.Comparison?.UnknownLaterCreated).toBe(3); // 未判定に計上される！
 
-      // PR 450 は commitCount > 1 のため IsFirstTimer: false に自動確定される
+      // 旧形式キャッシュで Author が欠落している PR は、自動的に常連と決めつけず未判定（undefined）として保持される
       const s450 = snapshot?.Samples.find((s) => s.Number === 450);
-      expect(s450?.IsFirstTimer).toBeFalse();
+      expect(s450?.IsFirstTimer).toBeUndefined();
 
       const text = logs.join("\n");
       expect(text).toContain("うち未判定による追い越し       : 3 件");
@@ -1631,7 +1632,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       // ログに「過去 90 日間」が明記されていること
       const logText = logs.join("\n");
       expect(logText).toContain(
-        "[初回提出者コホート実績 (過去 90 日間・1コミット・単発・累計マージ1件: 2件)]",
+        "[初回提出者コホート実績 (過去 90 日間・単発・累計マージ1件: 2件)]",
       );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -1865,14 +1866,14 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               items: [
                 {
                   number: 501,
-                  title: "PR 501 (2 commits)",
+                  title: "PR 501 (draft, not first timer)",
                   html_url: "u501",
                   created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
                   updated_at: merged45d,
                   labels,
-                  is_draft: false,
+                  is_draft: true, // Draft -> 非初回
                   author: "user-501",
-                  commitCount: 2, // 2コミット -> 非初回
+                  commitCount: 1,
                   pull_request: { merged_at: merged45d },
                 },
                 {
@@ -1969,7 +1970,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       );
 
       // 詳細・タイムライン API が呼ばれたのは 自PR(#500) と候補中では #502 のみであること！
-      // #501（2コミット）と #503, #504（常連author）は詳細フェッチをスキップ！
+      // #501（Draft）と #503, #504（常連author）は詳細フェッチをスキップ！
       expect(detailFetchedPrs).toEqual([500, 502]);
       expect(timelineFetchedPrs).toEqual([500, 502]);
 
@@ -2430,6 +2431,147 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const updatedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached701 = updatedCache.find((e) => e.Number === 701);
       expect(cached701?.Type).toBe("sample");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("コミット数制限の撤廃: 複数コミット（手直しあり）の初回提出者（生涯マージ1件）がコホートに採用され、通算とTurn Latencyの両指標が記録される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-first-timer-multi-commits-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+
+    try {
+      const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const labels = REQUIRED_LABELS.map((name) => ({ name }));
+
+      // 20日前にマージされた 3 コミットの PR #801（手直しありの初回提出者）
+      // 作成: 35日前 (通算 15日)
+      // 最終コミット: 25日前 (Turn Latency 5日)
+      // 累計マージ数照会で issueCount: 1（生涯マージ1件の初回提出者）
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            return {
+              totalCount: 1,
+              items: [
+                {
+                  number: 801,
+                  title: "PR 801 (3 commits, first timer)",
+                  html_url: "u801",
+                  created_at: new Date(now.getTime() - 35 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
+                  labels,
+                  is_draft: false,
+                  author: "newbie-dev",
+                  commitCount: 3, // 複数コミット！
+                  pull_request: { merged_at: new Date(now.getTime() - 20 * dayMs).toISOString() },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === options.targetPr) {
+            return {
+              number: options.targetPr,
+              title: "Target PR",
+              url: "uTarget",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: new Date(now.getTime() - 10 * dayMs).toISOString(),
+              updatedAt: new Date(now.getTime() - 10 * dayMs).toISOString(),
+              mergedAt: null,
+              closedAt: null,
+              labels: labels.map((l) => l.name),
+              commits: [
+                {
+                  oid: "c0",
+                  messageHeadline: "init",
+                  committedDate: new Date(now.getTime() - 10 * dayMs).toISOString(),
+                },
+              ],
+            };
+          }
+          return {
+            number: num,
+            title: `PR ${num}`,
+            url: `u${num}`,
+            state: "MERGED" as const,
+            isDraft: false,
+            createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
+            updatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            mergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            closedAt: null,
+            labels: labels.map((l) => l.name),
+            commits: [
+              {
+                oid: "c1",
+                messageHeadline: "init",
+                committedDate: new Date(now.getTime() - 35 * dayMs).toISOString(),
+              },
+              {
+                oid: "c2",
+                messageHeadline: "fix 1",
+                committedDate: new Date(now.getTime() - 30 * dayMs).toISOString(),
+              },
+              {
+                oid: "c3",
+                messageHeadline: "fix 2",
+                committedDate: new Date(now.getTime() - 25 * dayMs).toISOString(),
+              },
+            ],
+            author: "newbie-dev",
+          };
+        },
+        getIssueTimeline: async () => {
+          return labels.map((l) => ({
+            event: "labeled",
+            created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+            label: { name: l.name },
+          }));
+        },
+        graphql: async () => {
+          // 生涯マージ数は 1 件（初回提出者！）
+          return { u_0: { issueCount: 1 } };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          cachePath,
+          fetchBudget: 10,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // 20日前の手直しありPR #801 が、初回コホートに正常に採用されていること！
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      expect(snapshot?.FirstTimerMedianDays).toBe(15.0); // 通算 15日
+      expect(snapshot?.FirstTimerTurnMedianDays).toBe(5.0); // Turn Latency 5日
+
+      // キャッシュファイル内で IsFirstTimer: true かつ CommitCount: 3 で保存されていること
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      const cached801 = savedCache.find((e) => e.Number === 801);
+      expect(cached801?.Type).toBe("sample");
+      if (cached801?.Type === "sample") {
+        expect(cached801.IsFirstTimer).toBe(true);
+        expect(cached801.CommitCount).toBe(3);
+      }
+
+      // ログに通算と最終コミット後の両方が出力されていること
+      const logText = logs.join("\n");
+      expect(logText).toContain("通算所要日数   : 中央値: 15.0日");
+      expect(logText).toContain("最終コミット後 : 中央値: 5.0日");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
