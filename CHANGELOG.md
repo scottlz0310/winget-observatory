@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/models/progress.ts`, `src/models/sample-cache.ts`: `ProgressSnapshot` に初回提出者コホートの最終コミット後所要日数（Turn Latency）を記録する `FirstTimerTurnMedianDays` および `FirstTimerTurnP75Days` を追加（Issue #64）。`CachedSampleEntry` に初回判定バージョン `FirstTimerVersion` および除外由来 `FirstTimerReason` を追加し、キャッシュのバージョン管理と由来追跡を可能に
+
+### Changed
+
+- `src/domain/first-timer.ts`, `src/domain/progress.ts`, `src/domain/sample-cache.ts`, `src/cli/progress.ts`, `scripts/build-pages.ts`, `test/domain/first-timer.test.ts`, `test/domain/progress.test.ts`, `test/domain/sample-cache.test.ts`, `test/cli/progress.test.ts`, `test/build-pages.test.ts`: 初回提出者コホートにおけるコミット数制限（1 コミット一発通過）を撤廃し、「生涯マージ 1 件の作者全体」をコホート母集団として採用するとともに、通算所要日数と最終コミット後所要日数（Turn Latency）の両指標を集計・表示するよう刷新（Issue #64）。
+  - 実データ分析により、初回提出者は CI バリデーションやレビュー指摘による手直し（2〜7 コミット）を経てマージされるのが一般的であり、1 コミット一発通過は極めて稀（90 日間で 3〜4 件のみ）であることが判明
+  - `isCandidateEligibleForFirstTimerDetail`, `isFirstTimerSampleCandidate`, `extractSingleHitCandidateLogins` からコミット数制限を撤廃し、非 Draft かつ阻害ラベル履歴のない健康体であれば複数コミットの初回提出者も詳細取得・コホート採用の対象に拡大
+  - 旧版キャッシュの自動移行・再評価処理（`shouldReevaluateCachedSample`, `shouldReevaluateSkippedCandidate`）を配備。旧版でコミット数を理由に `IsFirstTimer: false` または `skipped/Reason: not-first-timer-candidate` となっていた既存データを安全に再評価して初回提出者コホートに採用しつつ、タイムライン阻害履歴や期間内重複作者による正当な除外は確実に保持
+  - 手直しの有無による所要日数のばらつきを公平に評価・比較できるよう、PR 作成からマージまでの「通算所要日数」に加え、最終コミットからマージまでの「最終コミット後所要日数（Turn Latency）」を集計
+  - CLI のベンチマーク出力および GitHub Pages ダッシュボード（Hero カード・実績セクション）において、通算所要日数（P50/P75）と Turn Latency（P50/P75）を併記表示するよう UI を更新
+
+### Added
+
 - `src/domain/search-window.ts`, `test/domain/search-window.test.ts`: GitHub Search API の 1,000 件制限を回避するための日付窓（スライス）分割純粋関数 `buildDateWindowSlices` を追加（Issue #62）。探索期間（90日間）を指定幅（既定 14 日間）の隙間のない降順スライスに分割し、`merged:START..END` クエリフラグメントを生成することで、数千件規模のマージ済み PR を 1,000 件上限で打ち切られることなく安全に全件走査可能にする
 
 ### Changed

@@ -3,6 +3,8 @@
  * 外部依存を持たない純粋な TypeScript 型定義のみを提供する。
  */
 
+import type { FirstTimerDisqualificationReason } from "./sample-cache";
+
 export interface ProgressCommitSummary {
   oid?: string;
   messageHeadline?: string;
@@ -70,6 +72,8 @@ export interface MergedCandidateSample {
   days: number;
   author?: string;
   isFirstTimer?: boolean;
+  firstTimerReason?: FirstTimerDisqualificationReason;
+  firstTimerVersion?: number;
 }
 
 export interface ProgressPercentileMetrics {
@@ -237,6 +241,10 @@ export interface ProgressSnapshot {
   FirstTimerMedianDays?: number | null;
   /** 初回提出者コホートの通算所要日数75%点（サンプル不足時は null） */
   FirstTimerP75Days?: number | null;
+  /** 初回提出者コホートの最終コミット後所要日数（Turn Latency）中央値（サンプル不足時は null） */
+  FirstTimerTurnMedianDays?: number | null;
+  /** 初回提出者コホートの最終コミット後所要日数（Turn Latency）75%点（サンプル不足時は null） */
+  FirstTimerTurnP75Days?: number | null;
   /** 初回提出者サンプルの採用件数 */
   FirstTimerSampleCount?: number;
 }

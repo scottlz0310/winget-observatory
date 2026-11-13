@@ -512,6 +512,8 @@ export function createProgressSnapshot(params: {
       : null,
     FirstTimerMedianDays: firstTimerStats ? firstTimerStats.total.median : null,
     FirstTimerP75Days: firstTimerStats ? firstTimerStats.total.p75 : null,
+    FirstTimerTurnMedianDays: firstTimerStats ? firstTimerStats.turn.median : null,
+    FirstTimerTurnP75Days: firstTimerStats ? firstTimerStats.turn.p75 : null,
     FirstTimerSampleCount:
       firstTimerSampleCount ?? (firstTimerStats ? firstTimerStats.sampleCount : 0),
   };

@@ -6,6 +6,13 @@
  * 1 行 1 JSON。
  */
 
+/** 初回提出者判定から除外された理由、または判定由来 */
+export type FirstTimerDisqualificationReason =
+  | "multi-commit"
+  | "timeline-blocking"
+  | "recurring-author"
+  | "lifetime-merged";
+
 /** 統計に採用できたサンプル 1 件（MergedCandidateSample と同じ値を、保存用のキーで持つ） */
 export interface CachedSampleEntry {
   Type: "sample";
@@ -21,6 +28,10 @@ export interface CachedSampleEntry {
   ReadyDays: number;
   Author?: string;
   IsFirstTimer?: boolean;
+  /** 初回判定の除外理由（旧版キャッシュとの区別および再評価の判断用） */
+  FirstTimerReason?: FirstTimerDisqualificationReason;
+  /** 初回判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃新版） */
+  FirstTimerVersion?: number;
 }
 
 /** 条件不成立などで統計から除いた PR 1 件。再取得を避けるために記録する */

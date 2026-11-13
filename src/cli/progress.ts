@@ -5,11 +5,14 @@ import { describeGuidance, describeOvertake } from "../domain/benchmark";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
 import {
   buildAuthorMergedCountQuery,
+  CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
   isFirstTimerSampleCandidate,
   parseAuthorMergedCounts,
+  shouldReevaluateCachedSample,
+  shouldReevaluateSkippedCandidate,
 } from "../domain/first-timer";
 import {
   buildHealthyQueryParts,
@@ -449,23 +452,62 @@ export async function runProgressCli(
       const mergedAtStr = cand.pull_request?.merged_at ?? cand.updated_at;
       const mergedAt = new Date(mergedAtStr);
       const isWithinOverallWindow = mergedAt.getTime() >= overallSinceDate.getTime();
+      const candAuthor = cand.author;
+      const candAuthorCount = candAuthor ? (candidateAuthorCounts.get(candAuthor) ?? 0) : 0;
 
       if (cached) {
-        // not-first-timer-candidate で除外された PR が、lookbackDays の変更等により
-        // 現在の全体集計窓内に入った場合は再評価する（キャッシュのスキップを解除して詳細取得へ）
-        const needsReevaluation =
-          cached.Type === "skipped" &&
-          cached.Reason === "not-first-timer-candidate" &&
-          isWithinOverallWindow;
+        let needsReevaluation = false;
+
+        if (cached.Type === "skipped" && cached.Reason === "not-first-timer-candidate") {
+          // not-first-timer-candidate で除外された PR が、全体集計窓内に入ったか、
+          // またはコミット数制限撤廃により初回詳細適格になった場合は再評価
+          const isEligibleNow = isCandidateEligibleForFirstTimerDetail(
+            {
+              commitCount: cand.commitCount,
+              isDraft: cand.is_draft,
+              labels: cand.labels,
+              author: cand.author,
+            },
+            candidateAuthorCounts,
+          );
+          needsReevaluation = shouldReevaluateSkippedCandidate({
+            isWithinOverallWindow,
+            isEligibleForDetail: isEligibleNow,
+          });
+        } else if (cached.Type === "sample") {
+          // 旧版でコミット数制限により除外された可能性があるサンプルの再評価判定
+          const shouldReevaluate = shouldReevaluateCachedSample({
+            isFirstTimer: cached.IsFirstTimer,
+            firstTimerReason: cached.FirstTimerReason,
+            firstTimerVersion: cached.FirstTimerVersion,
+            commitCount: cached.CommitCount,
+            authorCountInCandidates: candAuthorCount,
+          });
+
+          if (shouldReevaluate) {
+            // 取得予算が残っている場合のみ再評価へ進む。
+            // 予算が残っていない場合は、キャッシュの値をそのまま採用して全体実績の欠落を防ぐ
+            if (fetched < options.fetchBudget) {
+              needsReevaluation = true;
+            }
+          } else if (
+            cached.IsFirstTimer === false &&
+            (cached.FirstTimerVersion === undefined ||
+              cached.FirstTimerVersion < CURRENT_FIRST_TIMER_VERSION) &&
+            cached.FirstTimerReason === undefined &&
+            cached.CommitCount > 1 &&
+            candAuthorCount > 1
+          ) {
+            // 走査期間内に別 PR がある常連は再取得せず理由を確定させてキャッシュ更新
+            cached.FirstTimerReason = "recurring-author";
+            cached.FirstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+            cacheModified = true;
+          }
+        }
 
         if (!needsReevaluation) {
           if (cached.Type === "sample") {
             const s = fromCachedSample(cached);
-            if (s.isFirstTimer === undefined && s.commitCount > 1) {
-              s.isFirstTimer = false;
-              cached.IsFirstTimer = false;
-              cacheModified = true;
-            }
             samples.push(s);
           } else {
             skipped++;
@@ -574,7 +616,13 @@ export async function runProgressCli(
           turnDays: Number(turnDays.toFixed(2)),
           days: Number(readyDays.toFixed(2)),
           author: candDetail.author,
-          ...(!isCandidate ? { isFirstTimer: false } : {}),
+          firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+          ...(!isCandidate
+            ? {
+                isFirstTimer: false,
+                firstTimerReason: "timeline-blocking",
+              }
+            : {}),
         };
         samples.push(sample);
         const newCached = toCachedSample(sample);
@@ -603,9 +651,13 @@ export async function runProgressCli(
       if (countInCandidates > 1 || countInSamples > 1) {
         if (s.isFirstTimer !== false) {
           s.isFirstTimer = false;
+          s.firstTimerReason = "recurring-author";
+          s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
           const cached = cacheIndex.get(s.number);
           if (cached && cached.Type === "sample") {
             cached.IsFirstTimer = false;
+            cached.FirstTimerReason = "recurring-author";
+            cached.FirstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
             cacheModified = true;
           }
         }
@@ -634,9 +686,17 @@ export async function runProgressCli(
           const count = authorMergedCounts.get(s.author);
           if (count !== undefined) {
             s.isFirstTimer = count === 1;
+            s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+            if (count !== 1) {
+              s.firstTimerReason = "lifetime-merged";
+            }
             const cached = cacheIndex.get(s.number);
             if (cached && cached.Type === "sample") {
               cached.IsFirstTimer = s.isFirstTimer;
+              cached.FirstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+              if (count !== 1) {
+                cached.FirstTimerReason = "lifetime-merged";
+              }
               cacheModified = true;
             }
           }
@@ -893,8 +953,19 @@ function logBenchmark(
   if (snapshot.FirstTimerMedianDays !== null && snapshot.FirstTimerMedianDays !== undefined) {
     const ftDays = snapshot.FirstTimerLookbackDays ?? options.firstTimerLookbackDays;
     log(
-      `   [初回提出者コホート実績 (過去 ${ftDays} 日間・1コミット・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)] 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
+      `   [初回提出者コホート実績 (過去 ${ftDays} 日間・単発・累計マージ1件: ${snapshot.FirstTimerSampleCount}件)]`,
     );
+    log(
+      `     通算所要日数   : 中央値: ${formatHumanDays(snapshot.FirstTimerMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerP75Days ?? snapshot.FirstTimerMedianDays)}`,
+    );
+    if (
+      snapshot.FirstTimerTurnMedianDays !== null &&
+      snapshot.FirstTimerTurnMedianDays !== undefined
+    ) {
+      log(
+        `     最終コミット後 : 中央値: ${formatHumanDays(snapshot.FirstTimerTurnMedianDays)} | 75%点: ${formatHumanDays(snapshot.FirstTimerTurnP75Days ?? snapshot.FirstTimerTurnMedianDays)}`,
+      );
+    }
   }
   log("");
   block(

@@ -22,6 +22,10 @@ export function toCachedSample(sample: MergedCandidateSample): CachedSampleEntry
     ReadyDays: sample.days,
     ...(sample.author !== undefined ? { Author: sample.author } : {}),
     ...(sample.isFirstTimer !== undefined ? { IsFirstTimer: sample.isFirstTimer } : {}),
+    ...(sample.firstTimerReason !== undefined ? { FirstTimerReason: sample.firstTimerReason } : {}),
+    ...(sample.firstTimerVersion !== undefined
+      ? { FirstTimerVersion: sample.firstTimerVersion }
+      : {}),
   };
 }
 
@@ -40,6 +44,10 @@ export function fromCachedSample(entry: CachedSampleEntry): MergedCandidateSampl
     days: entry.ReadyDays,
     ...(entry.Author !== undefined ? { author: entry.Author } : {}),
     ...(entry.IsFirstTimer !== undefined ? { isFirstTimer: entry.IsFirstTimer } : {}),
+    ...(entry.FirstTimerReason !== undefined ? { firstTimerReason: entry.FirstTimerReason } : {}),
+    ...(entry.FirstTimerVersion !== undefined
+      ? { firstTimerVersion: entry.FirstTimerVersion }
+      : {}),
   };
 }
 
@@ -90,6 +98,24 @@ function validateEntry(parsed: unknown, lineNumber: number): SampleCacheEntry {
     }
     if (entry.IsFirstTimer !== undefined && typeof entry.IsFirstTimer !== "boolean") {
       return fail("IsFirstTimer が真偽値ではありません");
+    }
+    if (entry.FirstTimerReason !== undefined) {
+      if (
+        entry.FirstTimerReason !== "multi-commit" &&
+        entry.FirstTimerReason !== "timeline-blocking" &&
+        entry.FirstTimerReason !== "recurring-author" &&
+        entry.FirstTimerReason !== "lifetime-merged"
+      ) {
+        return fail(`FirstTimerReason が不正です: ${String(entry.FirstTimerReason)}`);
+      }
+    }
+    if (entry.FirstTimerVersion !== undefined) {
+      if (
+        typeof entry.FirstTimerVersion !== "number" ||
+        !Number.isInteger(entry.FirstTimerVersion)
+      ) {
+        return fail("FirstTimerVersion が整数ではありません");
+      }
     }
     return entry as unknown as SampleCacheEntry;
   }

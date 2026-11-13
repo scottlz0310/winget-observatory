@@ -50,11 +50,30 @@ describe("Domain: サンプルキャッシュの変換", () => {
       ...sample,
       author: "firstTimerUser",
       isFirstTimer: true,
+      firstTimerReason: undefined,
+      firstTimerVersion: 2,
     };
     const cached = toCachedSample(sampleWithFirstTimer);
     expect(cached.Author).toBe("firstTimerUser");
     expect(cached.IsFirstTimer).toBe(true);
+    expect(cached.FirstTimerVersion).toBe(2);
     expect(fromCachedSample(cached)).toEqual(sampleWithFirstTimer);
+  });
+
+  test("FirstTimerReason（timeline-blocking 等）を含む除外サンプルも相互変換できる", () => {
+    const sampleExcluded: MergedCandidateSample = {
+      ...sample,
+      author: "blockedUser",
+      isFirstTimer: false,
+      firstTimerReason: "timeline-blocking",
+      firstTimerVersion: 2,
+    };
+    const cached = toCachedSample(sampleExcluded);
+    expect(cached.Author).toBe("blockedUser");
+    expect(cached.IsFirstTimer).toBe(false);
+    expect(cached.FirstTimerReason).toBe("timeline-blocking");
+    expect(cached.FirstTimerVersion).toBe(2);
+    expect(fromCachedSample(cached)).toEqual(sampleExcluded);
   });
 });
 
@@ -127,6 +146,16 @@ describe("Domain: parseSampleCache", () => {
       "IsFirstTimer が真偽値ではない",
       `${JSON.stringify(entry({ IsFirstTimer: "true" }))}\n`,
       "IsFirstTimer が真偽値ではありません",
+    ],
+    [
+      "FirstTimerReason が不正",
+      `${JSON.stringify(entry({ FirstTimerReason: "invalid-reason" }))}\n`,
+      "FirstTimerReason が不正です: invalid-reason",
+    ],
+    [
+      "FirstTimerVersion が整数ではない",
+      `${JSON.stringify(entry({ FirstTimerVersion: "v2" }))}\n`,
+      "FirstTimerVersion が整数ではありません",
     ],
   ])("壊れた行は握りつぶさず行番号つきで例外にする: %s", (_name, text, message) => {
     expect(() => parseSampleCache(text)).toThrow(message);

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildAuthorMergedCountQuery,
+  CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
   hasBlockingOrDraftHistory,
   isCandidateEligibleForFirstTimerDetail,
   isFirstTimerSampleCandidate,
   parseAuthorMergedCounts,
+  shouldReevaluateCachedSample,
+  shouldReevaluateSkippedCandidate,
 } from "../../src/domain/first-timer";
 
 describe("Domain: countCandidateAuthors & isCandidateEligibleForFirstTimerDetail", () => {
@@ -36,14 +39,14 @@ describe("Domain: countCandidateAuthors & isCandidateEligibleForFirstTimerDetail
     expect(isCandidateEligibleForFirstTimerDetail(candidate, authorCounts)).toBe(true);
   });
 
-  test("コミット数が 2 以上の場合は ineligible", () => {
+  test("コミット数が 2 以上（手直しあり）でも非Draft・阻害ラベルなし・単発authorなら eligible", () => {
     const authorCounts = new Map([["alice", 1]]);
     expect(
       isCandidateEligibleForFirstTimerDetail(
         { commitCount: 2, isDraft: false, author: "alice" },
         authorCounts,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("Draft の場合は ineligible", () => {
@@ -141,9 +144,19 @@ describe("Domain: isFirstTimerSampleCandidate", () => {
     ).toBe(true);
   });
 
-  test("commitCount が 1 以外なら false", () => {
-    expect(isFirstTimerSampleCandidate({ commitCount: 2 })).toBe(false);
-    expect(isFirstTimerSampleCandidate({ commitCount: 0 })).toBe(false);
+  test("コミット数が 2 以上（手直しあり）でもタイムライン阻害なしなら true", () => {
+    expect(
+      isFirstTimerSampleCandidate({
+        commitCount: 2,
+        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
+      }),
+    ).toBe(true);
+    expect(
+      isFirstTimerSampleCandidate({
+        commitCount: 5,
+        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
+      }),
+    ).toBe(true);
   });
 
   test("タイムラインに阻害ラベル履歴があれば解除されていても false", () => {
@@ -193,18 +206,18 @@ describe("Domain: extractSingleHitCandidateLogins", () => {
     expect(extractSingleHitCandidateLogins(samples)).toEqual(["userB"]);
   });
 
-  test("commitCount が 2 以上の author は除外される", () => {
+  test("commitCount が 2 以上の author も単発であれば抽出対象に含まれる", () => {
     const samples = [
       { author: "userA", commitCount: 2 },
       { author: "userB", commitCount: 1 },
     ];
-    expect(extractSingleHitCandidateLogins(samples)).toEqual(["userB"]);
+    expect(extractSingleHitCandidateLogins(samples)).toEqual(["userA", "userB"]);
   });
 
   test("既に isFirstTimer が確定している author は除外される", () => {
     const samples = [
       { author: "userA", commitCount: 1, isFirstTimer: true },
-      { author: "userB", commitCount: 1, isFirstTimer: false },
+      { author: "userB", commitCount: 2, isFirstTimer: false },
       { author: "userC", commitCount: 1 },
     ];
     expect(extractSingleHitCandidateLogins(samples)).toEqual(["userC"]);
@@ -258,5 +271,109 @@ describe("Domain: parseAuthorMergedCounts", () => {
     const data = {};
     const result = parseAuthorMergedCounts(authors, data);
     expect(result.get("userA")).toBe(0);
+  });
+});
+
+describe("Domain: shouldReevaluateCachedSample", () => {
+  test("旧版キャッシュで IsFirstTimer: false かつ複数コミット・単発authorなら再評価対象", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        commitCount: 3,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(true);
+  });
+
+  test("候補期間内に別 PR がある常連（authorCountInCandidates > 1）は再評価不要", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        commitCount: 3,
+        authorCountInCandidates: 2,
+      }),
+    ).toBe(false);
+  });
+
+  test("すでに新版バージョン（firstTimerVersion >= 2）で判定済みの場合は再評価不要", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+        commitCount: 3,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(false);
+  });
+
+  test("すでにタイムライン阻害履歴理由（timeline-blocking）が確定している場合は再評価不要", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerReason: "timeline-blocking",
+        commitCount: 3,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(false);
+  });
+
+  test("すでに累計マージ数理由（lifetime-merged）が確定している場合は再評価不要", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerReason: "lifetime-merged",
+        commitCount: 3,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(false);
+  });
+
+  test("旧版でコミット数が 1 だった PR はコミット数制限による除外ではないため再評価不要", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        commitCount: 1,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(false);
+  });
+
+  test("IsFirstTimer が true のサンプルは再評価不要", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: true,
+        commitCount: 3,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("Domain: shouldReevaluateSkippedCandidate", () => {
+  test("全体集計窓内（isWithinOverallWindow = true）であれば再評価", () => {
+    expect(
+      shouldReevaluateSkippedCandidate({
+        isWithinOverallWindow: true,
+        isEligibleForDetail: false,
+      }),
+    ).toBe(true);
+  });
+
+  test("全体窓外でもコミット数制限撤廃により初回詳細適格（isEligibleForDetail = true）であれば再評価", () => {
+    expect(
+      shouldReevaluateSkippedCandidate({
+        isWithinOverallWindow: false,
+        isEligibleForDetail: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("全体窓外で依然として不適格（isEligibleForDetail = false）なら再評価しない（スキップ維持）", () => {
+    expect(
+      shouldReevaluateSkippedCandidate({
+        isWithinOverallWindow: false,
+        isEligibleForDetail: false,
+      }),
+    ).toBe(false);
   });
 });
