@@ -650,7 +650,7 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
       先頭の遅れが横ばいなら先頭は進んでいません。実時間と同じ速度（1 日/日）で先頭が進むと、遅れは一定のままです。右下がりなら先頭が実時間より速く進んでいます。
     </p>
     ${
-      recent.length > 0
+      recent.length >= 2
         ? `<table>
       <thead>
         <tr>
@@ -1220,14 +1220,17 @@ function generateHtml(
       <div class="flow-arrow">→ … ${formatNumber(progress?.Behind)} 件 … →</div>
       <div class="flow-node">
         <div style="font-size: 0.75rem; color: var(--text-muted);">最新起票</div>
-        <strong>後続キュー</strong>
-        <div style="font-size: 0.7rem; color: var(--text-muted);">CI 通過待ち含む</div>
+        <strong>後続の準備完了 PR</strong>
+        <div style="font-size: 0.7rem; color: var(--text-muted);">CI・検証通過済みの健康体</div>
       </div>
     </div>
 
     ${renderRivalsSection(progress)}
 
-    <h2 class="section-title">🧭 キュー境界探索（特急・大底・遭難）</h2>
+    <h2 class="section-title">🧭 キュー境界探索（健康的大底・真の大底・特急レーン）</h2>
+    <p class="section-note">
+      健康的大底＝CI・検証通過済みの最古 3 件 / 真の大底＝CI 待ち・阻害ラベルを含む未マージ全体の最古 3 件 / ⚡ 特急レーン＝基準 PR 起票後に作成されマージ済みの最新更新 5 件
+    </p>
     <table>
       <thead>
         <tr>

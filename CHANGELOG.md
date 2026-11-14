@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `scripts/build-pages.ts`, `test/build-pages.test.ts`: 「📊 トリアージキュー構造」右端ノードの誤記「後続キュー（CI 通過待ち含む）」を実際のクエリ条件および KPI カード 5 と一致する「後続の準備完了 PR（CI・検証通過済みの健康体）」へ修正し、「🧭 キュー境界探索」見出しから旧称の「遭難」を外して各カテゴリの抽出条件・件数上限注記を追加（Issue #80）。あわせて「🔮 仮説② の根拠」のテーブル表示条件をフォールバック文言どおり観測 2 件以上（`recent.length >= 2`）に修正
 - `src/models/depths.ts`, `src/cli/explore-depths.ts`, `scripts/build-pages.ts`, `test/cli/explore-depths.test.ts`, `test/build-pages.test.ts`: 「🌱 初回提出者の底」テーブルの経過日数カラムが `UpdatedAt` 基準（「更新からの経過」）になっていた不整合を修正し、起票日時順の定義・統合時系列チャートと一致する `CreatedAt` 基準（「起票からの経過」）で計算・表示するよう変更（Issue #79）。あわせて `StaleBottom`（優等生の底）で `AuthorAssociation === "NONE"` かつ生涯マージ歴が 1 件以上の隠れ常連にも「常連除外」バッジが付くよう `DepthsRow.AuthorMergedCount` を追加し、`fetchStaleBottom` と `fetchFirstTimerBottom` で生涯マージ数キャッシュを共有して GraphQL 照会重複を回避
 
 ## [0.2.0] - 2026-11-14
