@@ -5,6 +5,7 @@ import {
   buildHealthyQueryParts,
   calculateProgressStats,
   createProgressSnapshot,
+  extractRivalPrs,
   formatDateTimeWithDay,
   formatDelta,
   formatHumanDays,
@@ -13,13 +14,18 @@ import {
   isBlockedLabel,
   isEligibleLabels,
   parseCsvRows,
+  partitionSamplesByWindow,
   QUEUE_BASIS,
   serializeCsvRows,
   simulateReadySince,
 } from "../../src/domain/progress";
 import { QUEUE_BASIS as QUEUE_BASIS_DIRECT, toHistoryRow } from "../../src/domain/progress-csv";
 import { simulateReadySince as simulateReadySinceDirect } from "../../src/domain/timeline";
-import type { MergedCandidateSample, ProgressTimelineEvent } from "../../src/models/progress";
+import type {
+  GitHubDetailedSearchItem,
+  MergedCandidateSample,
+  ProgressTimelineEvent,
+} from "../../src/models/progress";
 
 describe("Domain: progress label evaluation", () => {
   test("必須3ラベルが揃っており除外ラベルがなければ eligible と判定される", () => {
@@ -481,5 +487,102 @@ ${Object.values(oldRow).join(",")}
     expect(snapshot.FirstTimerTurnMedianDays).toBe(12.5);
     expect(snapshot.FirstTimerTurnP75Days).toBe(15.0);
     expect(snapshot.FirstTimerSampleCount).toBe(5);
+  });
+});
+
+describe("Domain: extractRivalPrs", () => {
+  const makeItem = (number: number, labelNames?: string[]): GitHubDetailedSearchItem => ({
+    number,
+    title: `PR #${number}`,
+    html_url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
+    created_at: `2026-11-01T00:0${number % 10}:00Z`,
+    updated_at: `2026-11-02T00:0${number % 10}:00Z`,
+    labels: labelNames?.map((name) => ({ name })),
+  });
+
+  test("targetPr 以上および阻害ラベル付きを除外し、既定上限 5 件まで抽出する", () => {
+    const items: GitHubDetailedSearchItem[] = [
+      makeItem(500, ["New-Package"]), // targetPr 以上で除外
+      makeItem(499, ["New-Package", "Error-Build"]), // 阻害ラベルで除外
+      makeItem(498, ["New-Package", "Needs-Author-Feedback"]), // 阻害ラベルで除外
+      makeItem(497, ["New-Package"]),
+      makeItem(496), // labels 未指定でも許容
+      makeItem(495, ["New-Package"]),
+      makeItem(494, ["New-Package"]),
+      makeItem(493, ["New-Package"]),
+      makeItem(492, ["New-Package"]),
+    ];
+
+    const rivals = extractRivalPrs(items, 500);
+    expect(rivals.map((r) => r.number)).toEqual([497, 496, 495, 494, 493]);
+    expect(rivals[0]).toEqual({
+      number: 497,
+      title: "PR #497",
+      createdAt: "2026-11-01T00:07:00Z",
+      updatedAt: "2026-11-02T00:07:00Z",
+      url: "https://github.com/microsoft/winget-pkgs/pull/497",
+    });
+  });
+
+  test("limit 指定で抽出件数を変更できる", () => {
+    const items = [makeItem(401), makeItem(402), makeItem(403)];
+    expect(extractRivalPrs(items, 500, 2).map((r) => r.number)).toEqual([401, 402]);
+  });
+});
+
+describe("Domain: partitionSamplesByWindow", () => {
+  const makeSample = (
+    number: number,
+    mergedAt: string,
+    isFirstTimer?: boolean,
+  ): MergedCandidateSample => ({
+    number,
+    title: `Sample ${number}`,
+    createdAt: "2026-08-01T00:00:00Z",
+    latestCommittedDate: "2026-08-01T00:00:00Z",
+    commitCount: 1,
+    readyAt: "2026-08-01T00:00:00Z",
+    mergedAt,
+    totalDays: 10,
+    turnDays: 10,
+    days: 10,
+    isFirstTimer,
+  });
+
+  test("全体窓と初回提出者コホート窓の境界（ちょうど含む・窓外除外）で正しく仕分ける", () => {
+    const now = new Date("2026-11-10T00:00:00.000Z");
+    const samples: MergedCandidateSample[] = [
+      // 30日境界ちょうど (2026-10-11T00:00:00Z): overall と firstTimer 両方
+      makeSample(1, "2026-10-11T00:00:00.000Z", true),
+      // 30日内だが非初回: overall のみ
+      makeSample(2, "2026-11-05T00:00:00.000Z", false),
+      // 30日内だが初回未判定: overall のみ
+      makeSample(3, "2026-11-06T00:00:00.000Z", undefined),
+      // 45日前（30日外・90日内）かつ初回: firstTimer のみ
+      makeSample(4, "2026-09-26T00:00:00.000Z", true),
+      // 90日境界ちょうど (2026-08-12T00:00:00Z) かつ初回: firstTimer のみ
+      makeSample(5, "2026-08-12T00:00:00.000Z", true),
+      // 90日超かつ初回: どちらにも入らない
+      makeSample(6, "2026-08-11T23:59:59.999Z", true),
+    ];
+
+    const skippedCandidates = [
+      { mergedAt: new Date("2026-10-11T00:00:00.000Z") }, // 30日境界ちょうど -> 含む
+      { mergedAt: new Date("2026-10-10T23:59:59.999Z") }, // 30日窓外 -> 除く
+    ];
+
+    const result = partitionSamplesByWindow({
+      samples,
+      skippedCandidates,
+      now,
+      lookbackDays: 30,
+      firstTimerLookbackDays: 90,
+    });
+
+    expect(result.overallSince.toISOString()).toBe("2026-10-11T00:00:00.000Z");
+    expect(result.firstTimerSince.toISOString()).toBe("2026-08-12T00:00:00.000Z");
+    expect(result.overallSamples.map((s) => s.number)).toEqual([1, 2, 3]);
+    expect(result.overallSkippedCount).toBe(1);
+    expect(result.firstTimerSamples.map((s) => s.number)).toEqual([1, 4, 5]);
   });
 });

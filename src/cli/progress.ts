@@ -2,9 +2,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient } from "../api/github";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
-import { DAY_MS, formatDateTimeWithDay, formatDelta, formatHumanDays } from "../domain/formatters";
+import {
+  DAY_MS,
+  formatDateTimeWithDay,
+  formatDelta,
+  formatHumanDays,
+  round2,
+} from "../domain/formatters";
 import { buildHealthyQueryParts, isBlockedLabel, REQUIRED_LABELS } from "../domain/labels";
-import { calculateProgressStats, createProgressSnapshot } from "../domain/progress";
+import {
+  calculateProgressStats,
+  createProgressSnapshot,
+  extractRivalPrs,
+  partitionSamplesByWindow,
+} from "../domain/progress";
 import { parseCsvRows, QUEUE_BASIS, serializeCsvRows } from "../domain/progress-csv";
 import {
   formatFrontDeltaText,
@@ -18,8 +29,8 @@ import { collectMergedCandidates } from "../domain/search-window";
 import { simulateReadySince } from "../domain/timeline";
 import type {
   ProgressHistoryRow,
+  ProgressPrDetail,
   ProgressQueueInfo,
-  ProgressRivalPr,
   ProgressSnapshot,
 } from "../models/progress";
 import type { SampleCacheEntry } from "../models/sample-cache";
@@ -131,14 +142,25 @@ function saveSampleCache(path: string, entries: SampleCacheEntry[]): void {
   writeFileSync(path, serializeSampleCacheEntries(entries), "utf-8");
 }
 
-export async function runProgressCli(
-  options: ProgressCliOptions,
-  client: GitHubApiClient = new GitHubApiClient(),
-  log: (msg: string) => void = console.log,
-): Promise<{ snapshot: ProgressSnapshot | null }> {
-  const now = options.now ?? new Date();
-  log(`=== ${options.repository} PR #${options.targetPr} ===`);
+interface TargetPrContext {
+  pr: ProgressPrDetail;
+  created: Date;
+  commitCount: number;
+  totalLifetimeDays: number;
+  turnLatencyDays: number;
+  targetReady: Date;
+  waitDays: number;
+}
 
+/**
+ * 対象 PR の詳細・タイムラインを取得し、観測条件（OPEN / Draft でない / 必須ラベルあり / 除外ラベルなし）を検証する。
+ */
+async function fetchAndValidateTargetPr(
+  options: ProgressCliOptions,
+  client: GitHubApiClient,
+  now: Date,
+  log: (msg: string) => void,
+): Promise<TargetPrContext | null> {
   const pr = await client.getPullRequestDetails(options.repository, options.targetPr);
   const created = new Date(pr.createdAt);
   const commits = pr.commits;
@@ -180,7 +202,7 @@ export async function runProgressCli(
 
     log(`通算所要日数 (作成〜終了)   : ${formatHumanDays(endTotalDays)}`);
     log(`最終ターン所要日数 (最新〜) : ${formatHumanDays(endTurnDays)}`);
-    return { snapshot: null };
+    return null;
   }
 
   const missing = REQUIRED_LABELS.filter((l) => !pr.labels.includes(l));
@@ -192,7 +214,7 @@ export async function runProgressCli(
     if (pr.isDraft) log("Draft            : はい");
     if (missing.length > 0) log(`不足ラベル       : ${missing.join(", ")}`);
     if (blocking.length > 0) log(`除外ラベル       : ${blocking.join(", ")}`);
-    return { snapshot: null };
+    return null;
   }
 
   log("比較条件                   : 必須3ラベルあり・除外ラベルなし・Draftでない");
@@ -209,46 +231,56 @@ export async function runProgressCli(
   log(`条件が整った日時 (ReadyAt) : ${formatDateTimeWithDay(targetReady)}`);
   log(`整ってからの待機 (Ready)   : ${formatHumanDays(waitDays)}`);
 
-  // 履歴 CSV の読み込み
-  const defaultDataDir = resolveDefaultDataDir();
-  const historyCsvPath = options.logPath
-    ? resolve(process.cwd(), options.logPath)
-    : resolve(defaultDataDir, "progress-history.csv");
+  return {
+    pr,
+    created,
+    commitCount,
+    totalLifetimeDays,
+    turnLatencyDays,
+    targetReady,
+    waitDays,
+  };
+}
 
-  let prevRecord: ProgressHistoryRow | null = null;
-  const pastHistory: ProgressHistoryRow[] = [];
-
-  if (existsSync(historyCsvPath)) {
-    try {
-      const csvText = readFileSync(historyCsvPath, "utf-8");
-      const rows = parseCsvRows(csvText);
-      for (const rec of rows) {
-        if (Number(rec.TargetPr) === options.targetPr) {
-          pastHistory.push(rec);
-        }
-      }
-      if (pastHistory.length > 0) {
-        prevRecord = pastHistory[pastHistory.length - 1];
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`履歴ファイルの読み込みに失敗しました (${historyCsvPath}): ${msg}`, {
-        cause: err,
-      });
-    }
+/**
+ * 履歴 CSV から対象 PR の直近レコードを読み込む。
+ */
+function loadTargetHistory(historyCsvPath: string, targetPr: number): ProgressHistoryRow | null {
+  if (!existsSync(historyCsvPath)) {
+    return null;
   }
+  try {
+    const csvText = readFileSync(historyCsvPath, "utf-8");
+    const rows = parseCsvRows(csvText);
+    let prevRecord: ProgressHistoryRow | null = null;
+    for (const rec of rows) {
+      if (Number(rec.TargetPr) === targetPr) {
+        prevRecord = rec;
+      }
+    }
+    return prevRecord;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`履歴ファイルの読み込みに失敗しました (${historyCsvPath}): ${msg}`, {
+      cause: err,
+    });
+  }
+}
 
-  // 過去マージ済み PR のサンプリング（全体用と初回提出者用で探索窓が異なるため、大きい方を基準に広めに取得する）
-  const firstTimerLookbackDays = options.firstTimerLookbackDays ?? 90;
-  const maxLookbackDays = Math.max(options.lookbackDays, firstTimerLookbackDays);
-  const sinceDate = new Date(now.getTime() - maxLookbackDays * 24 * 60 * 60 * 1000);
-
-  const baseParts = buildHealthyQueryParts(options.repository);
-
-  // 1. 前線（健康な最古の未マージ PR）と、自 PR より前に並ぶ健康な PR 数
-  const createdIso = created.toISOString();
+/**
+ * 現在の Open レビュー待ち行列（前線・実質待ち・累積待ち・直前ライバル PR）を集計する。
+ */
+async function collectOpenQueueInfo(
+  client: GitHubApiClient,
+  repository: string,
+  targetPr: number,
+  created: Date,
+  prUpdatedAt: string,
+): Promise<ProgressQueueInfo> {
+  const baseParts = buildHealthyQueryParts(repository);
   const eligibleQuery = baseParts.join(" ");
 
+  // 1. 前線（健康な最古の未マージ PR）と全体の健康な PR 数
   const frontRes = await client.searchIssuesDetailed(eligibleQuery, "created", "asc", 1);
   const frontItem = frontRes.items[0];
   if (!frontItem) {
@@ -256,41 +288,177 @@ export async function runProgressCli(
   }
   const allTotal = frontRes.totalCount;
 
-  // 作成順での累積待ち
-  const aheadQuery = `${eligibleQuery} created:<${createdIso}`;
+  // 2. 作成順での累積待ちと直前ライバル PR 抽出
+  const aheadQuery = `${eligibleQuery} created:<${created.toISOString()}`;
   const aheadRes = await client.searchIssuesDetailed(aheadQuery, "created", "desc", 15);
   const aheadTotal = aheadRes.totalCount;
 
-  // 実質待ち: 指摘なく順番待ちをしている PR は更新が止まっているため、更新順が実際の待ち順位になる
+  // 3. 実質待ち: 指摘なく順番待ちをしている PR は更新が止まっているため、更新順が実際の待ち順位になる
   const updatedAheadRes = await client.searchIssuesDetailed(
-    `${eligibleQuery} updated:<${new Date(pr.updatedAt).toISOString()}`,
+    `${eligibleQuery} updated:<${new Date(prUpdatedAt).toISOString()}`,
     "updated",
     "asc",
     1,
   );
-  const activeAheadCount = updatedAheadRes.totalCount;
 
-  // 2. 直前ライバル PR 抽出
-  const rivals: ProgressRivalPr[] = [];
-  for (const item of aheadRes.items) {
-    if (item.number >= options.targetPr) continue;
-    const hasBlocked = (item.labels ?? []).some((l) => isBlockedLabel(l.name));
-    if (hasBlocked) continue;
+  const rivals = extractRivalPrs(aheadRes.items, targetPr);
+  const behindCount = Math.max(0, allTotal - aheadTotal - 1);
 
-    rivals.push({
-      number: item.number,
-      title: item.title,
-      createdAt: item.created_at,
-      updatedAt: item.updated_at,
-      url: item.html_url,
-    });
-    if (rivals.length >= 5) break;
+  return {
+    front: { number: frontItem.number, createdAt: frontItem.created_at },
+    activeAheadCount: updatedAheadRes.totalCount,
+    aheadCount: aheadTotal,
+    totalCount: allTotal,
+    behindCount,
+    rivals,
+  };
+}
+
+/**
+ * 現在のレビュー待ち行列のサマリーを前回比デルタ付きでログ出力する。
+ */
+function logQueueSummary(
+  queueInfo: ProgressQueueInfo,
+  prevRecord: ProgressHistoryRow | null,
+  log: (msg: string) => void,
+): void {
+  log("");
+  log("----------------------------------------");
+  log("【現在のレビュー待ち行列（実質的な待ち人数）】");
+
+  // 前回行が旧定義（QueueBasis 列なし）の場合、ActiveAhead の定義が異なるため前回比は出さない
+  const prev = prevRecord && prevRecord.QueueBasis === QUEUE_BASIS ? prevRecord : null;
+  const front = queueInfo.front;
+  const prevFrontNum = prev && prev.FrontNumber !== "" ? Number(prev.FrontNumber) : undefined;
+  const frontDeltaText = formatFrontDeltaText(front.number, prevFrontNum);
+  const deltaOf = (current: number, previous: number | string | undefined): string =>
+    prev && previous !== undefined && previous !== ""
+      ? ` ${formatDelta(current, Number(previous))}`
+      : "";
+
+  log(
+    `消化前線（最古の健康なPR）  : #${front.number} (作成: ${formatDateTimeWithDay(front.createdAt)})${frontDeltaText}`,
+  );
+  log(
+    `実質待ちPR（更新順の順位）  : 約 ${queueInfo.activeAheadCount} 件${deltaOf(queueInfo.activeAheadCount, prev?.ActiveAhead)} （あなたのPRより更新が古い健康なPR。指摘なく順番待ちしているPR）`,
+  );
+  log(
+    `全期間の累積待ちPR (参考) : 約 ${queueInfo.aheadCount} 件${deltaOf(queueInfo.aheadCount, prev?.TotalAhead)} （作成順であなたより前の健康なPR）`,
+  );
+  log(
+    `あなたの後ろに並ぶ準備完了PR: 約 ${queueInfo.behindCount} 件${deltaOf(queueInfo.behindCount, prev?.Behind)}`,
+  );
+  log("----------------------------------------");
+}
+
+/**
+ * 待ち行列からの累積離脱件数（基準 PR より前に起票され、基準 PR の起票以降にマージ・クローズされた件数）を取得する。
+ */
+async function fetchExitCounts(
+  client: GitHubApiClient,
+  repository: string,
+  created: Date,
+  log: (msg: string) => void,
+): Promise<{ mergedOlder: number; closedOlder: number }> {
+  // 実質待ちの減少の内訳（マージ・クローズ・その他）を、観測の間の差から求めるために履歴へ残す
+  const exitQueries = buildExitCountQueries(
+    repository,
+    created.toISOString().replace(/\.\d{3}Z$/, "Z"),
+    REQUIRED_LABELS,
+  );
+  const mergedOlder = (await client.searchIssuesDetailed(exitQueries.merged, "updated", "desc", 1))
+    .totalCount;
+  const closedOlder = (await client.searchIssuesDetailed(exitQueries.closed, "updated", "desc", 1))
+    .totalCount;
+  log(
+    `離脱の累積         : 基準 PR の起票以降に、起票が前の PR がマージ ${mergedOlder} 件・未マージでクローズ ${closedOlder} 件`,
+  );
+  return { mergedOlder, closedOlder };
+}
+
+/**
+ * 履歴 CSV への追記と最新スナップショット JSON の保存を行う。
+ */
+function saveProgressOutputs(params: {
+  historyCsvPath: string;
+  defaultDataDir: string;
+  snapshotPath?: string;
+  logRow: ProgressHistoryRow;
+  snapshot: ProgressSnapshot;
+}): void {
+  const { historyCsvPath, defaultDataDir, snapshotPath, logRow, snapshot } = params;
+
+  const logDir = dirname(historyCsvPath);
+  if (!existsSync(logDir)) {
+    mkdirSync(logDir, { recursive: true });
   }
 
-  // 3. マージ済み候補のサンプリング
-  // 全体用集計窓（30日）と初回提出者専用窓（90日）の境界を定義
-  const overallSinceDate = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
-  // Search API の 1,000 件制限を回避するため、カーソルスライド方式（最古 merged_at による絶対数区切り）で全量走査
+  try {
+    const existingRows = existsSync(historyCsvPath)
+      ? parseCsvRows(readFileSync(historyCsvPath, "utf-8"))
+      : [];
+    existingRows.push(logRow);
+    writeFileSync(historyCsvPath, serializeCsvRows(existingRows), "utf-8");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`履歴ファイルへの保存に失敗しました (${historyCsvPath}): ${msg}`);
+  }
+
+  const resolvedSnapshotPath = snapshotPath
+    ? resolve(process.cwd(), snapshotPath)
+    : resolve(defaultDataDir, "latest-progress.json");
+
+  const snapshotDir = dirname(resolvedSnapshotPath);
+  if (!existsSync(snapshotDir)) {
+    mkdirSync(snapshotDir, { recursive: true });
+  }
+
+  try {
+    writeFileSync(resolvedSnapshotPath, JSON.stringify(snapshot, null, 2), "utf-8");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `スナップショットファイルへの保存に失敗しました (${resolvedSnapshotPath}): ${msg}`,
+    );
+  }
+}
+
+export async function runProgressCli(
+  options: ProgressCliOptions,
+  client: GitHubApiClient = new GitHubApiClient(),
+  log: (msg: string) => void = console.log,
+): Promise<{ snapshot: ProgressSnapshot | null }> {
+  const now = options.now ?? new Date();
+  log(`=== ${options.repository} PR #${options.targetPr} ===`);
+
+  const targetContext = await fetchAndValidateTargetPr(options, client, now, log);
+  if (!targetContext) {
+    return { snapshot: null };
+  }
+
+  const { pr, created, commitCount, totalLifetimeDays, turnLatencyDays, targetReady, waitDays } =
+    targetContext;
+
+  const defaultDataDir = resolveDefaultDataDir();
+  const historyCsvPath = options.logPath
+    ? resolve(process.cwd(), options.logPath)
+    : resolve(defaultDataDir, "progress-history.csv");
+  const prevRecord = loadTargetHistory(historyCsvPath, options.targetPr);
+
+  const queueInfo = await collectOpenQueueInfo(
+    client,
+    options.repository,
+    options.targetPr,
+    created,
+    pr.updatedAt,
+  );
+
+  // 過去マージ済み PR のサンプリング（全体用と初回提出者用で探索窓が異なるため、大きい方を基準に広めに取得する）
+  const firstTimerLookbackDays = options.firstTimerLookbackDays ?? 90;
+  const maxLookbackDays = Math.max(options.lookbackDays, firstTimerLookbackDays);
+  const sinceDate = new Date(now.getTime() - maxLookbackDays * DAY_MS);
+  const overallSinceDate = new Date(now.getTime() - options.lookbackDays * DAY_MS);
+
   const candidates = await collectMergedCandidates({
     client,
     repository: options.repository,
@@ -331,81 +499,28 @@ export async function runProgressCli(
     );
   }
 
-  const behindCount = Math.max(0, allTotal - aheadTotal - 1);
+  logQueueSummary(queueInfo, prevRecord, log);
 
-  const queueInfo: ProgressQueueInfo = {
-    front: { number: frontItem.number, createdAt: frontItem.created_at },
-    activeAheadCount,
-    aheadCount: aheadTotal,
-    totalCount: allTotal,
-    behindCount,
-    rivals,
-  };
-
-  log("");
-  log("----------------------------------------");
-  log("【現在のレビュー待ち行列（実質的な待ち人数）】");
-
-  // 前回行が旧定義（QueueBasis 列なし）の場合、ActiveAhead の定義が異なるため前回比は出さない
-  const prev = prevRecord && prevRecord.QueueBasis === QUEUE_BASIS ? prevRecord : null;
-  const front = queueInfo.front;
-  const prevFrontNum = prev && prev.FrontNumber !== "" ? Number(prev.FrontNumber) : undefined;
-  const frontDeltaText = formatFrontDeltaText(front.number, prevFrontNum);
-  const deltaOf = (current: number, previous: number | string | undefined): string =>
-    prev && previous !== undefined && previous !== ""
-      ? ` ${formatDelta(current, Number(previous))}`
-      : "";
-
-  log(
-    `消化前線（最古の健康なPR）  : #${front.number} (作成: ${formatDateTimeWithDay(front.createdAt)})${frontDeltaText}`,
-  );
-  log(
-    `実質待ちPR（更新順の順位）  : 約 ${queueInfo.activeAheadCount} 件${deltaOf(queueInfo.activeAheadCount, prev?.ActiveAhead)} （あなたのPRより更新が古い健康なPR。指摘なく順番待ちしているPR）`,
-  );
-  log(
-    `全期間の累積待ちPR (参考) : 約 ${queueInfo.aheadCount} 件${deltaOf(queueInfo.aheadCount, prev?.TotalAhead)} （作成順であなたより前の健康なPR）`,
-  );
-  log(
-    `あなたの後ろに並ぶ準備完了PR: 約 ${queueInfo.behindCount} 件${deltaOf(queueInfo.behindCount, prev?.Behind)}`,
-  );
-  log("----------------------------------------");
-
-  // 待ち行列からの離脱（基準 PR の起票以降にマージ・クローズされた、起票が基準 PR より前の PR）の累積件数。
-  // 実質待ちの減少の内訳（マージ・クローズ・その他）を、観測の間の差から求めるために履歴へ残す
-  const exitQueries = buildExitCountQueries(
+  const { mergedOlder, closedOlder } = await fetchExitCounts(
+    client,
     options.repository,
-    created.toISOString().replace(/\.\d{3}Z$/, "Z"),
-    REQUIRED_LABELS,
-  );
-  const mergedOlder = (await client.searchIssuesDetailed(exitQueries.merged, "updated", "desc", 1))
-    .totalCount;
-  const closedOlder = (await client.searchIssuesDetailed(exitQueries.closed, "updated", "desc", 1))
-    .totalCount;
-  log(
-    `離脱の累積         : 基準 PR の起票以降に、起票が前の PR がマージ ${mergedOlder} 件・未マージでクローズ ${closedOlder} 件`,
+    created,
+    log,
   );
 
   // 全体実績（既定 30 日窓）と初回提出者コホート（既定 90 日窓）でサンプルを分離して統計計算
-  const overallSince = new Date(now.getTime() - options.lookbackDays * 24 * 60 * 60 * 1000);
-  const overallSamples = samples.filter(
-    (s) => new Date(s.mergedAt).getTime() >= overallSince.getTime(),
-  );
-  const overallSkipped = skippedCandidates.filter(
-    (s) => s.mergedAt.getTime() >= overallSince.getTime(),
-  ).length;
+  const { overallSamples, overallSkippedCount, firstTimerSamples } = partitionSamplesByWindow({
+    samples,
+    skippedCandidates,
+    now,
+    lookbackDays: options.lookbackDays,
+    firstTimerLookbackDays,
+  });
 
-  const stats = calculateProgressStats(overallSamples, overallSkipped);
-
-  const firstTimerSince = new Date(now.getTime() - firstTimerLookbackDays * 24 * 60 * 60 * 1000);
-  const firstTimerCandidateSamples = samples.filter(
-    (s) => new Date(s.mergedAt).getTime() >= firstTimerSince.getTime(),
-  );
-  const firstTimerSamples = firstTimerCandidateSamples.filter((s) => s.isFirstTimer === true);
+  const stats = calculateProgressStats(overallSamples, overallSkippedCount);
   const firstTimerStats =
     firstTimerSamples.length > 0 ? calculateProgressStats(firstTimerSamples) : null;
-  const firstTimerSampleCount = firstTimerSamples.length;
-
-  const frontCreatedVal = formatDateTimeWithDay(front.createdAt);
+  const frontCreatedVal = formatDateTimeWithDay(queueInfo.front.createdAt);
 
   const snapshot = createProgressSnapshot({
     now,
@@ -414,7 +529,7 @@ export async function runProgressCli(
     prTitle: pr.title,
     prUrl: pr.url,
     prState: pr.state,
-    frontNumber: front.number,
+    frontNumber: queueInfo.front.number,
     frontCreatedAt: frontCreatedVal,
     activeAhead: queueInfo.activeAheadCount,
     totalAhead: queueInfo.aheadCount,
@@ -425,13 +540,13 @@ export async function runProgressCli(
     commitCount,
     stats,
     lookbackDays: options.lookbackDays,
-    skippedCount: overallSkipped,
-    rivals,
+    skippedCount: overallSkippedCount,
+    rivals: queueInfo.rivals,
     samples: overallSamples,
     targetCreatedAt: created,
     targetReadyAt: targetReady,
     firstTimerStats,
-    firstTimerSampleCount,
+    firstTimerSampleCount: firstTimerSamples.length,
     firstTimerLookbackDays,
   });
 
@@ -442,58 +557,29 @@ export async function runProgressCli(
     log(JSON.stringify(snapshot, null, 2));
   }
 
-  // ログ保存
   if (!options.noLog) {
-    const logRow: ProgressHistoryRow = {
-      Timestamp: formatDateTimeWithDay(now),
-      TargetPr: options.targetPr,
-      FrontNumber: front.number,
-      FrontCreatedAt: frontCreatedVal,
-      ActiveAhead: queueInfo.activeAheadCount,
-      TotalAhead: queueInfo.aheadCount,
-      QueueBasis: QUEUE_BASIS,
-      Behind: queueInfo.behindCount,
-      TotalLifetimeDays: Number(totalLifetimeDays.toFixed(2)),
-      TurnLatencyDays: Number(turnLatencyDays.toFixed(2)),
-      WaitDays: Number(waitDays.toFixed(2)),
-      CommitCount: commitCount,
-      MergedOlder: mergedOlder,
-      ClosedOlder: closedOlder,
-    };
-
-    const logDir = dirname(historyCsvPath);
-    if (!existsSync(logDir)) {
-      mkdirSync(logDir, { recursive: true });
-    }
-
-    try {
-      const existingRows = existsSync(historyCsvPath)
-        ? parseCsvRows(readFileSync(historyCsvPath, "utf-8"))
-        : [];
-      existingRows.push(logRow);
-      writeFileSync(historyCsvPath, serializeCsvRows(existingRows), "utf-8");
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`履歴ファイルへの保存に失敗しました (${historyCsvPath}): ${msg}`);
-    }
-
-    const resolvedSnapshotPath = options.snapshotPath
-      ? resolve(process.cwd(), options.snapshotPath)
-      : resolve(defaultDataDir, "latest-progress.json");
-
-    const snapshotDir = dirname(resolvedSnapshotPath);
-    if (!existsSync(snapshotDir)) {
-      mkdirSync(snapshotDir, { recursive: true });
-    }
-
-    try {
-      writeFileSync(resolvedSnapshotPath, JSON.stringify(snapshot, null, 2), "utf-8");
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `スナップショットファイルへの保存に失敗しました (${resolvedSnapshotPath}): ${msg}`,
-      );
-    }
+    saveProgressOutputs({
+      historyCsvPath,
+      defaultDataDir,
+      snapshotPath: options.snapshotPath,
+      logRow: {
+        Timestamp: formatDateTimeWithDay(now),
+        TargetPr: options.targetPr,
+        FrontNumber: queueInfo.front.number,
+        FrontCreatedAt: frontCreatedVal,
+        ActiveAhead: queueInfo.activeAheadCount,
+        TotalAhead: queueInfo.aheadCount,
+        QueueBasis: QUEUE_BASIS,
+        Behind: queueInfo.behindCount,
+        TotalLifetimeDays: round2(totalLifetimeDays),
+        TurnLatencyDays: round2(turnLatencyDays),
+        WaitDays: round2(waitDays),
+        CommitCount: commitCount,
+        MergedOlder: mergedOlder,
+        ClosedOlder: closedOlder,
+      },
+      snapshot,
+    });
   }
 
   return { snapshot };

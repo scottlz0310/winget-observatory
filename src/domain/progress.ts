@@ -4,6 +4,7 @@
  */
 
 import type {
+  GitHubDetailedSearchItem,
   MergedCandidateSample,
   ProgressPercentileMetrics,
   ProgressRivalPr,
@@ -11,7 +12,8 @@ import type {
   ProgressStatsSummary,
 } from "../models/progress";
 import { buildGuidance, compareWithSamples, toSnapshotSamples } from "./benchmark";
-import { formatDateTimeWithDay } from "./formatters";
+import { DAY_MS, formatDateTimeWithDay } from "./formatters";
+import { isBlockedLabel } from "./labels";
 
 export { formatDateTimeWithDay, formatDelta, formatHumanDays } from "./formatters";
 export {
@@ -75,6 +77,77 @@ export function calculateProgressStats(
     total: calcMetrics(totalValues),
     turn: calcMetrics(turnValues),
     ready: calcMetrics(readyValues),
+  };
+}
+
+/**
+ * 作成順で基準 PR より前に並ぶ検索結果から、除外ラベルを持たない直前ライバル PR を抽出する。
+ */
+export function extractRivalPrs(
+  items: GitHubDetailedSearchItem[],
+  targetPr: number,
+  limit = 5,
+): ProgressRivalPr[] {
+  const rivals: ProgressRivalPr[] = [];
+  for (const item of items) {
+    if (item.number >= targetPr) continue;
+    const hasBlocked = (item.labels ?? []).some((l) => isBlockedLabel(l.name));
+    if (hasBlocked) continue;
+
+    rivals.push({
+      number: item.number,
+      title: item.title,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      url: item.html_url,
+    });
+    if (rivals.length >= limit) break;
+  }
+  return rivals;
+}
+
+export interface PartitionSamplesByWindowParams {
+  samples: MergedCandidateSample[];
+  skippedCandidates: Array<{ mergedAt: Date }>;
+  now: Date;
+  lookbackDays: number;
+  firstTimerLookbackDays: number;
+}
+
+export interface PartitionedSamplesByWindow {
+  overallSince: Date;
+  overallSamples: MergedCandidateSample[];
+  overallSkippedCount: number;
+  firstTimerSince: Date;
+  firstTimerSamples: MergedCandidateSample[];
+}
+
+/**
+ * 収集済みサンプルと除外候補を全体実績窓（既定 30 日）と初回提出者コホート窓（既定 90 日）に仕分ける。
+ */
+export function partitionSamplesByWindow(
+  params: PartitionSamplesByWindowParams,
+): PartitionedSamplesByWindow {
+  const { samples, skippedCandidates, now, lookbackDays, firstTimerLookbackDays } = params;
+  const overallSince = new Date(now.getTime() - lookbackDays * DAY_MS);
+  const overallSinceMs = overallSince.getTime();
+  const overallSamples = samples.filter((s) => new Date(s.mergedAt).getTime() >= overallSinceMs);
+  const overallSkippedCount = skippedCandidates.filter(
+    (s) => s.mergedAt.getTime() >= overallSinceMs,
+  ).length;
+
+  const firstTimerSince = new Date(now.getTime() - firstTimerLookbackDays * DAY_MS);
+  const firstTimerSinceMs = firstTimerSince.getTime();
+  const firstTimerSamples = samples.filter(
+    (s) => new Date(s.mergedAt).getTime() >= firstTimerSinceMs && s.isFirstTimer === true,
+  );
+
+  return {
+    overallSince,
+    overallSamples,
+    overallSkippedCount,
+    firstTimerSince,
+    firstTimerSamples,
   };
 }
 
