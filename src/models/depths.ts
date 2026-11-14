@@ -73,6 +73,8 @@ export interface DepthsRow {
   Url: string;
   Author?: string;
   AuthorAssociation?: string;
+  /** 作者の生涯マージ済 PR 数（常連除外判定用。旧データ互換のためオプショナル） */
+  AuthorMergedCount?: number;
   /** コミット数（GraphQL 経由の底取得時に記録。旧データ互換のためオプショナル） */
   CommitCount?: number;
 }

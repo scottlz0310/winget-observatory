@@ -946,6 +946,100 @@ describe("buildDashboard: 過去実績との比較", () => {
     }
   });
 
+  test.each([
+    {
+      label: "AuthorAssociation=NONE かつ AuthorMergedCount>=1 の隠れ常連に常連除外バッジが付く",
+      association: "NONE",
+      mergedCount: 2,
+      expectBadge: true,
+    },
+    {
+      label:
+        "AuthorAssociation=NONE かつ AuthorMergedCount=0 の初回提出者には常連除外バッジが付かない",
+      association: "NONE",
+      mergedCount: 0,
+      expectBadge: false,
+    },
+    {
+      label:
+        "AuthorAssociation=NONE かつ AuthorMergedCount 未設定（旧データ）には常連除外バッジが付かない",
+      association: "NONE",
+      mergedCount: undefined,
+      expectBadge: false,
+    },
+    {
+      label: "AuthorAssociation=CONTRIBUTOR には AuthorMergedCount 未設定でも常連除外バッジが付く",
+      association: "CONTRIBUTOR",
+      mergedCount: undefined,
+      expectBadge: true,
+    },
+  ])("StaleBottom 常連除外バッジ判定: $label", ({ association, mergedCount, expectBadge }) => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-repeater-badge-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    const dummyDepths = {
+      Timestamp: "2026-11-08T12:00:00Z",
+      TimestampJst: "2026-11-08 21:00:00",
+      StaleBottom: [
+        {
+          Number: 551001,
+          Title: "Stale Candidate",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/551001",
+          Author: "candidate-user",
+          AuthorAssociation: association,
+          ...(mergedCount !== undefined ? { AuthorMergedCount: mergedCount } : {}),
+          CreatedAt: "2026-10-01T12:00:00Z",
+          UpdatedAt: "2026-10-10T12:00:00Z",
+        },
+      ],
+      FirstTimerBottom: [
+        {
+          Number: 551002,
+          Title: "Multi-commit Reworked First Timer",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/551002",
+          Author: "reworked-first-timer",
+          AuthorAssociation: "NONE",
+          CommitCount: 4,
+          // 起票は 36.0 日前、更新は 1.0 日前
+          CreatedAt: "2026-10-03T12:00:00Z",
+          UpdatedAt: "2026-11-07T12:00:00Z",
+        },
+      ],
+    };
+    writeFileSync(join(dataDir, "latest-depths.json"), JSON.stringify(dummyDepths), "utf-8");
+
+    try {
+      const { htmlPath } = buildDashboard({ dataDir, outputDir });
+      const html = readFileSync(htmlPath, "utf-8");
+
+      const staleSection = html
+        .split("🧗 優等生の底（順番待ちの先頭）")[1]
+        .split("🌱 初回提出者の底（真の FIFO 前線）")[0];
+      const firstTimerSection = html
+        .split("🌱 初回提出者の底（真の FIFO 前線）")[1]
+        .split("🔮 仮説② の根拠")[0];
+
+      // 左表（優等生の底）は「更新からの経過」（29 日）＋常連除外バッジ判定
+      expect(staleSection).toContain("<th>更新からの経過</th>");
+      expect(staleSection).toContain("<td>29 日</td>");
+      if (expectBadge) {
+        expect(staleSection).toContain(">常連除外<");
+      } else {
+        expect(staleSection).not.toContain(">常連除外<");
+      }
+
+      // 右表（初回提出者の底）は「起票からの経過」（36 日）であり、更新からの経過（1 日）ではない
+      expect(firstTimerSection).toContain("<th>起票からの経過</th>");
+      expect(firstTimerSection).not.toContain("<th>更新からの経過</th>");
+      expect(firstTimerSection).toContain("<td>36 日</td>");
+      expect(firstTimerSection).not.toContain("<td>1 日</td>");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("renderFirstTimerHeroSummary: 未観測・旧形式・未判定ありのフォールバックが安全に処理される", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-summary-fallback-"));
     const dataDir = join(tempDir, "data");
