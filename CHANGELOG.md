@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-14
+
 ### Changed
 
 - `src/models/depths.ts`, `src/models/forecast.ts`, `src/domain/depths.ts`, `src/domain/forecast.ts`, `src/cli/explore-depths.ts`, `scripts/build-pages.ts`, 関連テスト: 「🧗 優等生の底」と「🌱 初回提出者の底」の抽出条件・役割を分離し、データモデルおよびダッシュボード表示・チャート指標の整合を改善（Issue #74）。
@@ -236,5 +238,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/scottlz0310/winget-observatory/releases/tag/v0.1.0
