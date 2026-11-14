@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildDashboard } from "../scripts/build-pages";
 import type { GitHubApiClient } from "../src/api/github";
 import { runExploreDepths } from "../src/cli/explore-depths";
+import { CURRENT_DEPTHS_VERSION } from "../src/domain/depths";
 import { calculateProgressStats, createProgressSnapshot } from "../src/domain/progress";
 
 describe("buildDashboard", () => {
@@ -314,6 +315,7 @@ describe("buildDashboard: マージ時期の予想", () => {
     Url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
   });
   const snapshot = (timestamp: string, pr: number, updated: string) => ({
+    DepthsVersion: CURRENT_DEPTHS_VERSION,
     Timestamp: timestamp,
     TimestampJst: "",
     Repository: "microsoft/winget-pkgs",
@@ -368,7 +370,7 @@ describe("buildDashboard: マージ時期の予想", () => {
       expect(html).toContain("仮説② の根拠");
       expect(html).toContain("上部の統合時系列チャートを参照");
       expect(html).toContain('aria-label="待ち件数と底の遅れの推移（統合時系列チャート）"');
-      expect(html).toContain("優等生の底 先頭の遅れ");
+      expect(html).toContain("優等生の底 更新からの遅れ");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -746,8 +748,18 @@ describe("buildDashboard: 過去実績との比較", () => {
           Url: "https://github.com/microsoft/winget-pkgs/pull/440002",
           Author: "first-timer-user",
           AuthorAssociation: "NONE",
+          CommitCount: 3,
           CreatedAt: "2026-10-03T00:00:00Z",
           UpdatedAt: "2026-10-03T00:00:00Z",
+        },
+        {
+          Number: 440003,
+          Title: "Legacy First Timer Row Without CommitCount",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/440003",
+          Author: "legacy-first-timer",
+          AuthorAssociation: "NONE",
+          CreatedAt: "2026-10-04T00:00:00Z",
+          UpdatedAt: "2026-10-04T00:00:00Z",
         },
       ],
     };
@@ -760,15 +772,41 @@ describe("buildDashboard: 過去実績との比較", () => {
     writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
 
     const depthsLines = [
+      // 旧定義（DepthsVersion 未設定）のスナップショットは混在しても除外される
       JSON.stringify({
-        Timestamp: "2026-11-07T12:00:00Z",
-        StaleBottom: [{ Number: 440001, UpdatedAt: "2026-10-01T12:00:00Z" }],
-        FirstTimerBottom: [{ Number: 440002, UpdatedAt: "2026-10-02T12:00:00Z" }],
+        Timestamp: "2026-11-06T12:00:00Z",
+        StaleBottom: [{ Number: 439999, UpdatedAt: "2026-09-01T00:00:00Z" }],
+        FirstTimerBottom: [
+          {
+            Number: 439998,
+            CreatedAt: "2026-09-01T00:00:00Z",
+            UpdatedAt: "2026-09-02T00:00:00Z",
+          },
+        ],
       }),
       JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
+        Timestamp: "2026-11-07T12:00:00Z",
+        StaleBottom: [{ Number: 440001, UpdatedAt: "2026-10-01T12:00:00Z" }],
+        FirstTimerBottom: [
+          {
+            Number: 440002,
+            CreatedAt: "2026-10-01T12:00:00Z",
+            UpdatedAt: "2026-10-02T12:00:00Z",
+          },
+        ],
+      }),
+      JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
         Timestamp: "2026-11-08T12:00:00Z",
         StaleBottom: [{ Number: 440001, UpdatedAt: "2026-10-02T00:00:00Z" }],
-        FirstTimerBottom: [{ Number: 440002, UpdatedAt: "2026-10-03T00:00:00Z" }],
+        FirstTimerBottom: [
+          {
+            Number: 440002,
+            CreatedAt: "2026-10-02T00:00:00Z",
+            UpdatedAt: "2026-10-03T00:00:00Z",
+          },
+        ],
       }),
     ];
     writeFileSync(join(dataDir, "depths-history.jsonl"), depthsLines.join("\n"), "utf-8");
@@ -791,11 +829,11 @@ describe("buildDashboard: 過去実績との比較", () => {
       // 2. 統合チャート（4系列・2軸）
       expect(html).toContain('aria-label="待ち件数と底の遅れの推移（統合時系列チャート）"');
       expect(html).toContain("待ち件数"); // 左軸見出し
-      expect(html).toContain("先頭の遅れ（日）"); // 右軸見出し
+      expect(html).toContain("先頭の経過・遅れ（日）"); // 右軸見出し
       expect(html).toContain("実質待ち（更新順）");
       expect(html).toContain("累積待ち（作成順）");
-      expect(html).toContain("優等生の底 先頭の遅れ");
-      expect(html).toContain("🌱 初回提出者の底 先頭の遅れ");
+      expect(html).toContain("優等生の底 更新からの遅れ");
+      expect(html).toContain("🌱 初回提出者の底 起票からの経過");
       expect(html.match(/<polyline /g)?.length).toBe(4);
 
       // 3. マージ実績統計カードの分離
@@ -803,10 +841,16 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain("採用 12 件");
       expect(html).toContain("👥 全体実績（常連・特急レーンを含む全サンプル）");
 
-      // 4. 底の横並び比較 ＆ 常連除外バッジ
+      // 4. 底の横並び比較 ＆ コミット数列 ＆ 常連除外バッジ
       expect(html).toContain("待機列の底の比較（優等生 vs 初回提出者）");
+      expect(html).toContain("左は「1コミット完全放置」の待機前線（常連含む）");
       expect(html).toContain("🧗 優等生の底（順番待ちの先頭）");
       expect(html).toContain("🌱 初回提出者の底（真の FIFO 前線）");
+      expect(html).toContain("手直し込み初回全体");
+      expect(html).toContain("起票日時の古い順です");
+      expect(html).toContain("<th>コミット数</th>");
+      expect(html).toContain("<td>3</td>"); // #440002 の CommitCount
+      expect(html).toContain("<td>-</td>"); // #440003 (旧データ互換)
       expect(html).toContain("常連除外"); // #440001 (CONTRIBUTOR) に付与される
 
       // 5. サンプル一覧のコホートバッジ色分け
@@ -846,11 +890,35 @@ describe("buildDashboard: 過去実績との比較", () => {
           author_association: "CONTRIBUTOR",
         },
       ],
-      graphql: async () => ({
-        search: {
-          nodes: [],
-        },
-      }),
+      graphql: async (_query: string, variables?: Record<string, unknown>) => {
+        const searchQuery = String(variables?.query ?? "");
+        if (searchQuery.includes("sort:updated-asc")) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  number: 550001,
+                  title: "PR by Frequent Contributor",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/550001",
+                  createdAt: "2026-09-10T00:00:00Z",
+                  updatedAt: "2026-09-10T00:00:00Z",
+                  author: { login: "frequent-contributor" },
+                  authorAssociation: "CONTRIBUTOR",
+                  commits: { totalCount: 1 },
+                  labels: { nodes: [{ name: "New-Package" }] },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [],
+          },
+        };
+      },
     } as unknown as GitHubApiClient;
 
     await runExploreDepths(

@@ -5,10 +5,12 @@
 
 import type { DepthsSnapshot } from "../models/depths";
 import type {
+  FirstTimerFrontierSample,
   LifetimeForecast,
   StaleFrontierForecast,
   StaleFrontierSample,
 } from "../models/forecast";
+import { CURRENT_DEPTHS_VERSION } from "./depths";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -43,12 +45,16 @@ export function parseDepthsHistory(text: string): DepthsSnapshot[] {
 }
 
 /**
- * スナップショット列から、優等生の底の先頭（更新が最古の健康な PR）の観測列を時刻昇順で取り出す。
- * 優等生の底が空の観測、日時が不正な観測は除く。
+ * スナップショット列から、優等生の底の先頭（1コミット限定・更新が最古の健康な PR）の観測列を時刻昇順で取り出す。
+ * 観測定義が異なる旧履歴（DepthsVersion 不一致・未設定）、優等生の底が空の観測、日時が不正な観測は除く。
  */
-export function extractStaleFrontierSamples(snapshots: DepthsSnapshot[]): StaleFrontierSample[] {
+export function extractStaleFrontierSamples(
+  snapshots: DepthsSnapshot[],
+  definitionVersion = CURRENT_DEPTHS_VERSION,
+): StaleFrontierSample[] {
   const samples: StaleFrontierSample[] = [];
   for (const snapshot of snapshots) {
+    if (snapshot.DepthsVersion !== definitionVersion) continue;
     const head = snapshot.StaleBottom?.[0];
     if (!head) continue;
     const timestampMs = Date.parse(snapshot.Timestamp);
@@ -60,21 +66,23 @@ export function extractStaleFrontierSamples(snapshots: DepthsSnapshot[]): StaleF
 }
 
 /**
- * スナップショット列から、初回提出者の底の先頭（常連を除外した初回提出者の最古更新 PR）の
+ * スナップショット列から、初回提出者の底の先頭（起票が最古の初回提出者 PR）の
  * 観測列を時刻昇順で取り出す。
- * 初回提出者の底が未記録（Phase 2 導入前）、空の観測、日時が不正な観測は除く。
+ * 観測定義が異なる旧履歴（DepthsVersion 不一致・未設定）、未記録・空の観測、日時が不正な観測は除く。
  */
 export function extractFirstTimerFrontierSamples(
   snapshots: DepthsSnapshot[],
-): StaleFrontierSample[] {
-  const samples: StaleFrontierSample[] = [];
+  definitionVersion = CURRENT_DEPTHS_VERSION,
+): FirstTimerFrontierSample[] {
+  const samples: FirstTimerFrontierSample[] = [];
   for (const snapshot of snapshots) {
+    if (snapshot.DepthsVersion !== definitionVersion) continue;
     const head = snapshot.FirstTimerBottom?.[0];
     if (!head) continue;
     const timestampMs = Date.parse(snapshot.Timestamp);
-    const updatedMs = Date.parse(head.UpdatedAt);
-    if (Number.isNaN(timestampMs) || Number.isNaN(updatedMs)) continue;
-    samples.push({ timestampMs, pr: head.Number, updatedMs });
+    const createdMs = Date.parse(head.CreatedAt);
+    if (Number.isNaN(timestampMs) || Number.isNaN(createdMs)) continue;
+    samples.push({ timestampMs, pr: head.Number, createdMs });
   }
   return samples.sort((a, b) => a.timestampMs - b.timestampMs);
 }

@@ -12,6 +12,13 @@ import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./progress";
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
+ * 現行の底スナップショット定義バージョン。
+ * - 未設定 / 1: 旧定義（StaleBottom=全コミット、FirstTimerBottom=updatedAt順・生涯マージ未検証）
+ * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み）
+ */
+export const CURRENT_DEPTHS_VERSION = 2;
+
+/**
  * UTC の日時（ISO 8601 文字列または Date）を JST (+09:00) の指定フォーマット文字列へ変換する。
  * 外部 I/O・環境変数に依存しない純粋関数。
  */
@@ -113,7 +120,23 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
     Url: node.url,
     Author: node.author?.login,
     AuthorAssociation: node.authorAssociation,
+    CommitCount: node.commits?.totalCount,
   };
+}
+
+function hasBlockedLabel(node: GraphQLPrNode): boolean {
+  const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
+  return labelNames.some((name) => BLOCKED_PATTERNS.some((pattern) => pattern.test(name)));
+}
+
+/**
+ * GraphQL 検索ノードが「優等生の底（1コミット限定・除外ラベルなし）」の条件を満たすか判定する。
+ */
+export function isStaleCandidate(node: GraphQLPrNode): boolean {
+  if (node.commits?.totalCount !== 1) {
+    return false;
+  }
+  return !hasBlockedLabel(node);
 }
 
 /**
@@ -127,11 +150,23 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
   if (node.authorAssociation !== "NONE") {
     return false;
   }
-  const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
-  const hasBlockedPattern = labelNames.some((name) =>
-    BLOCKED_PATTERNS.some((pattern) => pattern.test(name)),
-  );
-  return !hasBlockedPattern;
+  return !hasBlockedLabel(node);
+}
+
+function filterCandidates(
+  nodes: GraphQLPrNode[],
+  predicate: (node: GraphQLPrNode) => boolean,
+  limit = 10,
+): DepthsRow[] {
+  return nodes.filter(predicate).slice(0, limit).map(formatGraphQLDepthsRow);
+}
+
+/**
+ * GraphQL 検索ノードから「優等生の底（1コミット限定・除外ラベルなし）」を抽出し、
+ * DepthsRow 形式で返す。
+ */
+export function filterStaleCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
+  return filterCandidates(nodes, isStaleCandidate, limit);
 }
 
 /**
@@ -139,7 +174,7 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
  * DepthsRow 形式で返す。
  */
 export function filterFirstTimerCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
-  return nodes.filter(isFirstTimerCandidate).slice(0, limit).map(formatGraphQLDepthsRow);
+  return filterCandidates(nodes, isFirstTimerCandidate, limit);
 }
 
 /**
@@ -156,6 +191,7 @@ export function createDepthsSnapshot(params: {
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
+    DepthsVersion: CURRENT_DEPTHS_VERSION,
     Timestamp: params.now.toISOString(),
     TimestampJst: formatJstDateTime(params.now, true),
     Repository: params.repository,

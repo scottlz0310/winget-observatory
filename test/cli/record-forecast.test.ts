@@ -9,6 +9,7 @@ import {
   resolveDefaultDataDir,
   runRecordForecast,
 } from "../../src/cli/record-forecast";
+import { CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
 import type { ProgressPrDetail } from "../../src/models/progress";
 
 const CSV_HEADER =
@@ -106,6 +107,7 @@ describe("CLI: runRecordForecast", () => {
     );
     const stale = (t: string) =>
       JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
         Timestamp: t,
         StaleBottom: [{ Number: 10, UpdatedAt: "2026-10-09T00:00:00Z" }],
       });

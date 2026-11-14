@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
 import {
   calculateLifetimeForecast,
   calculateStaleFrontierForecast,
@@ -23,19 +24,24 @@ const sample = (
   updatedMs: T0 - frontierDaysBeforeT0 * DAY,
 });
 
-const row = (number: number, updatedAt: string): DepthsRow => ({
+const row = (number: number, updatedAt: string, createdAt = updatedAt): DepthsRow => ({
   PR: `#${number}`,
   Number: number,
   作成日時: "",
   更新日時: "",
-  CreatedAt: updatedAt,
+  CreatedAt: createdAt,
   UpdatedAt: updatedAt,
   タイトル: "",
   Title: "",
   Url: "",
 });
 
-const snapshot = (timestamp: string, stale: DepthsRow[]): DepthsSnapshot => ({
+const snapshot = (
+  timestamp: string,
+  stale: DepthsRow[],
+  depthsVersion: number | null = CURRENT_DEPTHS_VERSION,
+): DepthsSnapshot => ({
+  ...(depthsVersion !== null ? { DepthsVersion: depthsVersion } : {}),
   Timestamp: timestamp,
   TimestampJst: "",
   Repository: "test/repo",
@@ -72,25 +78,61 @@ describe("Domain: extractStaleFrontierSamples", () => {
     ]);
     expect(samples.map((s) => s.pr)).toEqual([10, 20]);
   });
+
+  test("旧定義（DepthsVersion 未設定・旧版）と新定義が混在しても旧定義を除外し、条件切替を前線進行として速度計算しない", () => {
+    // 11/13 旧定義: 2コミットPR (更新 10/1)、11/14 新定義: 1コミットPR (更新 11/1)
+    const oldUnversioned = snapshot(
+      "2026-11-13T00:00:00Z",
+      [row(1001, "2026-10-01T00:00:00Z")],
+      null,
+    );
+    const oldV1 = snapshot("2026-11-13T12:00:00Z", [row(1002, "2026-10-02T00:00:00Z")], 1);
+    const newV2 = snapshot("2026-11-14T00:00:00Z", [row(2001, "2026-11-01T00:00:00Z")]);
+
+    const samples = extractStaleFrontierSamples([oldUnversioned, oldV1, newV2]);
+    expect(samples.map((s) => s.pr)).toEqual([2001]);
+
+    // 旧新混在で偽の速度 (31日/日など) が算出されないこと
+    const forecast = calculateStaleFrontierForecast(samples, Date.parse("2026-11-10T00:00:00Z"));
+    expect(forecast.observedSpeed).toBeNull();
+    expect(forecast.observedEtaDays).toBeNull();
+    expect(forecast.observedUnavailable).toBe("insufficient-window");
+  });
 });
 
 describe("Domain: extractFirstTimerFrontierSamples", () => {
-  test("初回提出者の底の先頭を時刻昇順で取り出し、空・不正な観測は除く", () => {
+  test("初回提出者の底の先頭を時刻昇順で取り出し、UpdatedAt ではなく CreatedAt（起票時刻）を抽出する", () => {
     const s1 = snapshot("2026-11-01T08:00:00Z", []);
-    s1.FirstTimerBottom = [row(200, "2026-10-10T00:00:00Z")];
+    s1.FirstTimerBottom = [row(200, "2026-10-20T00:00:00Z", "2026-10-10T00:00:00Z")];
     const s2 = snapshot("2026-11-01T00:00:00Z", []);
-    s2.FirstTimerBottom = [row(100, "2026-10-09T00:00:00Z")];
+    s2.FirstTimerBottom = [row(100, "2026-10-19T00:00:00Z", "2026-10-09T00:00:00Z")];
     const s3 = snapshot("2026-11-01T04:00:00Z", []);
     s3.FirstTimerBottom = [];
     const s4 = snapshot("invalid", []);
-    s4.FirstTimerBottom = [row(300, "2026-10-11T00:00:00Z")];
+    s4.FirstTimerBottom = [row(300, "2026-10-11T00:00:00Z", "2026-10-11T00:00:00Z")];
     const s5 = snapshot("2026-11-01T06:00:00Z", []);
-    s5.FirstTimerBottom = [row(400, "not-a-date")];
+    s5.FirstTimerBottom = [row(400, "2026-10-12T00:00:00Z", "not-a-date")];
     const s6 = snapshot("2026-11-01T07:00:00Z", []);
     // FirstTimerBottom 未定義
 
     const samples = extractFirstTimerFrontierSamples([s1, s2, s3, s4, s5, s6]);
     expect(samples.map((s) => s.pr)).toEqual([100, 200]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-10-09T00:00:00Z"));
+    expect(samples[1].createdMs).toBe(Date.parse("2026-10-10T00:00:00Z"));
+  });
+
+  test("更新順で記録された旧定義の FirstTimerBottom 履歴は除外し、新定義（起票順・生涯マージ0回）のみを抽出する", () => {
+    const oldUpdatedOrder = snapshot("2026-11-13T00:00:00Z", [], null);
+    oldUpdatedOrder.FirstTimerBottom = [
+      row(3001, "2026-11-02T00:00:00Z", "2026-11-01T00:00:00Z"),
+      row(3002, "2026-11-03T00:00:00Z", "2026-10-01T00:00:00Z"),
+    ];
+    const newCreatedOrder = snapshot("2026-11-14T00:00:00Z", []);
+    newCreatedOrder.FirstTimerBottom = [row(3002, "2026-11-03T00:00:00Z", "2026-10-01T00:00:00Z")];
+
+    const samples = extractFirstTimerFrontierSamples([oldUpdatedOrder, newCreatedOrder]);
+    expect(samples.map((s) => s.pr)).toEqual([3002]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-10-01T00:00:00Z"));
   });
 });
 

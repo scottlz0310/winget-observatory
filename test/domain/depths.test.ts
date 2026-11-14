@@ -3,13 +3,16 @@ import {
   buildAbsoluteBaseQuery,
   buildExpressQuery,
   buildHealthyBaseQuery,
+  CURRENT_DEPTHS_VERSION,
   createDepthsSnapshot,
   filterFirstTimerCandidates,
+  filterStaleCandidates,
   formatDepthsRow,
   formatGraphQLDepthsRow,
   formatJstDateTime,
   formatTargetPrInfo,
   isFirstTimerCandidate,
+  isStaleCandidate,
   truncateTitle,
 } from "../../src/domain/depths";
 import type { GitHubPrView, GitHubSearchItem, GraphQLPrNode } from "../../src/models/depths";
@@ -132,6 +135,7 @@ describe("Domain: depths logic", () => {
       expressLane: [],
     });
 
+    expect(snapshot.DepthsVersion).toBe(CURRENT_DEPTHS_VERSION);
     expect(snapshot.Timestamp).toBe("2026-11-07T05:54:31.000Z");
     expect(snapshot.TimestampJst).toBe("2026-11-07 14:54:31");
     expect(snapshot.Repository).toBe("microsoft/winget-pkgs");
@@ -237,15 +241,34 @@ describe("Domain: depths logic", () => {
       expect(result[0].Number).toBe(450001);
     });
 
-    test("formatGraphQLDepthsRow は正しく DepthsRow を組み立てる", () => {
+    test("formatGraphQLDepthsRow は正しく DepthsRow を組み立て、CommitCount も格納する", () => {
       const row = formatGraphQLDepthsRow(sampleNodes[0]);
       expect(row.PR).toBe("#450001");
       expect(row.Number).toBe(450001);
       expect(row.Title).toBe("Valid First Timer PR");
       expect(row.Author).toBe("alice");
       expect(row.AuthorAssociation).toBe("NONE");
+      expect(row.CommitCount).toBe(1);
       expect(row.作成日時).toBe("2026-10-09 11:00");
       expect(row.更新日時).toBe("2026-10-09 11:30");
+
+      const multiCommitRow = formatGraphQLDepthsRow(sampleNodes[2]);
+      expect(multiCommitRow.CommitCount).toBe(2);
+    });
+
+    test("isStaleCandidate は1コミット限定かつ除外ラベルなしの健康体を判定する（常連含む）", () => {
+      expect(isStaleCandidate(sampleNodes[0])).toBe(true); // 1 commit, NONE
+      expect(isStaleCandidate(sampleNodes[1])).toBe(true); // 1 commit, CONTRIBUTOR（優等生の底は常連含む）
+      expect(isStaleCandidate(sampleNodes[2])).toBe(false); // 2 commits（1コミット限定のため除外）
+      expect(isStaleCandidate(sampleNodes[3])).toBe(false); // blocked label
+      expect(isStaleCandidate(sampleNodes[4])).toBe(true); // 1 commit, author null でも優等生としては許容
+      expect(isStaleCandidate(sampleNodes[5])).toBe(true);
+    });
+
+    test("filterStaleCandidates は1コミット限定の健全なPRを抽出する", () => {
+      const result = filterStaleCandidates(sampleNodes);
+      expect(result.map((r) => r.Number)).toEqual([450001, 450002, 450005, 450006]);
+      expect(result.every((r) => r.CommitCount === 1)).toBe(true);
     });
   });
 });

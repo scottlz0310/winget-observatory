@@ -73,21 +73,25 @@ export interface DepthsRow {
   Url: string;
   Author?: string;
   AuthorAssociation?: string;
+  /** コミット数（GraphQL 経由の底取得時に記録。旧データ互換のためオプショナル） */
+  CommitCount?: number;
 }
 
 /**
  * キュー境界探索のスナップショット（JSON / JSONL 永続化用）
  */
 export interface DepthsSnapshot {
+  /** 観測定義バージョン（2: StaleBottom=1コミット限定 / FirstTimerBottom=起票順・生涯マージ0回。未設定・1は旧定義） */
+  DepthsVersion?: number;
   Timestamp: string;
   TimestampJst: string;
   Repository: string;
   TargetPr: TargetPrInfo | null;
   HealthyBottom: DepthsRow[];
   AbsoluteBottom: DepthsRow[];
-  /** 優等生の底（旧称: 遭難の底。健康体の中で更新日時が最も古い PR） */
+  /** 優等生の底（1コミット限定の健康体の中で更新日時が最も古い PR） */
   StaleBottom: DepthsRow[];
-  /** 初回提出者の底（優等生の底から常連を除外した初回提出者の健康な PR） */
+  /** 初回提出者の底（手直しコミット込み・生涯マージ 0 回の初回提出者の中で起票日時が最も古い健康な PR） */
   FirstTimerBottom?: DepthsRow[];
   ExpressLane: DepthsRow[];
 }
