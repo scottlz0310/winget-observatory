@@ -15,6 +15,13 @@ import {
   adaptGraphQLToSearchItem,
   buildGraphQLSearchQuery,
 } from "./graphql-adapters";
+import {
+  GET_PULL_REQUEST_DETAILS_QUERY,
+  GET_PULL_REQUEST_TIMELINE_QUERY,
+  GET_PULL_REQUEST_VIEW_QUERY,
+  GET_RATE_LIMIT_QUERY,
+  SEARCH_ISSUES_QUERY,
+} from "./graphql-queries";
 import type {
   GitHubRateLimit,
   GitHubRateLimitBucket,
@@ -24,14 +31,41 @@ import type {
   GraphQLSearchConnection,
   GraphQLTimelineConnection,
 } from "./graphql-types";
+import {
+  calculateBackoffDelay,
+  GitHubApiError,
+  GitHubGraphQLError,
+  type GraphQLErrorDetail,
+  type GraphQLRetryOptions,
+  isPrNotFoundGraphQLError,
+  isRetryableStatusCode,
+  parseRetryAfterMs,
+  RETRYABLE_STATUS_CODES,
+} from "./retry";
 
 export type {
   GitHubDetailedSearchItem,
   GitHubDetailedSearchResult,
   GitHubRateLimit,
   GitHubRateLimitBucket,
+  GraphQLErrorDetail,
   GraphQLRateLimitBucket,
+  GraphQLRetryOptions,
   SearchPageInfo,
+};
+export {
+  calculateBackoffDelay,
+  GET_PULL_REQUEST_DETAILS_QUERY,
+  GET_PULL_REQUEST_TIMELINE_QUERY,
+  GET_PULL_REQUEST_VIEW_QUERY,
+  GET_RATE_LIMIT_QUERY,
+  GitHubApiError,
+  GitHubGraphQLError,
+  isPrNotFoundGraphQLError,
+  isRetryableStatusCode,
+  parseRetryAfterMs,
+  RETRYABLE_STATUS_CODES,
+  SEARCH_ISSUES_QUERY,
 };
 
 /** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
@@ -51,148 +85,6 @@ export function parseRepository(repository: string): { owner: string; name: stri
   return { owner: parts[0], name: parts[1] };
 }
 
-export const SEARCH_ISSUES_QUERY = `
-query SearchIssues($query: String!, $first: Int!, $after: String) {
-  search(query: $query, type: ISSUE, first: $first, after: $after) {
-    issueCount
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    nodes {
-      ... on PullRequest {
-        number
-        title
-        url
-        createdAt
-        updatedAt
-        isDraft
-        mergedAt
-        author {
-          login
-        }
-        authorAssociation
-        labels(first: 100) {
-          nodes {
-            name
-          }
-        }
-        commits(first: 1) {
-          totalCount
-        }
-      }
-    }
-  }
-}
-`;
-
-export const GET_RATE_LIMIT_QUERY = `
-query GetRateLimit {
-  rateLimit {
-    limit
-    cost
-    remaining
-    resetAt
-  }
-}
-`;
-
-export const GET_PULL_REQUEST_VIEW_QUERY = `
-query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      number
-      title
-      url
-      createdAt
-      updatedAt
-    }
-  }
-}
-`;
-
-export const GET_PULL_REQUEST_DETAILS_QUERY = `
-query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      number
-      title
-      url
-      state
-      isDraft
-      createdAt
-      updatedAt
-      mergedAt
-      closedAt
-      author {
-        login
-      }
-      authorAssociation
-      labels(first: 100) {
-        nodes {
-          name
-        }
-      }
-      commits(first: 100) {
-        totalCount
-        nodes {
-          commit {
-            oid
-            messageHeadline
-            committedDate
-          }
-        }
-      }
-    }
-  }
-}
-`;
-
-export const GET_PULL_REQUEST_TIMELINE_QUERY = `
-query GetPullRequestTimeline($owner: String!, $name: String!, $number: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      timelineItems(
-        first: 100
-        after: $after
-        itemTypes: [
-          LABELED_EVENT
-          UNLABELED_EVENT
-          CONVERT_TO_DRAFT_EVENT
-          READY_FOR_REVIEW_EVENT
-        ]
-      ) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          __typename
-          ... on LabeledEvent {
-            createdAt
-            label {
-              name
-            }
-          }
-          ... on UnlabeledEvent {
-            createdAt
-            label {
-              name
-            }
-          }
-          ... on ConvertToDraftEvent {
-            createdAt
-          }
-          ... on ReadyForReviewEvent {
-            createdAt
-          }
-        }
-      }
-    }
-  }
-}
-`;
-
 interface GraphQLSearchResponse {
   search?: GraphQLSearchConnection<GraphQLPullRequestNode> | null;
 }
@@ -205,121 +97,11 @@ interface GraphQLTimelineItemsResponse {
   } | null;
 }
 
-/**
- * 一時エラーとしてリトライ対象とする HTTP ステータスコード。
- * 429: Too Many Requests（セカンダリレート制限等）
- * 502: Bad Gateway
- * 503: Service Unavailable
- * 504: Gateway Timeout
- */
-export const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 504]);
-
-export function isRetryableStatusCode(status: number): boolean {
-  return RETRYABLE_STATUS_CODES.has(status);
-}
-
-/**
- * 指数バックオフ + ジッターの待機時間（ミリ秒）を計算する。
- * attempt: 1 始まりのリトライ試行回数（1回目リトライ = 1, 2回目 = 2, 3回目 = 3...）
- */
-export function calculateBackoffDelay(
-  attempt: number,
-  baseDelayMs = 2000,
-  maxJitterMs = 500,
-): number {
-  const exponential = baseDelayMs * 2 ** (attempt - 1);
-  const jitter = maxJitterMs > 0 ? Math.floor(Math.random() * maxJitterMs) : 0;
-  return exponential + jitter;
-}
-
-/**
- * Retry-After ヘッダー（秒数または HTTP-date）をミリ秒数としてパースする。
- * 不正値や未設定時は undefined を返す。
- */
-export function parseRetryAfterMs(headerValue: string | null | undefined): number | undefined {
-  if (!headerValue) {
-    return undefined;
-  }
-  const trimmed = headerValue.trim();
-  const seconds = Number(trimmed);
-  if (Number.isFinite(seconds)) {
-    return seconds >= 0 ? seconds * 1000 : undefined;
-  }
-  const dateMs = Date.parse(trimmed);
-  if (!Number.isNaN(dateMs)) {
-    const diff = dateMs - Date.now();
-    return Math.max(diff, 0);
-  }
-  return undefined;
-}
-
-export interface GraphQLRetryOptions {
-  /** 最大リトライ回数（既定: 3。初回含め計 4 回試行） */
-  maxRetries?: number;
-  /** 初回リトライのベース待機時間（ミリ秒、既定: 2000） */
-  baseDelayMs?: number;
-  /** ジッターの最大幅（ミリ秒、既定: 500） */
-  maxJitterMs?: number;
-  /** 待機関数（既定: setTimeout による Promise） */
-  sleep?: (ms: number) => Promise<void>;
-  /** 警告ログ関数（既定: console.error） */
-  warnLog?: (message: string) => void;
-}
-
 export interface GitHubApiClientOptions {
   token?: string;
   baseUrl?: string;
   fetch?: FetchLike;
   retry?: GraphQLRetryOptions;
-}
-
-export class GitHubApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = "GitHubApiError";
-  }
-}
-
-export interface GraphQLErrorDetail {
-  message?: string;
-  type?: string;
-  path?: Array<string | number>;
-  locations?: Array<{ line: number; column: number }>;
-}
-
-export class GitHubGraphQLError extends GitHubApiError {
-  constructor(
-    message: string,
-    status: number,
-    readonly errors: GraphQLErrorDetail[] = [],
-  ) {
-    super(message, status);
-    this.name = "GitHubGraphQLError";
-  }
-}
-
-/**
- * GraphQL の errors が PullRequest の不存在（NOT_FOUND）に起因するかを厳密に判定する。
- * path で対象が pullRequest であることを確認し、FORBIDDEN や INTERNAL などの
- * 認可・サーバー障害エラーを誤って 404 に変換しないよう不存在エラーのみに限定する。
- */
-export function isPrNotFoundGraphQLError(err: unknown): boolean {
-  if (err instanceof GitHubGraphQLError) {
-    if (err.errors.length === 0) {
-      return false;
-    }
-    return err.errors.every((e) => {
-      const isNotFound =
-        e.type === "NOT_FOUND" ||
-        Boolean(e.message?.includes("Could not resolve to a PullRequest"));
-      const isPrPath = e.path ? e.path.includes("pullRequest") : true;
-      return isNotFound && isPrPath;
-    });
-  }
-  return false;
 }
 
 /**
@@ -434,6 +216,22 @@ export class GitHubApiClient {
     };
   }
 
+  private createNotFoundError(resourceLabel: string, prNumber: number): GitHubApiError {
+    return new GitHubApiError(
+      `GitHub ${resourceLabel} 取得に失敗しました (#${prNumber}, status 404): Not Found`,
+      404,
+    );
+  }
+
+  private async waitBeforeRetry(attempt: number, reason: string, minDelayMs = 0): Promise<void> {
+    const exponentialDelay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
+    const delay = minDelayMs > 0 ? Math.max(exponentialDelay, minDelayMs) : exponentialDelay;
+    this.warnLogFn(
+      `[GitHub GraphQL] ${reason}。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
+    );
+    await this.sleepFn(delay);
+  }
+
   /**
    * Pull Request の基本情報を取得する（GraphQL repository.pullRequest 経由）。
    */
@@ -448,19 +246,13 @@ export class GitHubApiClient {
 
       const prNode = data?.repository?.pullRequest;
       if (!prNode) {
-        throw new GitHubApiError(
-          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
-          404,
-        );
+        throw this.createNotFoundError("Pull Request", prNumber);
       }
 
       return adaptGraphQLToPrView(prNode);
     } catch (err: unknown) {
       if (isPrNotFoundGraphQLError(err)) {
-        throw new GitHubApiError(
-          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
-          404,
-        );
+        throw this.createNotFoundError("Pull Request", prNumber);
       }
       throw err;
     }
@@ -542,19 +334,13 @@ export class GitHubApiClient {
 
       const prNode = data?.repository?.pullRequest;
       if (!prNode) {
-        throw new GitHubApiError(
-          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
-          404,
-        );
+        throw this.createNotFoundError("Pull Request", prNumber);
       }
 
       return adaptGraphQLToPrDetail(prNode);
     } catch (err: unknown) {
       if (isPrNotFoundGraphQLError(err)) {
-        throw new GitHubApiError(
-          `GitHub Pull Request 取得に失敗しました (#${prNumber}, status 404): Not Found`,
-          404,
-        );
+        throw this.createNotFoundError("Pull Request", prNumber);
       }
       throw err;
     }
@@ -588,10 +374,7 @@ export class GitHubApiClient {
 
         const prNode = resData.repository?.pullRequest;
         if (!prNode) {
-          throw new GitHubApiError(
-            `GitHub Timeline 取得に失敗しました (#${issueNumber}, status 404): Not Found`,
-            404,
-          );
+          throw this.createNotFoundError("Timeline", issueNumber);
         }
 
         const connection = prNode.timelineItems;
@@ -609,10 +392,7 @@ export class GitHubApiClient {
       return allEvents;
     } catch (err: unknown) {
       if (isPrNotFoundGraphQLError(err)) {
-        throw new GitHubApiError(
-          `GitHub Timeline 取得に失敗しました (#${issueNumber}, status 404): Not Found`,
-          404,
-        );
+        throw this.createNotFoundError("Timeline", issueNumber);
       }
       throw err;
     }
@@ -666,11 +446,10 @@ export class GitHubApiClient {
         lastError = networkError;
 
         if (attempt <= this.maxRetries) {
-          const delay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
-          this.warnLogFn(
-            `[GitHub GraphQL] 一時的なネットワークエラーが発生しました (${networkError.message})。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
+          await this.waitBeforeRetry(
+            attempt,
+            `一時的なネットワークエラーが発生しました (${networkError.message})`,
           );
-          await this.sleepFn(delay);
           continue;
         }
 
@@ -685,21 +464,12 @@ export class GitHubApiClient {
 
         if (isRetryableStatusCode(res.status) && attempt <= this.maxRetries) {
           lastError = apiError;
-          const exponentialDelay = calculateBackoffDelay(
-            attempt,
-            this.baseDelayMs,
-            this.maxJitterMs,
-          );
           const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
-          const delay =
-            retryAfterMs !== undefined
-              ? Math.max(exponentialDelay, retryAfterMs)
-              : exponentialDelay;
-
-          this.warnLogFn(
-            `[GitHub GraphQL] 一時エラーが発生しました (status: ${res.status})。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
+          await this.waitBeforeRetry(
+            attempt,
+            `一時エラーが発生しました (status: ${res.status})`,
+            retryAfterMs,
           );
-          await this.sleepFn(delay);
           continue;
         }
 
@@ -727,12 +497,8 @@ export class GitHubApiClient {
         lastError = parseError;
 
         if (attempt <= this.maxRetries) {
-          const delay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
           const errDetail = parseErr instanceof Error ? parseErr.message : String(parseErr);
-          this.warnLogFn(
-            `[GitHub GraphQL] 応答 JSON パースに失敗しました (${errDetail})。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
-          );
-          await this.sleepFn(delay);
+          await this.waitBeforeRetry(attempt, `応答 JSON パースに失敗しました (${errDetail})`);
           continue;
         }
 

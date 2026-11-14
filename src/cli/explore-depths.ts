@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient } from "../api/github";
+import { FIRST_TIMER_GRAPHQL_QUERY } from "../api/graphql-queries";
 import {
   buildAbsoluteBaseQuery,
   buildExpressQuery,
@@ -38,36 +39,6 @@ export const FIRST_TIMER_PAGE_SIZE = 100;
 
 /** 初回提出者の底を走査する際の探索安全上限（終端に達する前の過剰走査を防止するガード） */
 export const FIRST_TIMER_MAX_NODES = 1000;
-
-export const FIRST_TIMER_GRAPHQL_QUERY = `query($query: String!, $first: Int!, $after: String) {
-  search(query: $query, type: ISSUE, first: $first, after: $after) {
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    nodes {
-      ... on PullRequest {
-        number
-        title
-        url
-        createdAt
-        updatedAt
-        author {
-          login
-        }
-        authorAssociation
-        commits {
-          totalCount
-        }
-        labels(first: 30) {
-          nodes {
-            name
-          }
-        }
-      }
-    }
-  }
-}`;
 
 export interface GraphQLSearchFirstTimerResponse {
   search?: {

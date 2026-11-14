@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   calculateBackoffDelay,
+  GET_PULL_REQUEST_DETAILS_QUERY,
+  GET_PULL_REQUEST_TIMELINE_QUERY,
+  GET_PULL_REQUEST_VIEW_QUERY,
+  GET_RATE_LIMIT_QUERY,
   GitHubApiClient,
   GitHubApiError,
   GitHubGraphQLError,
@@ -8,7 +12,26 @@ import {
   isRetryableStatusCode,
   parseRepository,
   parseRetryAfterMs,
+  RETRYABLE_STATUS_CODES,
+  SEARCH_ISSUES_QUERY,
 } from "../../src/api/github";
+import {
+  GET_PULL_REQUEST_DETAILS_QUERY as DIRECT_GET_PULL_REQUEST_DETAILS_QUERY,
+  GET_PULL_REQUEST_TIMELINE_QUERY as DIRECT_GET_PULL_REQUEST_TIMELINE_QUERY,
+  GET_PULL_REQUEST_VIEW_QUERY as DIRECT_GET_PULL_REQUEST_VIEW_QUERY,
+  GET_RATE_LIMIT_QUERY as DIRECT_GET_RATE_LIMIT_QUERY,
+  SEARCH_ISSUES_QUERY as DIRECT_SEARCH_ISSUES_QUERY,
+  FIRST_TIMER_GRAPHQL_QUERY,
+} from "../../src/api/graphql-queries";
+import {
+  RETRYABLE_STATUS_CODES as DIRECT_RETRYABLE_STATUS_CODES,
+  GitHubApiError as DirectGitHubApiError,
+  GitHubGraphQLError as DirectGitHubGraphQLError,
+  calculateBackoffDelay as directCalculateBackoffDelay,
+  isPrNotFoundGraphQLError as directIsPrNotFoundGraphQLError,
+  isRetryableStatusCode as directIsRetryableStatusCode,
+  parseRetryAfterMs as directParseRetryAfterMs,
+} from "../../src/api/retry";
 
 describe("API: GitHubApiClient", () => {
   test("searchIssues は GraphQL 経由で検索を実行しアイテム一覧を返す", async () => {
@@ -1515,6 +1538,30 @@ describe("API: GitHubApiClient", () => {
       expect(ms).toBeDefined();
       expect(ms).toBeGreaterThan(25000);
       expect(ms).toBeLessThanOrEqual(30000);
+    });
+
+    test("過去の HTTP-date 文字列は 0 にクランプする", () => {
+      const pastDate = new Date(Date.now() - 30000).toUTCString();
+      expect(parseRetryAfterMs(pastDate)).toBe(0);
+    });
+  });
+
+  describe("分離モジュール (graphql-queries / retry) と互換 re-export の整合", () => {
+    test("graphql-queries.ts と retry.ts のシンボルが github.ts からの re-export と一致する", () => {
+      expect(SEARCH_ISSUES_QUERY).toBe(DIRECT_SEARCH_ISSUES_QUERY);
+      expect(GET_RATE_LIMIT_QUERY).toBe(DIRECT_GET_RATE_LIMIT_QUERY);
+      expect(GET_PULL_REQUEST_VIEW_QUERY).toBe(DIRECT_GET_PULL_REQUEST_VIEW_QUERY);
+      expect(GET_PULL_REQUEST_DETAILS_QUERY).toBe(DIRECT_GET_PULL_REQUEST_DETAILS_QUERY);
+      expect(GET_PULL_REQUEST_TIMELINE_QUERY).toBe(DIRECT_GET_PULL_REQUEST_TIMELINE_QUERY);
+      expect(FIRST_TIMER_GRAPHQL_QUERY).toContain("authorAssociation");
+
+      expect(RETRYABLE_STATUS_CODES).toBe(DIRECT_RETRYABLE_STATUS_CODES);
+      expect(isRetryableStatusCode).toBe(directIsRetryableStatusCode);
+      expect(calculateBackoffDelay).toBe(directCalculateBackoffDelay);
+      expect(parseRetryAfterMs).toBe(directParseRetryAfterMs);
+      expect(GitHubApiError).toBe(DirectGitHubApiError);
+      expect(GitHubGraphQLError).toBe(DirectGitHubGraphQLError);
+      expect(isPrNotFoundGraphQLError).toBe(directIsPrNotFoundGraphQLError);
     });
   });
 });
