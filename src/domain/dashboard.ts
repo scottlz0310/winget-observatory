@@ -9,7 +9,7 @@ import type {
   VelocityMetrics,
 } from "../models/dashboard";
 import type { ProgressHistoryRow } from "../models/progress";
-import { DAY_MS, formatJstDate, HOUR_MS, round1, round2 } from "./formatters";
+import { DAY_MS, formatJstDate, HOUR_MS, round1 } from "./formatters";
 import { QUEUE_BASIS } from "./progress";
 
 export { formatJstDate };
@@ -198,7 +198,7 @@ export function calculateVelocityMetrics(
   const velocityPerDay = velocityPerHour * 24;
 
   const roundedVelocityPerDay = round1(velocityPerDay);
-  const roundedVelocityPerHour = round2(velocityPerHour);
+  const roundedVelocityPerHour = Math.round(velocityPerHour * 100) / 100;
   const roundedHours = round1(timeDiffHours);
 
   // 消化が進んでいる（速度がプラス）かつ 実質待ちが残っている場合のみ ETA を算出

@@ -20,10 +20,10 @@ export function round1(value: number): number {
 }
 
 /**
- * 数値を小数第 2 位で四捨五入する。
+ * 数値を小数第 2 位で丸める（従来の `Number(value.toFixed(2))` 互換）。
  */
 export function round2(value: number): number {
-  return Math.round(value * 100) / 100;
+  return Number(value.toFixed(2));
 }
 
 /**

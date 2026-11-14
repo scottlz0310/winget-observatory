@@ -32,6 +32,7 @@ describe("Domain: formatters constants & rounding", () => {
 
   test.each([
     [0, 0],
+    [1.045, 1.04],
     [1.234, 1.23],
     [1.235, 1.24],
     [3.999, 4],
