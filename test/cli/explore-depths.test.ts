@@ -371,6 +371,144 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
     expect(results.map((r) => r.Number)).toEqual([2100, 2101, 2102]);
     expect(results.every((r) => r.CommitCount === 1)).toBe(true);
   });
+
+  test("fetchStaleBottom は authorAssociation=NONE の行に対して生涯マージ数を照会し AuthorMergedCount に設定する", async () => {
+    const authorQueries: string[] = [];
+    const nodes: GraphQLPrNode[] = [
+      {
+        number: 2201,
+        title: "Hidden Repeater NONE",
+        url: "https://github.com/microsoft/winget-pkgs/pull/2201",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-01T01:00:00Z",
+        author: { login: "hidden-repeater" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 1 },
+        labels: { nodes: [{ name: "New-Package" }] },
+      },
+      {
+        number: 2202,
+        title: "True First Timer NONE",
+        url: "https://github.com/microsoft/winget-pkgs/pull/2202",
+        createdAt: "2026-10-02T00:00:00Z",
+        updatedAt: "2026-10-02T01:00:00Z",
+        author: { login: "true-first-timer" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 1 },
+        labels: { nodes: [{ name: "New-Package" }] },
+      },
+      {
+        number: 2203,
+        title: "Contributor (no query needed)",
+        url: "https://github.com/microsoft/winget-pkgs/pull/2203",
+        createdAt: "2026-10-03T00:00:00Z",
+        updatedAt: "2026-10-03T01:00:00Z",
+        author: { login: "known-contributor" },
+        authorAssociation: "CONTRIBUTOR",
+        commits: { totalCount: 1 },
+        labels: { nodes: [{ name: "New-Package" }] },
+      },
+    ];
+
+    const mockClient = {
+      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
+        if (variables.query) {
+          return {
+            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+          } as unknown as T;
+        }
+        authorQueries.push(query);
+        return {
+          u_0: { issueCount: 3 },
+          u_1: { issueCount: 0 },
+        } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const results = await fetchStaleBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
+    expect(authorQueries.length).toBe(1);
+    expect(authorQueries[0]).toContain("author:hidden-repeater");
+    expect(authorQueries[0]).toContain("author:true-first-timer");
+    expect(authorQueries[0]).not.toContain("author:known-contributor");
+
+    expect(results[0].AuthorMergedCount).toBe(3);
+    expect(results[1].AuthorMergedCount).toBe(0);
+    expect(results[2].AuthorMergedCount).toBeUndefined();
+  });
+
+  test("runExploreDepths は StaleBottom と FirstTimerBottom で生涯マージ数キャッシュを共有し重複照会を避ける", async () => {
+    const authorQueries: string[] = [];
+    const sharedNode: GraphQLPrNode = {
+      number: 2301,
+      title: "Shared Hidden Repeater",
+      url: "https://github.com/microsoft/winget-pkgs/pull/2301",
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt: "2026-10-01T01:00:00Z",
+      author: { login: "shared-repeater" },
+      authorAssociation: "NONE",
+      commits: { totalCount: 1 },
+      labels: { nodes: [{ name: "New-Package" }] },
+    };
+
+    const mockClient = {
+      searchIssues: async (): Promise<GitHubSearchItem[]> => [],
+      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
+        if (variables.query) {
+          return {
+            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [sharedNode] },
+          } as unknown as T;
+        }
+        authorQueries.push(query);
+        return { u_0: { issueCount: 2 } } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const snapshot = await runExploreDepths(
+      {
+        targetPr: 1,
+        repository: "microsoft/winget-pkgs",
+        noTargetPr: true,
+        noHistory: true,
+        outputPath: join(tmpdir(), `winget-depths-cache-${Date.now()}.json`),
+        asJson: true,
+      },
+      mockClient,
+      () => {},
+    );
+
+    expect(authorQueries.length).toBe(1);
+    expect(snapshot.StaleBottom[0].AuthorMergedCount).toBe(2);
+    expect(snapshot.FirstTimerBottom).toEqual([]);
+  });
+
+  test("fetchStaleBottom は作者マージ数照会が失敗した場合にコンテキスト付き例外をスローする", async () => {
+    const node: GraphQLPrNode = {
+      number: 2401,
+      title: "NONE Author",
+      url: "https://github.com/microsoft/winget-pkgs/pull/2401",
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt: "2026-10-01T01:00:00Z",
+      author: { login: "some-user" },
+      authorAssociation: "NONE",
+      commits: { totalCount: 1 },
+      labels: { nodes: [{ name: "New-Package" }] },
+    };
+
+    const mockClient = {
+      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
+        if (variables.query) {
+          return {
+            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node] },
+          } as unknown as T;
+        }
+        throw new Error("HTTP 502 Bad Gateway");
+      },
+    } as unknown as GitHubApiClient;
+
+    await expect(fetchStaleBottom(mockClient, "repo:microsoft/winget-pkgs", 10)).rejects.toThrow(
+      "優等生の底の GraphQL 取得に失敗しました: HTTP 502 Bad Gateway",
+    );
+  });
 });
 
 describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）走査", () => {

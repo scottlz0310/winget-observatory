@@ -150,15 +150,53 @@ async function collectBottomCandidates({
   return collectedRows.slice(0, limit);
 }
 
+/** baseQuery から `repo:owner/name` 部分を抽出する */
+function extractRepositoryFromQuery(baseQuery: string): string | undefined {
+  return baseQuery.match(/\brepo:([^\s]+)/)?.[1];
+}
+
+/**
+ * 未照会の作者 login 群について生涯マージ済み PR 数を GraphQL バッチ照会し、キャッシュへ格納する。
+ */
+async function resolveBatchAuthorMergedCounts(
+  client: GitHubApiClient,
+  repository: string | undefined,
+  authors: string[],
+  mergedCountCache: Map<string, number>,
+): Promise<void> {
+  if (!repository) return;
+
+  const unknownAuthors = Array.from(
+    new Set(authors.filter((login) => Boolean(login) && !mergedCountCache.has(login))),
+  );
+  for (let i = 0; i < unknownAuthors.length; i += AUTHOR_MERGED_BATCH_SIZE) {
+    const batch = unknownAuthors.slice(i, i + AUTHOR_MERGED_BATCH_SIZE);
+    const mergedQuery = buildAuthorMergedCountQuery(repository, batch);
+    if (!mergedQuery) continue;
+
+    const res = await client.graphql<Record<string, { issueCount?: number } | undefined>>(
+      mergedQuery,
+      {},
+    );
+    const counts = parseAuthorMergedCounts(batch, res ?? {});
+    for (const [author, count] of counts) {
+      mergedCountCache.set(author, count);
+    }
+  }
+}
+
 /**
  * GraphQL API を用いて優等生の底（Stale Bottom: 1コミット限定・更新日時古い順）を取得する。
+ * `authorAssociation === "NONE"` の行については生涯マージ数を照会し、`AuthorMergedCount` に記録する。
  */
 export async function fetchStaleBottom(
   client: GitHubApiClient,
   baseQuery: string,
   limit = STALE_BOTTOM_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+  mergedCountCache = new Map<string, number>(),
 ): Promise<DepthsRow[]> {
+  const repository = extractRepositoryFromQuery(baseQuery);
   const rows = await collectBottomCandidates({
     client,
     query: `${baseQuery} sort:updated-asc`,
@@ -167,7 +205,31 @@ export async function fetchStaleBottom(
     label: "優等生の底",
     filterNodes: (nodes) => nodes.filter(isStaleCandidate),
   });
-  return rows.sort((a, b) => Date.parse(a.UpdatedAt) - Date.parse(b.UpdatedAt)).slice(0, limit);
+  const sorted = rows
+    .sort((a, b) => Date.parse(a.UpdatedAt) - Date.parse(b.UpdatedAt))
+    .slice(0, limit);
+
+  const noneAuthors = sorted
+    .filter((row) => row.AuthorAssociation === "NONE" && Boolean(row.Author))
+    .map((row) => row.Author as string);
+
+  if (noneAuthors.length > 0) {
+    try {
+      await resolveBatchAuthorMergedCounts(client, repository, noneAuthors, mergedCountCache);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`優等生の底の GraphQL 取得に失敗しました: ${msg}`, {
+        cause: err,
+      });
+    }
+  }
+
+  return sorted.map((row) => {
+    if (row.AuthorAssociation === "NONE" && row.Author && mergedCountCache.has(row.Author)) {
+      return { ...row, AuthorMergedCount: mergedCountCache.get(row.Author) };
+    }
+    return row;
+  });
 }
 
 /**
@@ -180,9 +242,9 @@ export async function fetchFirstTimerBottom(
   baseQuery: string,
   limit = STALE_BOTTOM_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+  mergedCountCache = new Map<string, number>(),
 ): Promise<DepthsRow[]> {
-  const repository = baseQuery.match(/\brepo:([^\s]+)/)?.[1];
-  const mergedCountCache = new Map<string, number>();
+  const repository = extractRepositoryFromQuery(baseQuery);
 
   const rows = await collectBottomCandidates({
     client,
@@ -200,28 +262,11 @@ export async function fetchFirstTimerBottom(
         i += AUTHOR_MERGED_BATCH_SIZE
       ) {
         const slice = candidates.slice(i, i + AUTHOR_MERGED_BATCH_SIZE);
-        const unknownAuthors = Array.from(
-          new Set(
-            slice
-              .map((n) => n.author?.login)
-              .filter((login): login is string => Boolean(login))
-              .filter((login) => !mergedCountCache.has(login)),
-          ),
-        );
+        const authors = slice
+          .map((n) => n.author?.login)
+          .filter((login): login is string => Boolean(login));
 
-        if (unknownAuthors.length > 0 && repository) {
-          const mergedQuery = buildAuthorMergedCountQuery(repository, unknownAuthors);
-          if (mergedQuery) {
-            const res = await client.graphql<Record<string, { issueCount?: number } | undefined>>(
-              mergedQuery,
-              {},
-            );
-            const counts = parseAuthorMergedCounts(unknownAuthors, res ?? {});
-            for (const [author, count] of counts) {
-              mergedCountCache.set(author, count);
-            }
-          }
-        }
+        await resolveBatchAuthorMergedCounts(client, repository, authors, mergedCountCache);
 
         for (const node of slice) {
           const login = node.author?.login;
@@ -341,11 +386,25 @@ export async function runExploreDepths(
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
+  const mergedCountCache = new Map<string, number>();
+
   // 3. 優等生の底（Stale Bottom）: 指摘なく健康な1コミット限定 PR の中で更新日時が古い先頭
-  const staleBottom = await fetchStaleBottom(client, healthyBase, STALE_BOTTOM_LIMIT);
+  const staleBottom = await fetchStaleBottom(
+    client,
+    healthyBase,
+    STALE_BOTTOM_LIMIT,
+    FIRST_TIMER_MAX_NODES,
+    mergedCountCache,
+  );
 
   // 4. 初回提出者の底（First-Timer Bottom）: 初回提出者（NONE・生涯マージ 0 回）の健康な PR 全体（手直し込み・起票日時順）
-  const firstTimerBottom = await fetchFirstTimerBottom(client, healthyBase, STALE_BOTTOM_LIMIT);
+  const firstTimerBottom = await fetchFirstTimerBottom(
+    client,
+    healthyBase,
+    STALE_BOTTOM_LIMIT,
+    FIRST_TIMER_MAX_NODES,
+    mergedCountCache,
+  );
 
   // 5. 特急レーン（Express Lane）
   let expressBottom: DepthsRow[] = [];

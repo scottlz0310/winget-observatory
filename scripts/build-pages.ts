@@ -104,6 +104,7 @@ interface BottomTableRenderOptions {
   showAuthor?: boolean;
   showCommitCount?: boolean;
   highlightRepeaters?: boolean;
+  elapsedBasis?: "updated" | "created";
 }
 
 /** 底の行一覧のテーブル HTML を生成する */
@@ -112,16 +113,24 @@ function renderBottomRowTable(
   timestampIso: string,
   options: BottomTableRenderOptions = {},
 ): string {
-  const { showAuthor = false, showCommitCount = false, highlightRepeaters = false } = options;
+  const {
+    showAuthor = false,
+    showCommitCount = false,
+    highlightRepeaters = false,
+    elapsedBasis = "updated",
+  } = options;
   const observedMs = Date.parse(timestampIso);
   const rows = items
     .map((item, index) => {
-      const updatedMs = Date.parse(item.UpdatedAt);
+      const baseIso = elapsedBasis === "created" ? item.CreatedAt : item.UpdatedAt;
+      const baseMs = Date.parse(baseIso);
       const lag =
-        Number.isNaN(observedMs) || Number.isNaN(updatedMs)
+        Number.isNaN(observedMs) || Number.isNaN(baseMs)
           ? "-"
-          : `${Math.round(((observedMs - updatedMs) / 86_400_000) * 10) / 10} 日`;
-      const isRepeater = item.AuthorAssociation && item.AuthorAssociation !== "NONE";
+          : `${Math.round(((observedMs - baseMs) / 86_400_000) * 10) / 10} 日`;
+      const isRepeater =
+        (Boolean(item.AuthorAssociation) && item.AuthorAssociation !== "NONE") ||
+        (item.AuthorMergedCount ?? 0) > 0;
       const repeaterBadge =
         highlightRepeaters && isRepeater
           ? `<span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者ではないため、初回提出者の底では除外">常連除外</span>`
@@ -144,6 +153,8 @@ function renderBottomRowTable(
     .join("");
   const authorHeader = showAuthor ? "<th>作者</th>" : "";
   const commitCountHeader = showCommitCount ? "<th>コミット数</th>" : "";
+  const elapsedHeader =
+    elapsedBasis === "created" ? "<th>起票からの経過</th>" : "<th>更新からの経過</th>";
   return `
     <table>
       <thead>
@@ -154,7 +165,7 @@ function renderBottomRowTable(
           ${commitCountHeader}
           <th>起票日時 (JST)</th>
           <th>最終更新 (JST)</th>
-          <th>更新からの経過</th>
+          ${elapsedHeader}
           <th>タイトル</th>
         </tr>
       </thead>
@@ -173,10 +184,11 @@ function renderStaleBottomTable(depths: LatestDepths | null): string {
     showAuthor: false,
     showCommitCount: false,
     highlightRepeaters: true,
+    elapsedBasis: "updated",
   });
 }
 
-/** 初回提出者の底（手直し込みの初回提出者全体・起票日時順の PR）の表 */
+/** 初回提出者の底（手直し込みの初回提出者全体・起票日時順の PR）の表。経過 = 観測時刻 − 起票日時 */
 function renderFirstTimerBottomTable(depths: LatestDepths | null): string {
   const items = depths?.FirstTimerBottom ?? [];
   if (items.length === 0) {
@@ -186,6 +198,7 @@ function renderFirstTimerBottomTable(depths: LatestDepths | null): string {
     showAuthor: true,
     showCommitCount: true,
     highlightRepeaters: false,
+    elapsedBasis: "created",
   });
 }
 
