@@ -16,7 +16,7 @@ import {
   formatJstDate,
   selectComparableHistory,
 } from "../src/domain/dashboard";
-import { calculateExitBreakdown } from "../src/domain/exit-breakdown";
+import { calculateExitBreakdown, DEFAULT_EXIT_WINDOW_HOURS } from "../src/domain/exit-breakdown";
 import {
   extractFirstTimerFrontierSamples,
   extractStaleFrontierSamples,
@@ -218,11 +218,15 @@ function renderFirstTimerHeroSummary(
   progress: LatestProgress | null,
   depths: LatestDepths | null,
 ): string {
-  const currentLifetime = Number(progress?.TotalLifetimeDays) || Number(progress?.WaitDays) || 0;
+  const rawLifetime = progress?.TotalLifetimeDays ?? progress?.WaitDays ?? 0;
+  const parsedLifetime = Number(rawLifetime);
+  const currentLifetime = Number.isFinite(parsedLifetime) ? parsedLifetime : 0;
   const p50 = progress?.FirstTimerMedianDays;
   const p75 = progress?.FirstTimerP75Days;
   const sampleCount = progress?.FirstTimerSampleCount ?? 0;
   const firstTimerDays = progress?.FirstTimerLookbackDays ?? progress?.LookbackDays ?? 90;
+  const overallLookbackDays = progress?.LookbackDays ?? 30;
+  const overallSampleCount = progress?.SampleCount;
 
   // 基準 PR の起票時刻
   const createdRaw = depths?.TargetPr?.CreatedAt || depths?.TargetPr?.CreatedAtJst;
@@ -278,7 +282,11 @@ function renderFirstTimerHeroSummary(
     overtakeHeadline = `<div style="font-size: 1.15rem; font-weight: 700;">後発マージ計 ${totalOvertake} 件</div>`;
     const unknownDetail =
       unknownOvertake > 0 ? ` / 未判定: <strong>${unknownOvertake}</strong> 件` : "";
-    overtakeBreakdownHtml = `<div class="card-subtext" style="margin-top: 0.2rem;">常連・特急: <strong>${repeatOvertake}</strong> 件 / 初回: <strong>${firstTimerOvertake}</strong> 件${unknownDetail}</div>`;
+    const sampleScopeText =
+      overallSampleCount !== undefined
+        ? `直近 ${overallLookbackDays} 日間の全体採用サンプル（${overallSampleCount} 件）内`
+        : `直近 ${overallLookbackDays} 日間の全体採用サンプル内`;
+    overtakeBreakdownHtml = `<div class="card-subtext" style="margin-top: 0.2rem;">常連・特急: <strong>${repeatOvertake}</strong> 件 / 初回: <strong>${firstTimerOvertake}</strong> 件${unknownDetail}</div><div class="card-subtext" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem;">集計対象: ${sampleScopeText}</div>`;
 
     if (firstTimerOvertake === 0 && unknownOvertake === 0) {
       overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--success); font-weight: 600; margin-top: 0.25rem;">✨ 採用サンプル内で確定した初回提出者の追い越し: 0 件</div>`;
@@ -328,7 +336,7 @@ function renderFirstTimerHeroSummary(
         </div>
       </div>
       <div class="card-subtext" style="margin-top: 0.5rem;">
-        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、初回提出者（生涯マージ1件）の観測値に基づきます。手直しを含む初回全体の通算所要日数および最終コミット後の所要日数（Turn Latency）を測定しています。
+        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、初回提出者（生涯マージ1件・阻害ラベルや Draft 履歴のない初期健康体）の観測値に基づきます。手直しを含む初回全体の通算所要日数および最終コミット後の所要日数（Turn Latency）を測定しています。
       </div>
     </section>`;
 }
@@ -376,7 +384,7 @@ function renderFirstTimerCohortBlock(progress: LatestProgress | null): string {
         <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間・採用 ${count} 件</span>
       </div>
       <p class="section-note" style="margin-bottom: 0.75rem;">
-        常連の大量まとめマージや特急レーンを除外した「初回提出者（生涯マージ1件）」の実績です。手直しコミットを含む初回提出者全体の「通算所要日数（起票→マージ）」と「最終コミット後所要日数（Turn Latency）」の両方を集計しています。
+        常連の大量まとめマージや特急レーンを除外した「初回提出者（生涯マージ1件・阻害ラベルや Draft 履歴のない初期健康体）」の実績です。手直しコミットを含む初回提出者全体の「通算所要日数（起票→マージ）」と「最終コミット後所要日数（Turn Latency）」の両方を集計しています。
       </p>
       <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: baseline;">
         <div>
@@ -625,9 +633,11 @@ function renderForecastPanel(comparison: ForecastComparison): string {
     </section>`;
 }
 
+const FORECAST_RECENT_TABLE_LIMIT = 5;
+
 /** 仮説② の根拠: 優等生の底の先頭の遅れの推移と直近の観測 */
 function renderForecastSection(samples: StaleFrontierSample[]): string {
-  const recent = samples.slice(-5).reverse();
+  const recent = samples.slice(-FORECAST_RECENT_TABLE_LIMIT).reverse();
   const rows = recent
     .map((sample) => {
       const lag = Math.round(((sample.timestampMs - sample.updatedMs) / DAY_MS) * 10) / 10;
@@ -642,7 +652,7 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
     .join("");
 
   return `
-    <h2 class="section-title">🔮 仮説② の根拠（優等生の底の推移）</h2>
+    <h2 class="section-title">🔮 仮説② の根拠（優等生の底の推移・最新 ${FORECAST_RECENT_TABLE_LIMIT} 件）</h2>
     <p class="section-note">
       仮説②「更新の古い順に処理される」の根拠です。優等生の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します（予想日は最上部の比較、推移は上部の統合時系列チャートを参照）。
     </p>
@@ -740,10 +750,11 @@ function formatJstDateTime(timeMs: number): string {
 
 /** 待ち行列からの離脱の内訳: 実質待ちの減少が、実際のマージによるものか、それ以外かを分解して示す */
 function renderExitBreakdownSection(result: ExitBreakdownResult): string {
+  const targetDays = Math.round((DEFAULT_EXIT_WINDOW_HOURS / 24) * 10) / 10;
   const head = `
     <h2 class="section-title">🧮 待ち行列からの離脱の内訳</h2>
     <p class="section-note">
-      実質待ち（更新順の順位）の減少が、実際のマージによるものか、それ以外かを分解します。仮説①（順位消化）の予想が、実際のマージをどれだけ反映しているかの目安です。
+      実質待ち（更新順の順位）の減少が、実際のマージによるものか、それ以外かを分解します（比較対象は直近約 ${targetDays} 日間 / ${DEFAULT_EXIT_WINDOW_HOURS} 時間窓基準）。仮説①（順位消化）の予想が、実際のマージをどれだけ反映しているかの目安です。
     </p>`;
   if (!result.available) {
     return `${head}
@@ -1139,7 +1150,7 @@ function generateHtml(
       </div>
 
       <div class="card">
-        <div class="card-title">待機日数 (Wait / Turn)</div>
+        <div class="card-title">準備完了後の待機 (Ready / 通算 / 手番)</div>
         <div class="card-value">${escapeHtml(progress?.WaitDays)} <span style="font-size: 1rem; font-weight: normal;">日</span></div>
         <div class="card-subtext">通算待機: ${escapeHtml(progress?.TotalLifetimeDays)} 日 / 修正手番: ${escapeHtml(progress?.TurnLatencyDays)} 日</div>
       </div>
@@ -1156,7 +1167,7 @@ function generateHtml(
 
     <h2 class="section-title">📉 待ち件数の推移（キュー推移と底の進行の統合時系列）</h2>
     <p class="section-note">
-      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭経過日数（優等生の底＝更新からの遅れ、🌱 初回提出者の底＝起票からの経過）です。
+      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭経過日数（優等生の底＝更新からの遅れ、🌱 初回提出者の底＝起票からの経過）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
     </p>
     ${renderChartCard(queueChart)}
 
@@ -1171,7 +1182,7 @@ function generateHtml(
     ${renderFirstTimerCohortBlock(progress)}
 
     <h3 class="subsection-title" style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-muted);">👥 全体実績（常連・特急レーンを含む全サンプル）</h3>
-    <p class="section-note">常連のまとめマージや特急レーンを含むため、ばらつきが大きくなります。</p>
+    <p class="section-note">常連のまとめマージや特急レーンを含むため、ばらつきが大きくなります。除外件数は、タイムライン上で Ready 条件（必須3ラベル成立・非Draft・阻害ラベルなし）の到達日時を特定できなかった PR です。</p>
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">${renderStatCard(
       "手番所要日数 (Turn Latency)",
       { median: progress?.TurnMedianDays, p75: progress?.TurnP75Days, max: progress?.TurnMaxDays },

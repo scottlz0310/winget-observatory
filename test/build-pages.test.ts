@@ -382,7 +382,7 @@ describe("buildDashboard: マージ時期の予想", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
       const forecastSection = html.slice(
-        html.indexOf("🔮 仮説② の根拠（優等生の底の推移）"),
+        html.indexOf("🔮 仮説② の根拠"),
         html.indexOf("🎯 予想の答え合わせ"),
       );
       expect(forecastSection).toContain("観測が 2 件以上たまると推移を表示します");
@@ -1179,5 +1179,108 @@ describe("buildDashboard: 過去実績との比較", () => {
     expect(html).toContain("最終コミット後 (Turn): <strong>8.2</strong> 日");
 
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test("Issue #81: 集計期間（90日/30日/7日）・母集団・上限・初期健康体・TotalLifetimeDays=0のフォールバックを正しく扱う", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-issue-81-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        TargetPr: 123456,
+        LookbackDays: 30,
+        FirstTimerLookbackDays: 90,
+        SampleCount: 142,
+        SkippedCount: 4,
+        TotalLifetimeDays: 0,
+        WaitDays: 12,
+        TurnLatencyDays: 0,
+        FirstTimerMedianDays: 37.0,
+        FirstTimerP75Days: 39.0,
+        FirstTimerSampleCount: 8,
+        Comparison: {
+          LaterCreated: 5,
+          EarlierCreated: 10,
+          LaterReady: 2,
+          FirstTimerLaterCreated: 0,
+          RepeatOrExpressLaterCreated: 5,
+          UnknownLaterCreated: 0,
+        },
+      }),
+      "utf-8",
+    );
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+
+      // TotalLifetimeDays=0 のとき WaitDays=12 に誤フォールバックしないこと
+      expect(html).toContain("（基準 PR 現在: 0 日）");
+      expect(html).toContain("（残り約 37 日）");
+      expect(html).not.toContain("（基準 PR 現在: 12 日）");
+
+      // 追い越し分離内訳の 30 日全体サンプル表記
+      expect(html).toContain("集計対象: 直近 30 日間の全体採用サンプル（142 件）内");
+
+      // KPI カード 4 見出し、チャート上限、離脱内訳 7 日基準、除外件数・初期健康体説明、仮説②最新 5 件
+      expect(html).toContain("準備完了後の待機 (Ready / 通算 / 手番)");
+      expect(html).toContain("直近最大 120 観測点を表示");
+      expect(html).toContain("比較対象は直近約 7 日間 / 168 時間窓基準");
+      expect(html).toContain("除外件数は、タイムライン上で Ready 条件");
+      expect(html).toContain("阻害ラベルや Draft 履歴のない初期健康体");
+      expect(html).toContain("🔮 仮説② の根拠（優等生の底の推移・最新 5 件）");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("非既定の LookbackDays (14) / FirstTimerLookbackDays (60) でも仮説③と実績統計・初回提出者欄の表示期間が矛盾しない", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-lookback-custom-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-08T00:00:00Z",
+        TargetPr: 123456,
+        LookbackDays: 14,
+        FirstTimerLookbackDays: 60,
+        SampleCount: 55,
+        SkippedCount: 2,
+        TotalMedianDays: 18,
+        TotalP75Days: 25,
+        FirstTimerMedianDays: 32,
+        FirstTimerP75Days: 40,
+        FirstTimerSampleCount: 5,
+        Comparison: {
+          LaterCreated: 3,
+          EarlierCreated: 4,
+          LaterReady: 1,
+          FirstTimerLaterCreated: 0,
+          RepeatOrExpressLaterCreated: 3,
+          UnknownLaterCreated: 0,
+        },
+      }),
+      "utf-8",
+    );
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+
+      expect(html).toContain("過去 60 日間の純粋FIFO待機列 準拠");
+      expect(html).toContain("過去 60 日間・採用 5 件");
+      expect(html).toContain("集計対象: 直近 14 日間の全体採用サンプル（55 件）内");
+      expect(html).toContain("マージ実績の所要日数統計 (直近 14 日間");
+      expect(html).toContain("直近（14日間）の全体マージ実績（常連・特急含む）");
+      expect(html).toContain("上部の初回提出者60日コホート統計とは母集団が異なります");
+      expect(html).not.toContain("直近（30日間）の全体マージ実績");
+      expect(html).not.toContain("上部の初回提出者90日コホート統計とは母集団が異なります");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

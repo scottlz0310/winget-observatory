@@ -89,10 +89,12 @@ describe("Domain: calculateForecastComparison", () => {
     expect(result.range?.maxDays).toBe(34);
   });
 
-  test("作成順の進捗は、起票からの経過日数 / 中央値の割合で表す", () => {
+  test("作成順の進捗は、起票からの経過日数 / 中央値の割合で表し、全体30日実績であることを明記する", () => {
     const creation = calculateForecastComparison(baseSource()).hypotheses[2];
     expect(creation.progressRatio).toBeCloseTo(10 / 44, 6);
     expect(creation.progressText).toContain("起票から 10 日 / 通算所要日数の中央値 44 日（23%）");
+    expect(creation.premise).toContain("直近（30日間）の全体マージ実績（常連・特急含む）");
+    expect(creation.note).toContain("上部の初回提出者90日コホート統計とは母集団が異なります");
     // 割合が自然に定義できない仮説は持たない
     expect(calculateForecastComparison(baseSource()).hypotheses[0].progressRatio).toBeNull();
     expect(calculateForecastComparison(baseSource()).hypotheses[1].progressRatio).toBeNull();
@@ -198,6 +200,35 @@ describe("Domain: calculateForecastComparison", () => {
     expect(result.range).toBeNull();
     expect(result.hypotheses.every((h) => h.estimates.length === 0)).toBeTrue();
   });
+
+  test.each([
+    ["既定値（省略時は 30日 / 90日）", {}, "直近（30日間）", "初回提出者90日コホート統計"],
+    [
+      "非既定値（14日 / 60日）",
+      { lookbackDays: 14, firstTimerLookbackDays: 60 },
+      "直近（14日間）",
+      "初回提出者60日コホート統計",
+    ],
+    [
+      "初回期間のみ省略時は全体期間を継承（14日 / 14日）",
+      { lookbackDays: 14 },
+      "直近（14日間）",
+      "初回提出者14日コホート統計",
+    ],
+    [
+      "不正な非正値は既定値へフォールバック（0 / -5 -> 30日 / 90日）",
+      { lookbackDays: 0, firstTimerLookbackDays: -5 },
+      "直近（30日間）",
+      "初回提出者90日コホート統計",
+    ],
+  ])(
+    "作成順の説明文は指定された集計期間を反映する: %s",
+    (_name, overrides, expectedPremise, expectedNote) => {
+      const creation = calculateForecastComparison(baseSource(overrides)).hypotheses[2];
+      expect(creation.premise).toContain(expectedPremise);
+      expect(creation.note).toContain(expectedNote);
+    },
+  );
 });
 
 describe("Domain: buildForecastSource", () => {
@@ -267,5 +298,50 @@ describe("Domain: buildForecastSource", () => {
     expect(source.targetUpdatedMs).toBeNull();
     expect(source.targetCreatedMs).toBeNaN();
     expect(source.totalMedianDays).toBeUndefined();
+    expect(source.lookbackDays).toBeUndefined();
+    expect(source.firstTimerLookbackDays).toBeUndefined();
+  });
+
+  test("非既定の LookbackDays / FirstTimerLookbackDays を引き渡し、作成順仮説の説明文と整合する", () => {
+    const source = buildForecastSource({
+      progress: {
+        Timestamp: "2026-11-08T00:00:00Z",
+        ActiveAhead: 2400,
+        TotalMedianDays: 44,
+        TotalP75Days: 45,
+        LookbackDays: 14,
+        FirstTimerLookbackDays: 60,
+      },
+      depths,
+      history,
+      frontierSamples,
+    });
+    expect(source.lookbackDays).toBe(14);
+    expect(source.firstTimerLookbackDays).toBe(60);
+
+    const creation = calculateForecastComparison(source).hypotheses[2];
+    expect(creation.premise).toContain("直近（14日間）の全体マージ実績");
+    expect(creation.note).toContain("初回提出者60日コホート統計");
+  });
+
+  test("FirstTimerLookbackDays 省略時は LookbackDays を初回コホート期間として引き継ぐ", () => {
+    const source = buildForecastSource({
+      progress: {
+        Timestamp: "2026-11-08T00:00:00Z",
+        ActiveAhead: 2400,
+        TotalMedianDays: 44,
+        TotalP75Days: 45,
+        LookbackDays: 21,
+      },
+      depths,
+      history,
+      frontierSamples,
+    });
+    expect(source.lookbackDays).toBe(21);
+    expect(source.firstTimerLookbackDays).toBe(21);
+
+    const creation = calculateForecastComparison(source).hypotheses[2];
+    expect(creation.premise).toContain("直近（21日間）の全体マージ実績");
+    expect(creation.note).toContain("初回提出者21日コホート統計");
   });
 });
