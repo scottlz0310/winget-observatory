@@ -68,19 +68,22 @@ function summarizeRankVelocity(source: ForecastComparisonSource, nowMs: number):
 
   if (velocity.velocityPerDay === null) {
     progressText = `実質待ち ${source.activeAhead.toLocaleString("en-US")} 件。速度を測る観測が足りません（30 分以上の推移が必要）`;
-  } else if (velocity.velocityPerDay <= 0 || velocity.etaDays === null || !latest) {
-    progressText = `実質待ち ${source.activeAhead.toLocaleString("en-US")} 件。直近 ${velocity.sampleHours} 時間は停滞または後退中（${velocity.velocityPerDay} 件/日）`;
   } else {
-    progressText = `実質待ち ${source.activeAhead.toLocaleString("en-US")} 件。直近 ${velocity.sampleHours} 時間で ${velocity.consumedCount} 件減（${velocity.velocityPerDay} 件/日）`;
-    estimates.push(
-      estimate(
-        nowMs,
-        "rank-velocity",
-        "現在の消化速度が続く場合",
-        latest.timestampMs + velocity.etaDays * DAY_MS,
-        true,
-      ),
-    );
+    const windowSpan = `${(velocity.sampleHours / 24).toFixed(1)} 日（${velocity.sampleHours.toFixed(1)} 時間）`;
+    if (velocity.velocityPerDay <= 0 || velocity.etaDays === null || !latest) {
+      progressText = `実質待ち ${source.activeAhead.toLocaleString("en-US")} 件。直近 ${windowSpan}は停滞または後退中（${velocity.velocityPerDay} 件/日）`;
+    } else {
+      progressText = `実質待ち ${source.activeAhead.toLocaleString("en-US")} 件。直近 ${windowSpan}で ${velocity.consumedCount} 件減（${velocity.velocityPerDay} 件/日）`;
+      estimates.push(
+        estimate(
+          nowMs,
+          "rank-velocity",
+          "現在の消化速度が続く場合",
+          latest.timestampMs + velocity.etaDays * DAY_MS,
+          true,
+        ),
+      );
+    }
   }
 
   return {

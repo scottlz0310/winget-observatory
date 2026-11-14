@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/domain/dashboard.ts`, `src/domain/exit-breakdown.ts`, `src/domain/forecast-comparison.ts`, `scripts/build-pages.ts`, 関連テスト: 仮説①（順位消化）および「待ち行列からの離脱の内訳」の基準ルックバック期間（母時間）を 24 時間から 1 週間（168 時間）へ延長し、ダッシュボード UI の期間表記を日数・時間併記（`X.X 日（XXX.X 時間）` / `XXX.X 時間 / X.X 日`）へ更新（Issue #73）。
+  - `calculateVelocityMetrics` / `calculateDashboardMetrics` / `calculateExitBreakdown` の既定窓を `168` 時間（`DEFAULT_VELOCITY_WINDOW_HOURS`, `DEFAULT_EXIT_WINDOW_HOURS`）へ引き上げ（168 時間未満の履歴では最古レコードへフォールバック）
+  - これに伴い、`forecast-history.jsonl` に記録される `rank-velocity` の予想日も本変更以降の観測から 168 時間窓ベースへ切り替わる
 - `src/domain/search-window.ts`, `src/domain/sample-collector.ts`, `src/domain/progress-format.ts`, `src/cli/progress.ts`, `src/models/progress.ts`, `src/api/github.ts`, `test/domain/search-window.test.ts`, `test/domain/sample-collector.test.ts`, `test/domain/progress-format.test.ts`, `test/cli/progress.test.ts`: マージ済み PR 走査方式を、更新日時順ソート下でのマージ日時逆転による未走査候補の欠落を原理的に排除しつつ、1,000 件以内の平常期間は単一窓で最速走査し過密窓のみ時間範囲を二分する「動的二分窓走査方式（Dynamic Bisecting Window Queue）」へ刷新し、`progress.ts` の肥大化した責務を分離・モジュール化（Issue #68 Phase 3）。
   - 更新日時順とマージ日時の逆転による未取得 PR のスキップ欠落を防ぐ動的二分探索窓走査関数 `collectMergedCandidates` を導入。1 ページ内での `fetchLimit` の厳格な遵守および 1,000 件境界の安全な全件取得を保証
   - サンプルの収集・キャッシュ管理・初回提出者判定・詳細取得・累計マージ数照会のオーケストレーションを `src/domain/sample-collector.ts` へ純粋ドメイン関数として分離

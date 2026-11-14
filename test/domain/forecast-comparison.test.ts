@@ -108,10 +108,32 @@ describe("Domain: calculateForecastComparison", () => {
     expect(estimateOf(result, "creation-order:median")?.etaDays).toBe(0);
   });
 
+  test("順位消化は 168 時間窓を基準とし、日数と時間を併記した進捗テキストを返す", () => {
+    const result = calculateForecastComparison(
+      baseSource({
+        activeAhead: 2100,
+        history: [record(200, 2600), record(168, 2450), record(24, 2150), record(0, 2100)],
+      }),
+    );
+    const rank = result.hypotheses[0];
+    expect(rank.progressText).toBe(
+      "実質待ち 2,100 件。直近 7.0 日（168.0 時間）で 350 件減（50 件/日）",
+    );
+    expect(estimateOf(result, "rank-velocity")?.etaDays).toBe(42);
+  });
+
   test.each([
     ["観測が 1 件しかない", [record(0, 2400)], "速度を測る観測が足りません"],
-    ["待ち件数が増えている（後退）", [record(24, 2300), record(0, 2400)], "停滞または後退中"],
-    ["待ち件数が変わらない（停滞）", [record(24, 2400), record(0, 2400)], "停滞または後退中"],
+    [
+      "待ち件数が増えている（後退）",
+      [record(168, 2300), record(0, 2400)],
+      "直近 7.0 日（168.0 時間）は停滞または後退中",
+    ],
+    [
+      "待ち件数が変わらない（停滞）",
+      [record(24, 2400), record(0, 2400)],
+      "直近 1.0 日（24.0 時間）は停滞または後退中",
+    ],
   ])("順位消化は速度から予想できないとき予想日を出さず理由を示す: %s", (_name, history, text) => {
     const result = calculateForecastComparison(baseSource({ history }));
     expect(result.hypotheses[0].estimates).toEqual([]);

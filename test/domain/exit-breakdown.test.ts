@@ -90,22 +90,29 @@ describe("Domain: calculateExitBreakdown", () => {
     expect(result.perDay.closed).toBe(6);
   });
 
-  test("比較の起点は、24 時間以上前の観測のうち最も新しいもの（無ければ最古のもの）", () => {
+  test("比較の起点は、既定 168 時間以上前の観測のうち最も新しいもの（無ければ最古のもの）", () => {
     const records = [
-      record(60, { activeAhead: 3000, totalAhead: 2500, mergedOlder: 0, closedOlder: 0 }),
-      record(30, { activeAhead: 2600, totalAhead: 2200, mergedOlder: 10, closedOlder: 1 }),
-      record(10, { activeAhead: 2550, totalAhead: 2180, mergedOlder: 14, closedOlder: 2 }),
-      record(0, { activeAhead: 2500, totalAhead: 2160, mergedOlder: 18, closedOlder: 3 }),
+      record(220, { activeAhead: 3000, totalAhead: 2500, mergedOlder: 0, closedOlder: 0 }),
+      record(172, { activeAhead: 2700, totalAhead: 2300, mergedOlder: 20, closedOlder: 2 }),
+      record(24, { activeAhead: 2550, totalAhead: 2180, mergedOlder: 80, closedOlder: 8 }),
+      record(0, { activeAhead: 2356, totalAhead: 2060, mergedOlder: 192, closedOlder: 18 }),
     ];
     const result = calculateExitBreakdown(records);
     if (!result.available) throw new Error("算出できるはず");
-    expect(result.hours).toBe(30);
-    expect(result.counts.rank).toBe(100);
+    expect(result.hours).toBe(172);
+    expect(result.counts.rank).toBe(344);
+    expect(result.counts.merged).toBe(172);
 
-    // 24 時間に満たなければ、最古の観測を起点にする
+    // 168 時間に満たなければ、最古の観測を起点にする
     const recent = calculateExitBreakdown(records.slice(2));
     if (!recent.available) throw new Error("算出できるはず");
-    expect(recent.hours).toBe(10);
+    expect(recent.hours).toBe(24);
+
+    // targetHours を明示指定すればその時間窓で比較できる
+    const explicit24 = calculateExitBreakdown(records, 24);
+    if (!explicit24.available) throw new Error("算出できるはず");
+    expect(explicit24.hours).toBe(24);
+    expect(explicit24.counts.rank).toBe(194);
   });
 
   test("実質待ちが減っていなければ、マージの割合は null（0 割りを避ける）", () => {

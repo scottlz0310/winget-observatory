@@ -297,6 +297,37 @@ describe("Domain: dashboard calculations", () => {
       expect(res.etaDays).toBeNull();
       expect(res.etaDateJst).toBeNull();
     });
+
+    test("既定では 168 時間（1 週間）以上前で最も新しいレコードを基準とし、168 時間未満なら最古を採用する", () => {
+      const baseMs = Date.parse("2026-11-01T00:00:00+09:00");
+      const mkRow = (hoursAfterBase: number, activeAhead: number): HistoryRecord => ({
+        timestamp: "",
+        timestampMs: baseMs + hoursAfterBase * 3600 * 1000,
+        targetPr: 464302,
+        frontNumber: 440000,
+        activeAhead,
+        totalAhead: activeAhead,
+        behind: 0,
+        waitDays: 10,
+      });
+
+      const records = [
+        mkRow(0, 3000), // latest から 200h 前
+        mkRow(28, 2700), // latest から 172h 前（168h 以上前で最新）
+        mkRow(176, 2100), // latest から 24h 前
+        mkRow(200, 1840), // latest: 172h で 860 件減 = 120 件/日
+      ];
+
+      const res = calculateVelocityMetrics(records, 1840);
+      expect(res.sampleHours).toBe(172);
+      expect(res.consumedCount).toBe(860);
+      expect(res.velocityPerDay).toBe(120);
+
+      // 履歴が 168h 未満（24h のみ）なら最古レコードにフォールバック
+      const shortRes = calculateVelocityMetrics(records.slice(2), 1840);
+      expect(shortRes.sampleHours).toBe(24);
+      expect(shortRes.consumedCount).toBe(260);
+    });
   });
 
   describe("calculateCalendarGap", () => {
