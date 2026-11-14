@@ -412,4 +412,64 @@ describe("orchestrateSampleCollection", () => {
 
     expect(notifiedEntries.some((e) => e.Number === 991 && e.Type === "sample")).toBeTrue();
   });
+
+  it("全候補キャッシュ済みで単発著者照会が失敗しても、先行確定した recurring-author 判定は onCacheUpdated で保存される", async () => {
+    const createUnjudgedCachedSample = (number: number, author: string): SampleCacheEntry => ({
+      Type: "sample",
+      Number: number,
+      CreatedAt: "2026-10-01T00:00:00Z",
+      LatestCommittedDate: "2026-10-01T00:00:00Z",
+      CommitCount: 1,
+      ReadyAt: "2026-10-02T00:00:00Z",
+      MergedAt: "2026-10-10T00:00:00Z",
+      ReadyDays: 8.0,
+      TotalDays: 9.0,
+      TurnDays: 9.0,
+      Title: `PR #${number}`,
+      Author: author,
+    });
+
+    const initialCache: SampleCacheEntry[] = [
+      createUnjudgedCachedSample(1001, "repeat-cached"),
+      createUnjudgedCachedSample(1002, "repeat-cached"),
+      createUnjudgedCachedSample(1003, "single-cached"),
+    ];
+
+    let notifyCount = 0;
+    let notifiedEntries: SampleCacheEntry[] = [];
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async () => [],
+      getPullRequestDetails: async () => ({}) as ProgressPrDetail,
+      graphql: async <_T = unknown>() => {
+        throw new Error("graphql failure");
+      },
+    };
+
+    await expect(
+      orchestrateSampleCollection({
+        client,
+        repository: "microsoft/winget-pkgs",
+        candidates: [
+          createSearchItem(1001, "2026-10-10T00:00:00Z", "repeat-cached"),
+          createSearchItem(1002, "2026-10-10T00:00:00Z", "repeat-cached"),
+          createSearchItem(1003, "2026-10-10T00:00:00Z", "single-cached"),
+        ],
+        overallSinceDate: new Date("2026-09-01T00:00:00Z"),
+        fetchBudget: 0,
+        initialCache,
+        onCacheUpdated: (entries) => {
+          notifyCount++;
+          notifiedEntries = entries;
+        },
+      }),
+    ).rejects.toThrow("graphql failure");
+
+    expect(notifyCount).toBe(1);
+    const saved1001 = notifiedEntries.find((e) => e.Number === 1001);
+    const saved1002 = notifiedEntries.find((e) => e.Number === 1002);
+    expect(saved1001?.Type === "sample" && saved1001.IsFirstTimer).toBeFalse();
+    expect(saved1001?.Type === "sample" && saved1001.FirstTimerReason).toBe("recurring-author");
+    expect(saved1002?.Type === "sample" && saved1002.IsFirstTimer).toBeFalse();
+    expect(saved1002?.Type === "sample" && saved1002.FirstTimerReason).toBe("recurring-author");
+  });
 });

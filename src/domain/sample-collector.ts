@@ -253,16 +253,13 @@ function syncFirstTimerMetadataToCache(
 }
 
 /**
- * バッチ内の複数回登場著者を常連として確定し、単発候補著者の生涯マージ数を GraphQL で一括解決する。
+ * バッチ内の複数回登場著者を常連（recurring-author）として確定し、キャッシュへ反映する。
  */
-async function resolveBatchFirstTimerFlags(params: {
-  samples: MergedCandidateSample[];
-  candidateAuthorCounts: Map<string, number>;
-  cacheIndex: Map<number, SampleCacheEntry>;
-  client: SampleCollectorClient;
-  repository: string;
-}): Promise<boolean> {
-  const { samples, candidateAuthorCounts, cacheIndex, client, repository } = params;
+function markRecurringBatchAuthors(
+  samples: MergedCandidateSample[],
+  candidateAuthorCounts: Map<string, number>,
+  cacheIndex: Map<number, SampleCacheEntry>,
+): boolean {
   let modified = false;
 
   const sampleAuthorCounts = new Map<string, number>();
@@ -285,9 +282,22 @@ async function resolveBatchFirstTimerFlags(params: {
     }
   }
 
+  return modified;
+}
+
+/**
+ * 単発候補著者の生涯マージ数を GraphQL で一括解決し、サンプルとキャッシュを更新する。
+ */
+async function resolveSingleHitAuthorMergedCounts(params: {
+  samples: MergedCandidateSample[];
+  cacheIndex: Map<number, SampleCacheEntry>;
+  client: SampleCollectorClient;
+  repository: string;
+}): Promise<boolean> {
+  const { samples, cacheIndex, client, repository } = params;
   const candidateAuthors = extractSingleHitCandidateLogins(samples);
   if (candidateAuthors.length === 0) {
-    return modified;
+    return false;
   }
 
   const authorMergedCounts = await resolveAuthorMergedCounts(
@@ -297,6 +307,7 @@ async function resolveBatchFirstTimerFlags(params: {
     { batchSize: 30 },
   );
 
+  let modified = false;
   for (const s of samples) {
     if (!s.author || !authorMergedCounts.has(s.author)) continue;
     const count = authorMergedCounts.get(s.author);
@@ -397,10 +408,12 @@ export async function orchestrateSampleCollection(
       }
     }
 
+    if (markRecurringBatchAuthors(samples, candidateAuthorCounts, cacheIndex)) {
+      cacheModified = true;
+    }
     if (
-      await resolveBatchFirstTimerFlags({
+      await resolveSingleHitAuthorMergedCounts({
         samples,
-        candidateAuthorCounts,
         cacheIndex,
         client,
         repository,
