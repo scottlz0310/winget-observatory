@@ -13,6 +13,9 @@ import type {
   ProgressTimelineEvent,
 } from "../models/progress";
 import { buildGuidance, compareWithSamples, toSnapshotSamples } from "./benchmark";
+import { formatDateTimeWithDay, formatDelta, formatHumanDays } from "./formatters";
+
+export { formatDateTimeWithDay, formatDelta, formatHumanDays };
 
 /**
  * 比較条件で必須とされるラベル一覧。
@@ -153,57 +156,6 @@ export function getPercentile(values: number[], percentile: number): number {
   const fraction = position - lower;
 
   return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction;
-}
-
-/**
- * 日数を人間が読みやすい形式に整形する。
- * 例: 3.5日 (3日 12時間)、0.5日 (12時間)
- */
-export function formatHumanDays(days: number): string {
-  const totalHours = Math.round(days * 24);
-  const wholeDays = Math.floor(totalHours / 24);
-  const hours = totalHours % 24;
-
-  const formattedDays = days.toFixed(1);
-  if (wholeDays > 0) {
-    return `${formattedDays}日 (${wholeDays}日 ${hours}時間)`;
-  }
-  return `${formattedDays}日 (${totalHours}時間)`;
-}
-
-/**
- * 前回比の差分文字列を生成する。
- * 例: [前回比 +2 件]、[前回比 -1 件]、[前回比 ±0 件]
- */
-export function formatDelta(current: number, previous: number, unit = "件"): string {
-  const diff = current - previous;
-  if (diff > 0) {
-    return `[前回比 +${diff} ${unit}]`;
-  }
-  if (diff < 0) {
-    return `[前回比 ${diff} ${unit}]`;
-  }
-  return `[前回比 ±0 ${unit}]`;
-}
-
-/**
- * 日時を JST (UTC+9) 形式の曜日付き文字列にフォーマットする。
- * 例: "2026-11-07(土) 20:30"
- */
-export function formatDateTimeWithDay(input: Date | string, offsetHours = 9): string {
-  const date = typeof input === "string" ? new Date(input) : input;
-  // 実行環境のタイムゾーンに依存しないよう、オフセット加算後の値を UTC として読む
-  const target = new Date(date.getTime() + offsetHours * 3600000);
-
-  const daysJa = ["日", "月", "火", "水", "木", "金", "土"];
-  const yyyy = target.getUTCFullYear();
-  const mm = String(target.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(target.getUTCDate()).padStart(2, "0");
-  const day = daysJa[target.getUTCDay()];
-  const hh = String(target.getUTCHours()).padStart(2, "0");
-  const min = String(target.getUTCMinutes()).padStart(2, "0");
-
-  return `${yyyy}-${mm}-${dd}(${day}) ${hh}:${min}`;
 }
 
 /**

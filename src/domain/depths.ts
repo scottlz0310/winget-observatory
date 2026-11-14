@@ -7,9 +7,10 @@ import type {
   TargetPrInfo,
 } from "../models/depths";
 
+import { formatJstDateTime } from "./formatters";
 import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./progress";
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+export { formatJstDateTime };
 
 /**
  * 現行の底スナップショット定義バージョン。
@@ -17,28 +18,6 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
  * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み）
  */
 export const CURRENT_DEPTHS_VERSION = 2;
-
-/**
- * UTC の日時（ISO 8601 文字列または Date）を JST (+09:00) の指定フォーマット文字列へ変換する。
- * 外部 I/O・環境変数に依存しない純粋関数。
- */
-export function formatJstDateTime(dateOrIso: string | Date, includeSeconds = false): string {
-  const date = typeof dateOrIso === "string" ? new Date(dateOrIso) : dateOrIso;
-  const jstDate = new Date(date.getTime() + JST_OFFSET_MS);
-
-  const yyyy = jstDate.getUTCFullYear();
-  const MM = String(jstDate.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(jstDate.getUTCDate()).padStart(2, "0");
-  const HH = String(jstDate.getUTCHours()).padStart(2, "0");
-  const mm = String(jstDate.getUTCMinutes()).padStart(2, "0");
-
-  if (includeSeconds) {
-    const ss = String(jstDate.getUTCSeconds()).padStart(2, "0");
-    return `${yyyy}-${MM}-${dd} ${HH}:${mm}:${ss}`;
-  }
-
-  return `${yyyy}-${MM}-${dd} ${HH}:${mm}`;
-}
 
 /**
  * タイトル文字列をコンソール/表示用に切り詰める（45文字超は先頭42文字 + "..."）。

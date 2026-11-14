@@ -11,17 +11,13 @@ import type {
   StaleFrontierSample,
 } from "../models/forecast";
 import { CURRENT_DEPTHS_VERSION } from "./depths";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const HOUR_MS = 60 * 60 * 1000;
+import { DAY_MS, HOUR_MS, round1 } from "./formatters";
 
 /** 速度を測るために必要な最小の観測間隔（これ未満は誤差が大きいため測らない） */
 export const MIN_WINDOW_HOURS = 6;
 
 /** 速度を測る観測期間の既定（遭難の底の進みは断続的なため、長めに取る） */
 export const DEFAULT_WINDOW_HOURS = 72;
-
-const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 /**
  * depths-history.jsonl（1 行 1 JSON、先頭に BOM があり得る）を DepthsSnapshot の配列にパースする。

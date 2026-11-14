@@ -272,4 +272,28 @@ describe("orchestrateSampleCollection", () => {
     );
     expect(skipped601?.Reason).toBe("not-first-timer-candidate");
   });
+
+  it("経過日数の境界値（1.045日）で従来の toFixed(2) 丸め（1.04）を維持する", async () => {
+    const startIso = "2026-11-01T00:00:00Z";
+    const mergedIso = "2026-11-02T01:04:48Z"; // 1.045 日後
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async () => createTimeline(startIso),
+      getPullRequestDetails: async (_repo, num) => createPrDetail(num, startIso, "boundary-user"),
+      graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
+    };
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [createSearchItem(701, mergedIso, "boundary-user")],
+      overallSinceDate: new Date("2026-10-01T00:00:00Z"),
+      fetchBudget: 10,
+      initialCache: [],
+    });
+
+    expect(result.samples).toHaveLength(1);
+    expect(result.samples[0]?.totalDays).toBe(1.04);
+    expect(result.samples[0]?.turnDays).toBe(1.04);
+    expect(result.samples[0]?.days).toBe(1.04);
+  });
 });

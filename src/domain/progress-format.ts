@@ -5,7 +5,7 @@
 
 import type { ProgressRivalPr, ProgressSnapshot, ReferenceGuidance } from "../models/progress";
 import { describeGuidance, describeOvertake } from "./benchmark";
-import { formatDateTimeWithDay, formatHumanDays } from "./progress";
+import { formatDateTimeWithDay, formatHumanDays } from "./formatters";
 
 export interface BenchmarkLogOptions {
   lookbackDays: number;

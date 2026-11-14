@@ -3,11 +3,20 @@
  * 各 CLI の parseArgs で同型の検証コードが複製されないよう、ここに集約する。
  */
 
+import { resolve } from "node:path";
+
 /** 観測対象の既定の基準 PR 番号 */
 export const DEFAULT_TARGET_PR = 464302;
 
 /** 観測対象の既定のリポジトリ */
 export const DEFAULT_REPOSITORY = "microsoft/winget-pkgs";
+
+/**
+ * 既定の data/ ディレクトリをエントリポイント位置からリポジトリルートを起点に解決する。
+ */
+export function resolveDefaultDataDir(baseDir: string = import.meta.dirname): string {
+  return resolve(baseDir, "../../data");
+}
 
 /**
  * argv[flagIndex] のフラグに続く値を返す。値が無い、または次のフラグが続く場合は拒否する。

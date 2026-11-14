@@ -9,7 +9,10 @@ import type {
   VelocityMetrics,
 } from "../models/dashboard";
 import type { ProgressHistoryRow } from "../models/progress";
+import { DAY_MS, formatJstDate, HOUR_MS, round1 } from "./formatters";
 import { QUEUE_BASIS } from "./progress";
+
+export { formatJstDate };
 
 /**
  * タイムスタンプ文字列（JST "YYYY-MM-DD HH:mm:ss", "YYYY-MM-DD(曜日) HH:mm" または ISO 文字列）を UTC ミリ秒にパースする。
@@ -82,18 +85,6 @@ export function selectComparableHistory(
     });
   }
   return records;
-}
-
-/**
- * UTC ミリ秒を JST の "YYYY-MM-DD" 形式の日付文字列に変換する
- */
-export function formatJstDate(timeMs: number): string {
-  if (Number.isNaN(timeMs)) return "-";
-  const jstDate = new Date(timeMs + 9 * 60 * 60 * 1000);
-  const y = jstDate.getUTCFullYear();
-  const m = String(jstDate.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(jstDate.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
 }
 
 /**
@@ -194,7 +185,7 @@ export function calculateVelocityMetrics(
     }
   }
 
-  const timeDiffHours = (latestMs - baseRecord.timestampMs) / (1000 * 60 * 60);
+  const timeDiffHours = (latestMs - baseRecord.timestampMs) / HOUR_MS;
 
   // 観測間隔が 30 分未満の場合は信頼できる速度が算出不能とする
   if (timeDiffHours < 0.5) {
@@ -206,17 +197,17 @@ export function calculateVelocityMetrics(
   const velocityPerHour = consumed / timeDiffHours;
   const velocityPerDay = velocityPerHour * 24;
 
-  const roundedVelocityPerDay = Math.round(velocityPerDay * 10) / 10;
+  const roundedVelocityPerDay = round1(velocityPerDay);
   const roundedVelocityPerHour = Math.round(velocityPerHour * 100) / 100;
-  const roundedHours = Math.round(timeDiffHours * 10) / 10;
+  const roundedHours = round1(timeDiffHours);
 
   // 消化が進んでいる（速度がプラス）かつ 実質待ちが残っている場合のみ ETA を算出
   let etaDays: number | null = null;
   let etaDateJst: string | null = null;
 
   if (roundedVelocityPerDay > 0 && currentActiveAhead > 0) {
-    etaDays = Math.round((currentActiveAhead / roundedVelocityPerDay) * 10) / 10;
-    const etaMs = latestMs + etaDays * 24 * 60 * 60 * 1000;
+    etaDays = round1(currentActiveAhead / roundedVelocityPerDay);
+    const etaMs = latestMs + etaDays * DAY_MS;
     etaDateJst = formatJstDate(etaMs);
   }
 
@@ -256,7 +247,7 @@ export function calculateCalendarGap(
     };
   }
 
-  const gapDays = Math.round(((targetMs - frontMs) / (1000 * 60 * 60 * 24)) * 10) / 10;
+  const gapDays = round1((targetMs - frontMs) / DAY_MS);
 
   return {
     gapDays,

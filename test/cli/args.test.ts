@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   DEFAULT_TARGET_PR,
   parseBoundedInt,
   parseTargetPrArg,
   readOptionValue,
+  resolveDefaultDataDir,
   resolveDefaultTargetPr,
 } from "../../src/cli/args";
 
@@ -60,5 +64,22 @@ describe("CLI args: resolveDefaultTargetPr", () => {
     expect(() => resolveDefaultTargetPr({ WINGET_TARGET_PR: value })).toThrow(
       "無効な環境変数 WINGET_TARGET_PR",
     );
+  });
+});
+
+describe("CLI args: resolveDefaultDataDir", () => {
+  test("既定の保存先は実行時の cwd に依存せずリポジトリルートの data/ を返す", () => {
+    const tempWorkingDir = mkdtempSync(join(tmpdir(), "winget-args-external-cwd-"));
+    const originalCwd = process.cwd();
+    const expectedRepoDataDir = resolve(import.meta.dirname, "../../data");
+
+    try {
+      expect(resolveDefaultDataDir()).toBe(expectedRepoDataDir);
+      process.chdir(tempWorkingDir);
+      expect(resolveDefaultDataDir()).toBe(expectedRepoDataDir);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(tempWorkingDir, { recursive: true, force: true });
+    }
   });
 });

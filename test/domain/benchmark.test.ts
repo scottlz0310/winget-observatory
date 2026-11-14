@@ -175,6 +175,12 @@ describe("Domain: buildReferenceGuidance（実績との位置づけ）", () => {
     expect(g.Turn.Level).toBe("over-p75");
     expect(g.Ready.Level).toBe("over-p75");
   });
+
+  test("残り日数の境界値（1.045日）で従来の toFixed(2) 丸め（1.04）を維持する", () => {
+    const g = buildReferenceGuidance(1, { median: 2.045, p75: 3.045 }, [1, 2, 3, 4]);
+    expect(g.ToMedianDays).toBe(1.04);
+    expect(g.ToP75Days).toBe(2.04);
+  });
 });
 
 describe("Domain: describe 系の説明文", () => {

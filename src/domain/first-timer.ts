@@ -174,6 +174,68 @@ export function parseAuthorMergedCounts(
   return counts;
 }
 
+/** 生涯マージ件数バッチ照会の既定チャンクサイズ */
+export const DEFAULT_AUTHOR_MERGED_BATCH_SIZE = 25;
+
+export type AuthorMergedCountQueryExecutor = (
+  query: string,
+) => Promise<Record<string, { issueCount?: number } | undefined> | undefined>;
+
+export interface ResolveAuthorMergedCountsOptions {
+  /** 1 バッチあたりの最大作者数（既定: 25） */
+  batchSize?: number;
+  /** 既知のキャッシュマップ（指定時は未照会の作者のみ検索し、解決結果を追記する） */
+  cache?: Map<string, number>;
+}
+
+/**
+ * 作者 login 配列について、重複排除・キャッシュ確認のうえでチャンク分割し、
+ * GraphQL エイリアスクエリで各作者の生涯マージ済み PR 総数を解決して Map<string, number> で返す。
+ */
+export async function resolveAuthorMergedCounts(
+  repository: string,
+  logins: readonly string[],
+  executeGraphql: AuthorMergedCountQueryExecutor,
+  options: ResolveAuthorMergedCountsOptions = {},
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (!repository) {
+    return result;
+  }
+
+  const batchSize = options.batchSize ?? DEFAULT_AUTHOR_MERGED_BATCH_SIZE;
+  if (!Number.isInteger(batchSize) || batchSize <= 0) {
+    throw new RangeError(`batchSize は 1 以上の整数を指定してください: ${batchSize}`);
+  }
+
+  const cache = options.cache;
+  const uniqueLogins = Array.from(new Set(logins.filter(Boolean)));
+  const unknownLogins: string[] = [];
+
+  for (const login of uniqueLogins) {
+    if (cache?.has(login)) {
+      result.set(login, cache.get(login) as number);
+    } else {
+      unknownLogins.push(login);
+    }
+  }
+
+  for (let i = 0; i < unknownLogins.length; i += batchSize) {
+    const batch = unknownLogins.slice(i, i + batchSize);
+    const query = buildAuthorMergedCountQuery(repository, batch);
+    if (!query) continue;
+
+    const data = await executeGraphql(query);
+    const counts = parseAuthorMergedCounts(batch, data ?? {});
+    for (const [author, count] of counts) {
+      result.set(author, count);
+      cache?.set(author, count);
+    }
+  }
+
+  return result;
+}
+
 /**
  * キャッシュ済みのサンプルが、初回判定ロジックの改定（コミット数制限撤廃）に伴い
  * 再評価（タイムライン・詳細の再取得）を必要とするか判定する純粋関数。

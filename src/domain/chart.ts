@@ -3,6 +3,8 @@
  * 色は CSS 変数で渡し、ライト/ダークの切り替えは呼び出し側のスタイルに委ねる。
  */
 
+import { DAY_MS, formatMonthDay, JST_OFFSET_MS, round1 } from "./formatters";
+
 export interface ChartPoint {
   /** 時刻（UTC ミリ秒） */
   x: number;
@@ -41,7 +43,6 @@ const Y_TICKS = 4;
 const X_TICKS = 3;
 /** 点（マーカー）を描くのは、系列の点数がこれ以下のときだけ（多いと線が潰れる） */
 const MAX_MARKED_POINTS = 60;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 1・2・5 × 10^n のうち、目標の刻み幅以上で最小のもの */
 function niceStep(rawStep: number): number {
@@ -70,7 +71,7 @@ function formatYTick(value: number, decimals: number): string {
 
 /** JST の "MM-DD HH:mm" */
 function formatXTick(timeMs: number): string {
-  const iso = new Date(timeMs + 9 * 60 * 60 * 1000).toISOString();
+  const iso = new Date(timeMs + JST_OFFSET_MS).toISOString();
   return `${iso.slice(5, 10)} ${iso.slice(11, 16)}`;
 }
 
@@ -129,7 +130,7 @@ export function renderDualAxisLineChartSvg(options: DualAxisLineChartOptions): s
   const pyRight = (y: number): number =>
     DUAL_MARGIN.top +
     (1 - (y - rightBounds.yMin) / (rightBounds.yMax - rightBounds.yMin || 1)) * plotH;
-  const num = (value: number): string => String(Math.round(value * 10) / 10);
+  const num = (value: number): string => String(round1(value));
 
   // Y 軸グリッド線および目盛り（左・右）
   const yGrid = Array.from({ length: Y_TICKS + 1 }, (_, i) => {
@@ -236,12 +237,6 @@ const TL_AXIS_Y = 68;
 /** 隣り合う印のラベルが重ならないよう、段をずらして並べる */
 const TL_LABEL_ROWS = [50, 30];
 
-/** JST の "MM/DD" */
-function formatMonthDay(timeMs: number): string {
-  const iso = new Date(timeMs + 9 * 60 * 60 * 1000).toISOString();
-  return `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
-}
-
 /**
  * 今日から予想日までの時間軸に、印と範囲の帯を描く SVG を返す。
  * 描ける印が無い、または時刻が有限でないときは null。今日以前の印は今日の位置に寄せる。
@@ -261,7 +256,7 @@ export function renderTimelineSvg(options: TimelineOptions): string | null {
     ((Math.min(Math.max(ms, options.nowMs), domainEnd) - options.nowMs) /
       (domainEnd - options.nowMs)) *
       plotW;
-  const num = (value: number): string => String(Math.round(value * 10) / 10);
+  const num = (value: number): string => String(round1(value));
 
   const band = options.band
     ? `<rect x="${num(px(options.band.startMs))}" y="${TL_AXIS_Y - 7}" width="${num(Math.max(px(options.band.endMs) - px(options.band.startMs), 2))}" height="14" rx="3" style="fill: var(--primary); opacity: 0.18" />`
