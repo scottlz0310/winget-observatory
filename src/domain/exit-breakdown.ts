@@ -10,6 +10,9 @@ const HOUR_MS = 60 * 60 * 1000;
 /** 内訳を出すために必要な、観測の最小間隔（これ未満は件数が少なく、1 日あたりの換算が不安定） */
 export const MIN_EXIT_WINDOW_HOURS = 6;
 
+/** 離脱内訳の算出基準となる標準ルックバック期間（1 週間 = 168 時間） */
+export const DEFAULT_EXIT_WINDOW_HOURS = 168;
+
 const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 /** 検索クエリ用の条件（基準 PR の起票以降の離脱を数える） */
@@ -38,7 +41,7 @@ export function buildExitCountQueries(
  */
 export function calculateExitBreakdown(
   records: HistoryRecord[],
-  targetHours = 24,
+  targetHours = DEFAULT_EXIT_WINDOW_HOURS,
 ): ExitBreakdownResult {
   const withCounts = records.filter(
     (r) => Number.isFinite(r.timestampMs) && r.mergedOlder != null && r.closedOlder != null,

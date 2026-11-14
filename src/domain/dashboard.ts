@@ -148,17 +148,20 @@ export function calculateHistoryWithDeltas(records: HistoryRecord[]): HistoryRow
   });
 }
 
+/** 消化速度の算出基準となる標準ルックバック期間（1 週間 = 168 時間） */
+export const DEFAULT_VELOCITY_WINDOW_HOURS = 168;
+
 /**
  * 直近の時系列推移から消化速度（Velocity: 件/日）と到着予測（ETA）を算出する
  *
  * @param records 時系列レコード一覧（昇順）
  * @param currentActiveAhead 現在の実質待ち件数
- * @param targetHours 算出基準期間（既定: 24時間）
+ * @param targetHours 算出基準期間（既定: 168 時間 / 1 週間）
  */
 export function calculateVelocityMetrics(
   records: HistoryRecord[],
   currentActiveAhead: number,
-  targetHours = 24,
+  targetHours = DEFAULT_VELOCITY_WINDOW_HOURS,
 ): VelocityMetrics {
   const fallback: VelocityMetrics = {
     velocityPerDay: null,
@@ -334,9 +337,10 @@ export function calculateDashboardMetrics(
   currentActiveAhead: number,
   frontCreatedAt?: string | null,
   targetCreatedAt?: string | null,
+  targetHours = DEFAULT_VELOCITY_WINDOW_HOURS,
 ): DashboardCalculatedMetrics {
   const latestDelta = calculateDeltaMetrics(records);
-  const velocity = calculateVelocityMetrics(records, currentActiveAhead, 24);
+  const velocity = calculateVelocityMetrics(records, currentActiveAhead, targetHours);
   const calendarGap = calculateCalendarGap(frontCreatedAt, targetCreatedAt);
   const historyWithDeltas = calculateHistoryWithDeltas(records);
 

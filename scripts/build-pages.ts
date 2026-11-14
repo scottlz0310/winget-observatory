@@ -734,8 +734,10 @@ function renderExitBreakdownSection(result: ExitBreakdownResult): string {
       ? "実質待ちが減っていないため、マージの割合は出せません。"
       : `実質待ちの減少のうち、実際のマージは約 <strong>${Math.round(mergeShare * 100)}%</strong> です。`;
 
+  const windowSpan = `${result.hours.toFixed(1)} 時間 / ${(result.hours / 24).toFixed(1)} 日`;
+
   return `${head}
-    <p class="section-note">${escapeHtml(formatJstDateTime(result.baseMs))} 〜 ${escapeHtml(formatJstDateTime(result.latestMs))}（${result.hours} 時間）の変化。${summary}</p>
+    <p class="section-note">${escapeHtml(formatJstDateTime(result.baseMs))} 〜 ${escapeHtml(formatJstDateTime(result.latestMs))}（${windowSpan}）の変化。${summary}</p>
     <table>
       <thead>
         <tr><th>内訳</th><th>件数</th><th>1 日あたり</th><th>割合</th></tr>

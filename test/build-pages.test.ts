@@ -114,7 +114,7 @@ describe("buildDashboard", () => {
       // 新指標: 最上部の予想パネルの順位消化（24時間で50件消化 = 日速50件、残り100件で約2日後）
       expect(html).toContain("予想マージ日（3 つの仮説の比較）");
       expect(html).toContain("① 順位消化");
-      expect(html).toContain("直近 24 時間で 50 件減（50 件/日）");
+      expect(html).toContain("直近 1.0 日（24.0 時間）で 50 件減（50 件/日）");
       expect(html).toContain("約 2 日後");
 
       // 新指標: カレンダー距離 (2026-10-01 〜 2026-10-25 = 24 日)
