@@ -381,7 +381,12 @@ describe("buildDashboard: マージ時期の予想", () => {
     const { tempDir, dataDir, outputDir } = setup(history);
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-      expect(html).toContain("観測が 2 件以上たまると推移を表示します");
+      const forecastSection = html.slice(
+        html.indexOf("🔮 仮説② の根拠（優等生の底の推移）"),
+        html.indexOf("🎯 予想の答え合わせ"),
+      );
+      expect(forecastSection).toContain("観測が 2 件以上たまると推移を表示します");
+      expect(forecastSection).not.toContain("<th>先頭の遅れ</th>");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -599,6 +604,12 @@ describe("buildDashboard: 過去実績との比較", () => {
     expect(flow).not.toContain("… 10 件");
     expect(flow.match(/class="flow-node/g)).toHaveLength(3);
     expect(flow).toContain("消化前線（健康的大底）");
+    expect(flow).toContain("後続の準備完了 PR");
+    expect(flow).toContain("CI・検証通過済みの健康体");
+    expect(flow).not.toContain("CI 通過待ち含む");
+    expect(html).toContain("🧭 キュー境界探索（健康的大底・真の大底・特急レーン）");
+    expect(html).not.toContain("特急・大底・遭難");
+    expect(html).toContain("⚡ 特急レーン＝基準 PR 起票後に作成されマージ済みの最新更新 5 件");
   });
 
   test("統計カードの P50 / P75 / 最大は途中で折り返さず、favicon を埋め込んで 404 を避ける", () => {
