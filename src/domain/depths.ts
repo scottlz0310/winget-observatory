@@ -153,30 +153,6 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
   return !hasBlockedLabel(node);
 }
 
-function filterCandidates(
-  nodes: GraphQLPrNode[],
-  predicate: (node: GraphQLPrNode) => boolean,
-  limit = 10,
-): DepthsRow[] {
-  return nodes.filter(predicate).slice(0, limit).map(formatGraphQLDepthsRow);
-}
-
-/**
- * GraphQL 検索ノードから「優等生の底（1コミット限定・除外ラベルなし）」を抽出し、
- * DepthsRow 形式で返す。
- */
-export function filterStaleCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
-  return filterCandidates(nodes, isStaleCandidate, limit);
-}
-
-/**
- * GraphQL 検索ノードから「初回提出者（authorAssociation = NONE・除外ラベルなし）」を抽出し、
- * DepthsRow 形式で返す。
- */
-export function filterFirstTimerCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
-  return filterCandidates(nodes, isFirstTimerCandidate, limit);
-}
-
 /**
  * 各底の行リストとメタデータから DepthsSnapshot を組み立てる。
  */

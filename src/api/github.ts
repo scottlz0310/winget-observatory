@@ -9,44 +9,33 @@ import type {
 import {
   adaptGraphQLRateLimitBucket,
   adaptGraphQLTimelineItems,
-  adaptGraphQLToDetailedSearchItem,
+  adaptGraphQLToDetailedSearchResult,
   adaptGraphQLToPrDetail,
   adaptGraphQLToPrView,
   adaptGraphQLToSearchItem,
   buildGraphQLSearchQuery,
 } from "./graphql-adapters";
 import type {
+  GitHubRateLimit,
+  GitHubRateLimitBucket,
   GraphQLPullRequestNode,
+  GraphQLRateLimitBucket,
   GraphQLRateLimitData,
   GraphQLSearchConnection,
-  GraphQLTimelineItemNode,
+  GraphQLTimelineConnection,
 } from "./graphql-types";
 
-export type { GitHubDetailedSearchItem, GitHubDetailedSearchResult, SearchPageInfo };
+export type {
+  GitHubDetailedSearchItem,
+  GitHubDetailedSearchResult,
+  GitHubRateLimit,
+  GitHubRateLimitBucket,
+  GraphQLRateLimitBucket,
+  SearchPageInfo,
+};
 
 /** `typeof fetch` は preconnect 等の静的プロパティを含みモック注入を妨げるため、呼び出しシグネチャのみを要求する */
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-/** レート制限の 1 枠（core / search / graphql）の残量 */
-export interface GitHubRateLimitBucket {
-  limit: number;
-  remaining: number;
-  /** 枠がリセットされる時刻（ISO 8601, UTC）。不明なら null */
-  resetAt: string | null;
-}
-
-export interface GraphQLRateLimitBucket extends GitHubRateLimitBucket {
-  cost?: number;
-}
-
-export interface GitHubRateLimit {
-  /** GraphQL レート制限枠 */
-  graphql: GraphQLRateLimitBucket;
-  /** @deprecated GraphQL 一本化に伴い廃止。後方互換・旧テストモック用にオプショナルで維持 */
-  core?: GitHubRateLimitBucket;
-  /** @deprecated GraphQL 一本化に伴い廃止。後方互換・旧テストモック用にオプショナルで維持 */
-  search?: GitHubRateLimitBucket;
-}
 
 /**
  * リポジトリ識別文字列（"owner/name"）をパースする。
@@ -211,13 +200,7 @@ interface GraphQLSearchResponse {
 interface GraphQLTimelineItemsResponse {
   repository?: {
     pullRequest?: {
-      timelineItems?: {
-        pageInfo?: {
-          hasNextPage: boolean;
-          endCursor: string | null;
-        };
-        nodes?: GraphQLTimelineItemNode[];
-      };
+      timelineItems?: GraphQLTimelineConnection | null;
     } | null;
   } | null;
 }
@@ -541,18 +524,7 @@ export class GitHubApiClient {
     );
 
     const connection = data.search;
-    const totalCount = Number(connection?.issueCount ?? 0);
-    const items: GitHubDetailedSearchItem[] = [];
-
-    if (Array.isArray(connection?.nodes)) {
-      for (const raw of connection.nodes) {
-        if (raw && typeof raw === "object" && "number" in raw && "title" in raw) {
-          items.push(adaptGraphQLToDetailedSearchItem(raw as GraphQLPullRequestNode));
-        }
-      }
-    }
-
-    return { totalCount, items, pageInfo: connection?.pageInfo };
+    return adaptGraphQLToDetailedSearchResult(connection ?? { issueCount: 0 });
   }
 
   /**

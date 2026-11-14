@@ -40,8 +40,6 @@ import {
   resolveDefaultTargetPr,
 } from "./args";
 
-export { reportSkippedObservation };
-
 export interface ProgressCliOptions {
   targetPr: number;
   repository: string;

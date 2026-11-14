@@ -4,13 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDashboard } from "../../scripts/build-pages";
 import type { GitHubApiClient, GitHubDetailedSearchResult } from "../../src/api/github";
-import {
-  parseArgs,
-  reportSkippedObservation,
-  resolveDefaultDataDir,
-  runProgressCli,
-} from "../../src/cli/progress";
+import { parseArgs, resolveDefaultDataDir, runProgressCli } from "../../src/cli/progress";
 import { REQUIRED_LABELS } from "../../src/domain/progress";
+import { reportSkippedObservation } from "../../src/domain/progress-format";
 import { parseSampleCache, serializeSampleCacheEntries } from "../../src/domain/sample-cache";
 import type { CachedSampleEntry, SampleCacheEntry } from "../../src/models/sample-cache";
 

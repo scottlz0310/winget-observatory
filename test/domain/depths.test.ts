@@ -5,8 +5,6 @@ import {
   buildHealthyBaseQuery,
   CURRENT_DEPTHS_VERSION,
   createDepthsSnapshot,
-  filterFirstTimerCandidates,
-  filterStaleCandidates,
   formatDepthsRow,
   formatGraphQLDepthsRow,
   formatJstDateTime,
@@ -222,25 +220,6 @@ describe("Domain: depths logic", () => {
       expect(isFirstTimerCandidate(sampleNodes[5])).toBe(true);
     });
 
-    test("filterFirstTimerCandidates は NONE の健全な初回提出者 PR をコミット数制限なく抽出する", () => {
-      const result = filterFirstTimerCandidates(sampleNodes);
-      expect(result.length).toBe(3);
-      expect(result[0].Number).toBe(450001);
-      expect(result[0].Author).toBe("alice");
-      expect(result[0].AuthorAssociation).toBe("NONE");
-      expect(result[1].Number).toBe(450003);
-      expect(result[1].Author).toBe("charlie");
-      expect(result[1].AuthorAssociation).toBe("NONE");
-      expect(result[2].Number).toBe(450006);
-      expect(result[2].Author).toBe("eve");
-    });
-
-    test("filterFirstTimerCandidates は limit 件数で切り詰める", () => {
-      const result = filterFirstTimerCandidates(sampleNodes, 1);
-      expect(result.length).toBe(1);
-      expect(result[0].Number).toBe(450001);
-    });
-
     test("formatGraphQLDepthsRow は正しく DepthsRow を組み立て、CommitCount も格納する", () => {
       const row = formatGraphQLDepthsRow(sampleNodes[0]);
       expect(row.PR).toBe("#450001");
@@ -263,12 +242,6 @@ describe("Domain: depths logic", () => {
       expect(isStaleCandidate(sampleNodes[3])).toBe(false); // blocked label
       expect(isStaleCandidate(sampleNodes[4])).toBe(true); // 1 commit, author null でも優等生としては許容
       expect(isStaleCandidate(sampleNodes[5])).toBe(true);
-    });
-
-    test("filterStaleCandidates は1コミット限定の健全なPRを抽出する", () => {
-      const result = filterStaleCandidates(sampleNodes);
-      expect(result.map((r) => r.Number)).toEqual([450001, 450002, 450005, 450006]);
-      expect(result.every((r) => r.CommitCount === 1)).toBe(true);
     });
   });
 });

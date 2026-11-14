@@ -1,15 +1,13 @@
 import type { GitHubPrView, GitHubSearchItem } from "../models/depths";
 import type {
+  GitHubDetailedSearchItem,
+  GitHubDetailedSearchResult,
   ProgressCommitSummary,
   ProgressPrDetail,
   ProgressTimelineEvent,
 } from "../models/progress";
 import type {
-  GitHubDetailedSearchItem,
-  GitHubDetailedSearchResult,
   GitHubRateLimitBucket,
-} from "./github";
-import type {
   GraphQLPullRequestNode,
   GraphQLRateLimitData,
   GraphQLSearchConnection,
@@ -71,7 +69,7 @@ export function adaptGraphQLToDetailedSearchResult(
     }
   }
 
-  return { totalCount, items };
+  return { totalCount, items, pageInfo: connection.pageInfo };
 }
 
 /**
