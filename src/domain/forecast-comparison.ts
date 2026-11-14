@@ -16,7 +16,11 @@ import { calculateVelocityMetrics } from "./dashboard";
 import { calculateLifetimeForecast, calculateStaleFrontierForecast } from "./forecast";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_LOOKBACK_DAYS = 30;
+const DEFAULT_FIRST_TIMER_LOOKBACK_DAYS = 90;
 const round1 = (value: number): number => Math.round(value * 10) / 10;
+const positiveDays = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 
 /** 観測速度モデルが算出できない理由の説明 */
 export const FORECAST_UNAVAILABLE_TEXT: Record<string, string> = {
@@ -42,6 +46,10 @@ export interface ForecastComparisonSource {
   history: HistoryRecord[];
   /** 優等生の底の先頭の観測列 */
   frontierSamples: StaleFrontierSample[];
+  /** 全体マージ実績の集計期間（日）。省略時は 30 */
+  lookbackDays?: number;
+  /** 初回提出者コホートの集計期間（日）。省略時は lookbackDays または 90 */
+  firstTimerLookbackDays?: number;
 }
 
 function estimate(
@@ -189,15 +197,20 @@ function summarizeCreationOrder(
     }
   }
 
+  const lookbackDays = positiveDays(source.lookbackDays) ?? DEFAULT_LOOKBACK_DAYS;
+  const firstTimerLookbackDays =
+    positiveDays(source.firstTimerLookbackDays) ??
+    positiveDays(source.lookbackDays) ??
+    DEFAULT_FIRST_TIMER_LOOKBACK_DAYS;
+
   return {
     id: "creation-order",
     title: "③ 作成順",
-    premise:
-      "直近（30日間）の全体マージ実績（常連・特急含む）の通算所要日数が基準 PR にも当てはまる（作成順に近く消化される）",
+    premise: `直近（${lookbackDays}日間）の全体マージ実績（常連・特急含む）の通算所要日数が基準 PR にも当てはまる（作成順に近く消化される）`,
     progressText,
     progressRatio,
     estimates,
-    note: "更新の入れ替わりの影響を受けない（上部の初回提出者90日コホート統計とは母集団が異なります）",
+    note: `更新の入れ替わりの影響を受けない（上部の初回提出者${firstTimerLookbackDays}日コホート統計とは母集団が異なります）`,
   };
 }
 
@@ -257,6 +270,8 @@ export function buildForecastSource(input: {
   frontierSamples: StaleFrontierSample[];
 }): ForecastComparisonSource {
   const { progress, depths, history, frontierSamples } = input;
+  const lookbackDays = positiveDays(progress?.LookbackDays);
+  const firstTimerLookbackDays = positiveDays(progress?.FirstTimerLookbackDays) ?? lookbackDays;
   return {
     nowMs:
       Date.parse(progress?.Timestamp ?? "") ||
@@ -270,5 +285,7 @@ export function buildForecastSource(input: {
     totalP75Days: progress?.TotalP75Days,
     history,
     frontierSamples,
+    lookbackDays,
+    firstTimerLookbackDays,
   };
 }

@@ -1235,4 +1235,52 @@ describe("buildDashboard: 過去実績との比較", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("非既定の LookbackDays (14) / FirstTimerLookbackDays (60) でも仮説③と実績統計・初回提出者欄の表示期間が矛盾しない", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-lookback-custom-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-08T00:00:00Z",
+        TargetPr: 123456,
+        LookbackDays: 14,
+        FirstTimerLookbackDays: 60,
+        SampleCount: 55,
+        SkippedCount: 2,
+        TotalMedianDays: 18,
+        TotalP75Days: 25,
+        FirstTimerMedianDays: 32,
+        FirstTimerP75Days: 40,
+        FirstTimerSampleCount: 5,
+        Comparison: {
+          LaterCreated: 3,
+          EarlierCreated: 4,
+          LaterReady: 1,
+          FirstTimerLaterCreated: 0,
+          RepeatOrExpressLaterCreated: 3,
+          UnknownLaterCreated: 0,
+        },
+      }),
+      "utf-8",
+    );
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+
+      expect(html).toContain("過去 60 日間の純粋FIFO待機列 準拠");
+      expect(html).toContain("過去 60 日間・採用 5 件");
+      expect(html).toContain("集計対象: 直近 14 日間の全体採用サンプル（55 件）内");
+      expect(html).toContain("マージ実績の所要日数統計 (直近 14 日間");
+      expect(html).toContain("直近（14日間）の全体マージ実績（常連・特急含む）");
+      expect(html).toContain("上部の初回提出者60日コホート統計とは母集団が異なります");
+      expect(html).not.toContain("直近（30日間）の全体マージ実績");
+      expect(html).not.toContain("上部の初回提出者90日コホート統計とは母集団が異なります");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
