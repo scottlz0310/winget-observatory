@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `FirstTimerBottom` を起票日時昇順（`sort:created-asc`）へ移行し、`authorAssociation === "NONE"` に加えて `buildAuthorMergedCountQuery` による生涯マージ 0 回検証とページング補完を追加（複数コミット・手直し込みを許容）
   - `DepthsRow` にオプショナルな `CommitCount` を追加し、ダッシュボード「🌱 初回提出者の底」テーブルに「コミット数」列（旧データは `-`）および新説明文・バッジを表示
   - 統合時系列チャートの右軸を「先頭の経過・遅れ（日）」へ整理し、`extractFirstTimerFrontierSamples` が `CreatedAt` を抽出して「🌱 初回提出者の底 起票からの経過」を描画するよう変更
+  - `DepthsSnapshot` に観測定義バージョン `DepthsVersion`（`CURRENT_DEPTHS_VERSION = 2`）を導入し、`extractStaleFrontierSamples` / `extractFirstTimerFrontierSamples` による時系列・速度算出から旧定義スナップショットを除外して条件切替による偽速度を防止
 - `src/domain/dashboard.ts`, `src/domain/exit-breakdown.ts`, `src/domain/forecast-comparison.ts`, `scripts/build-pages.ts`, 関連テスト: 仮説①（順位消化）および「待ち行列からの離脱の内訳」の基準ルックバック期間（母時間）を 24 時間から 1 週間（168 時間）へ延長し、ダッシュボード UI の期間表記を日数・時間併記（`X.X 日（XXX.X 時間）` / `XXX.X 時間 / X.X 日`）へ更新（Issue #73）。
   - `calculateVelocityMetrics` / `calculateDashboardMetrics` / `calculateExitBreakdown` の既定窓を `168` 時間（`DEFAULT_VELOCITY_WINDOW_HOURS`, `DEFAULT_EXIT_WINDOW_HOURS`）へ引き上げ（168 時間未満の履歴では最古レコードへフォールバック）
   - これに伴い、`forecast-history.jsonl` に記録される `rank-velocity` の予想日も本変更以降の観測から 168 時間窓ベースへ切り替わる

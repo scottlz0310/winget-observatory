@@ -81,6 +81,8 @@ export interface DepthsRow {
  * キュー境界探索のスナップショット（JSON / JSONL 永続化用）
  */
 export interface DepthsSnapshot {
+  /** 観測定義バージョン（2: StaleBottom=1コミット限定 / FirstTimerBottom=起票順・生涯マージ0回。未設定・1は旧定義） */
+  DepthsVersion?: number;
   Timestamp: string;
   TimestampJst: string;
   Repository: string;

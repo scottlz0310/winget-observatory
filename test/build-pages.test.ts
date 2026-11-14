@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildDashboard } from "../scripts/build-pages";
 import type { GitHubApiClient } from "../src/api/github";
 import { runExploreDepths } from "../src/cli/explore-depths";
+import { CURRENT_DEPTHS_VERSION } from "../src/domain/depths";
 import { calculateProgressStats, createProgressSnapshot } from "../src/domain/progress";
 
 describe("buildDashboard", () => {
@@ -314,6 +315,7 @@ describe("buildDashboard: マージ時期の予想", () => {
     Url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
   });
   const snapshot = (timestamp: string, pr: number, updated: string) => ({
+    DepthsVersion: CURRENT_DEPTHS_VERSION,
     Timestamp: timestamp,
     TimestampJst: "",
     Repository: "microsoft/winget-pkgs",
@@ -770,7 +772,20 @@ describe("buildDashboard: 過去実績との比較", () => {
     writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
 
     const depthsLines = [
+      // 旧定義（DepthsVersion 未設定）のスナップショットは混在しても除外される
       JSON.stringify({
+        Timestamp: "2026-11-06T12:00:00Z",
+        StaleBottom: [{ Number: 439999, UpdatedAt: "2026-09-01T00:00:00Z" }],
+        FirstTimerBottom: [
+          {
+            Number: 439998,
+            CreatedAt: "2026-09-01T00:00:00Z",
+            UpdatedAt: "2026-09-02T00:00:00Z",
+          },
+        ],
+      }),
+      JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
         Timestamp: "2026-11-07T12:00:00Z",
         StaleBottom: [{ Number: 440001, UpdatedAt: "2026-10-01T12:00:00Z" }],
         FirstTimerBottom: [
@@ -782,6 +797,7 @@ describe("buildDashboard: 過去実績との比較", () => {
         ],
       }),
       JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
         Timestamp: "2026-11-08T12:00:00Z",
         StaleBottom: [{ Number: 440001, UpdatedAt: "2026-10-02T00:00:00Z" }],
         FirstTimerBottom: [

@@ -3,6 +3,7 @@ import {
   buildAbsoluteBaseQuery,
   buildExpressQuery,
   buildHealthyBaseQuery,
+  CURRENT_DEPTHS_VERSION,
   createDepthsSnapshot,
   filterFirstTimerCandidates,
   filterStaleCandidates,
@@ -134,6 +135,7 @@ describe("Domain: depths logic", () => {
       expressLane: [],
     });
 
+    expect(snapshot.DepthsVersion).toBe(CURRENT_DEPTHS_VERSION);
     expect(snapshot.Timestamp).toBe("2026-11-07T05:54:31.000Z");
     expect(snapshot.TimestampJst).toBe("2026-11-07 14:54:31");
     expect(snapshot.Repository).toBe("microsoft/winget-pkgs");

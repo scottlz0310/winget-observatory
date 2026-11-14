@@ -12,6 +12,13 @@ import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./progress";
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
+ * 現行の底スナップショット定義バージョン。
+ * - 未設定 / 1: 旧定義（StaleBottom=全コミット、FirstTimerBottom=updatedAt順・生涯マージ未検証）
+ * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み）
+ */
+export const CURRENT_DEPTHS_VERSION = 2;
+
+/**
  * UTC の日時（ISO 8601 文字列または Date）を JST (+09:00) の指定フォーマット文字列へ変換する。
  * 外部 I/O・環境変数に依存しない純粋関数。
  */
@@ -184,6 +191,7 @@ export function createDepthsSnapshot(params: {
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
+    DepthsVersion: CURRENT_DEPTHS_VERSION,
     Timestamp: params.now.toISOString(),
     TimestampJst: formatJstDateTime(params.now, true),
     Repository: params.repository,
