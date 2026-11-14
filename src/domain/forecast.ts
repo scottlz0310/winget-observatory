@@ -5,6 +5,7 @@
 
 import type { DepthsSnapshot } from "../models/depths";
 import type {
+  FirstTimerFrontierSample,
   LifetimeForecast,
   StaleFrontierForecast,
   StaleFrontierSample,
@@ -60,21 +61,21 @@ export function extractStaleFrontierSamples(snapshots: DepthsSnapshot[]): StaleF
 }
 
 /**
- * スナップショット列から、初回提出者の底の先頭（常連を除外した初回提出者の最古更新 PR）の
+ * スナップショット列から、初回提出者の底の先頭（起票が最古の初回提出者 PR）の
  * 観測列を時刻昇順で取り出す。
  * 初回提出者の底が未記録（Phase 2 導入前）、空の観測、日時が不正な観測は除く。
  */
 export function extractFirstTimerFrontierSamples(
   snapshots: DepthsSnapshot[],
-): StaleFrontierSample[] {
-  const samples: StaleFrontierSample[] = [];
+): FirstTimerFrontierSample[] {
+  const samples: FirstTimerFrontierSample[] = [];
   for (const snapshot of snapshots) {
     const head = snapshot.FirstTimerBottom?.[0];
     if (!head) continue;
     const timestampMs = Date.parse(snapshot.Timestamp);
-    const updatedMs = Date.parse(head.UpdatedAt);
-    if (Number.isNaN(timestampMs) || Number.isNaN(updatedMs)) continue;
-    samples.push({ timestampMs, pr: head.Number, updatedMs });
+    const createdMs = Date.parse(head.CreatedAt);
+    if (Number.isNaN(timestampMs) || Number.isNaN(createdMs)) continue;
+    samples.push({ timestampMs, pr: head.Number, createdMs });
   }
   return samples.sort((a, b) => a.timestampMs - b.timestampMs);
 }

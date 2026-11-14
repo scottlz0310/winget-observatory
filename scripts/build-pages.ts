@@ -33,7 +33,7 @@ import type {
   ExitBreakdownResult,
   ExitBreakdownUnavailableReason,
 } from "../src/models/exit-breakdown";
-import type { StaleFrontierSample } from "../src/models/forecast";
+import type { FirstTimerFrontierSample, StaleFrontierSample } from "../src/models/forecast";
 import type { ForecastComparison, HypothesisId } from "../src/models/forecast-comparison";
 import type { ForecastHistoryLine, ForecastScore } from "../src/models/forecast-history";
 import type {
@@ -100,13 +100,19 @@ function formatDaysStat(val: number | null | undefined): string {
   return `<strong>${val}</strong> <span style="font-size: 0.875rem; font-weight: normal;">日</span>`;
 }
 
+interface BottomTableRenderOptions {
+  showAuthor?: boolean;
+  showCommitCount?: boolean;
+  highlightRepeaters?: boolean;
+}
+
 /** 底の行一覧のテーブル HTML を生成する */
 function renderBottomRowTable(
   items: DepthsRow[],
   timestampIso: string,
-  showAuthor = false,
-  highlightRepeaters = false,
+  options: BottomTableRenderOptions = {},
 ): string {
+  const { showAuthor = false, showCommitCount = false, highlightRepeaters = false } = options;
   const observedMs = Date.parse(timestampIso);
   const rows = items
     .map((item, index) => {
@@ -121,11 +127,14 @@ function renderBottomRowTable(
           ? `<span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者ではないため、初回提出者の底では除外">常連除外</span>`
           : "";
       const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
+      const commitCountText = item.CommitCount !== undefined ? `${item.CommitCount}` : "-";
+      const commitCountCell = showCommitCount ? `<td>${commitCountText}</td>` : "";
       return `
         <tr>
           <td>${index + 1}</td>
           <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}</td>
           ${authorCell}
+          ${commitCountCell}
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
           <td>${escapeHtml(item.更新日時 || item.UpdatedAt)}</td>
           <td>${lag}</td>
@@ -134,6 +143,7 @@ function renderBottomRowTable(
     })
     .join("");
   const authorHeader = showAuthor ? "<th>作者</th>" : "";
+  const commitCountHeader = showCommitCount ? "<th>コミット数</th>" : "";
   return `
     <table>
       <thead>
@@ -141,6 +151,7 @@ function renderBottomRowTable(
           <th>順位</th>
           <th>PR 番号</th>
           ${authorHeader}
+          ${commitCountHeader}
           <th>起票日時 (JST)</th>
           <th>最終更新 (JST)</th>
           <th>更新からの経過</th>
@@ -152,22 +163,30 @@ function renderBottomRowTable(
     </table>`;
 }
 
-/** 優等生の底（更新が古い順の健康な PR）の表。先頭からの遅れ = 観測時刻 − 最終更新 */
+/** 優等生の底（1コミット限定・更新が古い順の健康な PR）の表。先頭からの遅れ = 観測時刻 − 最終更新 */
 function renderStaleBottomTable(depths: LatestDepths | null): string {
   const items = depths?.StaleBottom ?? [];
   if (items.length === 0) {
     return `<p style="color: var(--text-muted); font-size: 0.875rem;">優等生の底のデータはまだありません。</p>`;
   }
-  return renderBottomRowTable(items, depths?.Timestamp ?? "", false, true);
+  return renderBottomRowTable(items, depths?.Timestamp ?? "", {
+    showAuthor: false,
+    showCommitCount: false,
+    highlightRepeaters: true,
+  });
 }
 
-/** 初回提出者の底（常連を除外した純粋な初回提出者・1コミットの PR）の表 */
+/** 初回提出者の底（手直し込みの初回提出者全体・起票日時順の PR）の表 */
 function renderFirstTimerBottomTable(depths: LatestDepths | null): string {
   const items = depths?.FirstTimerBottom ?? [];
   if (items.length === 0) {
     return `<p style="color: var(--text-muted); font-size: 0.875rem;">初回提出者の底のデータはまだありません（次回の定期観測から記録されます）。</p>`;
   }
-  return renderBottomRowTable(items, depths?.Timestamp ?? "", true, false);
+  return renderBottomRowTable(items, depths?.Timestamp ?? "", {
+    showAuthor: true,
+    showCommitCount: true,
+    highlightRepeaters: false,
+  });
 }
 
 const DAY_MS = 86_400_000;
@@ -756,7 +775,7 @@ function generateHtml(
   csvRows: ProgressHistoryRow[],
   frontierSamples: StaleFrontierSample[] = [],
   forecastHistory: ForecastHistoryLine[] = [],
-  firstTimerFrontierSamples: StaleFrontierSample[] = [],
+  firstTimerFrontierSamples: FirstTimerFrontierSample[] = [],
 ): string {
   const updatedJst = progress?.TimestampJst || depths?.TimestampJst || "未観測";
   const repo = progress?.Repository || depths?.Repository || DEFAULT_REPOSITORY;
@@ -803,7 +822,7 @@ function generateHtml(
       points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.totalAhead })),
     },
     {
-      label: "優等生の底 先頭の遅れ",
+      label: "優等生の底 更新からの遅れ",
       axis: "right",
       color: "var(--warning)",
       strokeWidth: 2,
@@ -815,20 +834,20 @@ function generateHtml(
 
   if (firstTimerFrontierSamples.length > 0) {
     dualSeries.push({
-      label: "🌱 初回提出者の底 先頭の遅れ",
+      label: "🌱 初回提出者の底 起票からの経過",
       axis: "right",
       color: "var(--success)",
       strokeWidth: 3,
       points: firstTimerFrontierSamples
         .slice(-CHART_MAX_POINTS)
-        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.updatedMs) / DAY_MS })),
+        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
     });
   }
 
   const queueChart = renderDualAxisLineChartSvg({
     title: "待ち件数と底の遅れの推移（統合時系列チャート）",
     leftAxisLabel: "待ち件数",
-    rightAxisLabel: "先頭の遅れ（日）",
+    rightAxisLabel: "先頭の経過・遅れ（日）",
     series: dualSeries,
     rightDecimals: 1,
   });
@@ -1124,7 +1143,7 @@ function generateHtml(
 
     <h2 class="section-title">📉 待ち件数の推移（キュー推移と底の進行の統合時系列）</h2>
     <p class="section-note">
-      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭の更新からの遅れ日数（優等生の底・🌱 初回提出者の底）です。
+      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭経過日数（優等生の底＝更新からの遅れ、🌱 初回提出者の底＝起票からの経過）です。
     </p>
     ${renderChartCard(queueChart)}
 
@@ -1254,7 +1273,7 @@ function generateHtml(
 
     <h2 class="section-title">🧗 待機列の底の比較（優等生 vs 初回提出者）</h2>
     <p class="section-note">
-      左は指摘なし・健康な1コミットPR全体（常連含む）、右はそこから常連を除外した純粋な初回提出者列です。「常連除外」バッジの付いたPRが除外されたことで、初回提出者の底で順位が繰り上がります。
+      左は「1コミット完全放置」の待機前線（常連含む）、右はコミット数制限を外した「初回提出者全体（手直し込み）」の待機前線です。
     </p>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
       <div class="card" style="padding: 1.25rem; overflow-x: auto;">
@@ -1271,10 +1290,10 @@ function generateHtml(
       <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--success);">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
           <h3 style="font-size: 1.05rem; font-weight: 600; color: var(--success);">🌱 初回提出者の底（真の FIFO 前線）</h3>
-          <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">純粋FIFO列</span>
+          <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">手直し込み初回全体</span>
         </div>
         <p class="section-note" style="margin-bottom: 0.75rem;">
-          優等生の底から常連を除外した、純粋な初回提出者（authorAssociation = NONE）。
+          初回提出者（authorAssociation = NONE・生涯マージ 0 回）の健康なPR全体（手直しコミット込み）。起票日時の古い順です。
         </p>
         ${renderFirstTimerBottomTable(depths)}
       </div>
@@ -1380,7 +1399,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   }
 
   let frontierSamples: StaleFrontierSample[] = [];
-  let firstTimerFrontierSamples: StaleFrontierSample[] = [];
+  let firstTimerFrontierSamples: FirstTimerFrontierSample[] = [];
   if (existsSync(depthsHistoryPath)) {
     try {
       const depthsHistory = parseDepthsHistory(readFileSync(depthsHistoryPath, "utf-8"));

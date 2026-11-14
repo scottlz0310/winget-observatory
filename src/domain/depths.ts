@@ -113,7 +113,23 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
     Url: node.url,
     Author: node.author?.login,
     AuthorAssociation: node.authorAssociation,
+    CommitCount: node.commits?.totalCount,
   };
+}
+
+function hasBlockedLabel(node: GraphQLPrNode): boolean {
+  const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
+  return labelNames.some((name) => BLOCKED_PATTERNS.some((pattern) => pattern.test(name)));
+}
+
+/**
+ * GraphQL 検索ノードが「優等生の底（1コミット限定・除外ラベルなし）」の条件を満たすか判定する。
+ */
+export function isStaleCandidate(node: GraphQLPrNode): boolean {
+  if (node.commits?.totalCount !== 1) {
+    return false;
+  }
+  return !hasBlockedLabel(node);
 }
 
 /**
@@ -127,11 +143,23 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
   if (node.authorAssociation !== "NONE") {
     return false;
   }
-  const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
-  const hasBlockedPattern = labelNames.some((name) =>
-    BLOCKED_PATTERNS.some((pattern) => pattern.test(name)),
-  );
-  return !hasBlockedPattern;
+  return !hasBlockedLabel(node);
+}
+
+function filterCandidates(
+  nodes: GraphQLPrNode[],
+  predicate: (node: GraphQLPrNode) => boolean,
+  limit = 10,
+): DepthsRow[] {
+  return nodes.filter(predicate).slice(0, limit).map(formatGraphQLDepthsRow);
+}
+
+/**
+ * GraphQL 検索ノードから「優等生の底（1コミット限定・除外ラベルなし）」を抽出し、
+ * DepthsRow 形式で返す。
+ */
+export function filterStaleCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
+  return filterCandidates(nodes, isStaleCandidate, limit);
 }
 
 /**
@@ -139,7 +167,7 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
  * DepthsRow 形式で返す。
  */
 export function filterFirstTimerCandidates(nodes: GraphQLPrNode[], limit = 10): DepthsRow[] {
-  return nodes.filter(isFirstTimerCandidate).slice(0, limit).map(formatGraphQLDepthsRow);
+  return filterCandidates(nodes, isFirstTimerCandidate, limit);
 }
 
 /**

@@ -6,10 +6,13 @@ import {
   buildExpressQuery,
   buildHealthyBaseQuery,
   createDepthsSnapshot,
-  filterFirstTimerCandidates,
   formatDepthsRow,
+  formatGraphQLDepthsRow,
   formatTargetPrInfo,
+  isFirstTimerCandidate,
+  isStaleCandidate,
 } from "../domain/depths";
+import { buildAuthorMergedCountQuery, parseAuthorMergedCounts } from "../domain/first-timer";
 import type {
   DepthsRow,
   DepthsSnapshot,
@@ -73,19 +76,32 @@ export interface GraphQLSearchFirstTimerResponse {
   };
 }
 
+/** 生涯マージ件数チェックの 1 バッチあたり最大作者数 */
+const AUTHOR_MERGED_BATCH_SIZE = 25;
+
+interface CollectBottomOptions {
+  client: GitHubApiClient;
+  query: string;
+  limit: number;
+  maxTraverseNodes: number;
+  label: string;
+  filterNodes: (
+    nodes: GraphQLPrNode[],
+    needed: number,
+  ) => Promise<GraphQLPrNode[]> | GraphQLPrNode[];
+}
+
 /**
- * GraphQL API を用いて初回提出者の底（First-Timer Bottom）を取得する。
- * 50件の1回取得で終わらず、採用件数（limit）に達するか走査終了（hasNextPage=false）まで
- * 最大 maxTraverseNodes 件までページング走査する。
- * 通信障害や認証エラー時は例外を握りつぶさずコンテキスト付き例外として伝播させる。
+ * GraphQL Search をページング走査して、条件に一致する底の候補を limit 件まで収集する共通ヘルパー。
  */
-export async function fetchFirstTimerBottom(
-  client: GitHubApiClient,
-  baseQuery: string,
-  limit = STALE_BOTTOM_LIMIT,
-  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
-): Promise<DepthsRow[]> {
-  const openGqlQuery = `${baseQuery} sort:updated-asc`;
+async function collectBottomCandidates({
+  client,
+  query,
+  limit,
+  maxTraverseNodes,
+  label,
+  filterNodes,
+}: CollectBottomOptions): Promise<DepthsRow[]> {
   let cursor: string | null = null;
   let hasNext = true;
   let traversedCount = 0;
@@ -94,7 +110,7 @@ export async function fetchFirstTimerBottom(
   while (hasNext && collectedRows.length < limit) {
     if (traversedCount >= maxTraverseNodes) {
       throw new Error(
-        `初回提出者の底の探索上限 (${maxTraverseNodes}件) に達しましたが、未走査の PR が残っています (採用件数: ${collectedRows.length}/${limit}件)。不完全な結果を避けるため中断します。`,
+        `${label}の探索上限 (${maxTraverseNodes}件) に達しましたが、未走査の PR が残っています (採用件数: ${collectedRows.length}/${limit}件)。不完全な結果を避けるため中断します。`,
       );
     }
 
@@ -102,7 +118,7 @@ export async function fetchFirstTimerBottom(
     try {
       const gqlRes: GraphQLSearchFirstTimerResponse =
         await client.graphql<GraphQLSearchFirstTimerResponse>(FIRST_TIMER_GRAPHQL_QUERY, {
-          query: openGqlQuery,
+          query,
           first: fetchCount,
           ...(cursor ? { after: cursor } : {}),
         });
@@ -111,8 +127,11 @@ export async function fetchFirstTimerBottom(
       traversedCount += nodes.length;
 
       const needed = limit - collectedRows.length;
-      const candidates = filterFirstTimerCandidates(nodes, needed);
-      collectedRows.push(...candidates);
+      const matched = await filterNodes(nodes, needed);
+      for (const node of matched) {
+        if (collectedRows.length >= limit) break;
+        collectedRows.push(formatGraphQLDepthsRow(node));
+      }
 
       hasNext = Boolean(gqlRes.search?.pageInfo?.hasNextPage);
       cursor = gqlRes.search?.pageInfo?.endCursor ?? null;
@@ -122,13 +141,103 @@ export async function fetchFirstTimerBottom(
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`初回提出者の底の GraphQL 取得に失敗しました: ${msg}`, {
+      throw new Error(`${label}の GraphQL 取得に失敗しました: ${msg}`, {
         cause: err,
       });
     }
   }
 
   return collectedRows.slice(0, limit);
+}
+
+/**
+ * GraphQL API を用いて優等生の底（Stale Bottom: 1コミット限定・更新日時古い順）を取得する。
+ */
+export async function fetchStaleBottom(
+  client: GitHubApiClient,
+  baseQuery: string,
+  limit = STALE_BOTTOM_LIMIT,
+  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+): Promise<DepthsRow[]> {
+  const rows = await collectBottomCandidates({
+    client,
+    query: `${baseQuery} sort:updated-asc`,
+    limit,
+    maxTraverseNodes,
+    label: "優等生の底",
+    filterNodes: (nodes) => nodes.filter(isStaleCandidate),
+  });
+  return rows.sort((a, b) => Date.parse(a.UpdatedAt) - Date.parse(b.UpdatedAt)).slice(0, limit);
+}
+
+/**
+ * GraphQL API を用いて初回提出者の底（First-Timer Bottom: 起票日時古い順・手直し込み・生涯マージ0回）を取得する。
+ * 採用件数（limit）に達するか走査終了（hasNextPage=false）まで最大 maxTraverseNodes 件までページング走査する。
+ * 通信障害や認証エラー時は例外を握りつぶさずコンテキスト付き例外として伝播させる。
+ */
+export async function fetchFirstTimerBottom(
+  client: GitHubApiClient,
+  baseQuery: string,
+  limit = STALE_BOTTOM_LIMIT,
+  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+): Promise<DepthsRow[]> {
+  const repository = baseQuery.match(/\brepo:([^\s]+)/)?.[1];
+  const mergedCountCache = new Map<string, number>();
+
+  const rows = await collectBottomCandidates({
+    client,
+    query: `${baseQuery} sort:created-asc`,
+    limit,
+    maxTraverseNodes,
+    label: "初回提出者の底",
+    filterNodes: async (nodes, needed) => {
+      const candidates = nodes.filter(isFirstTimerCandidate);
+      const zeroMergedNodes: GraphQLPrNode[] = [];
+
+      for (
+        let i = 0;
+        i < candidates.length && zeroMergedNodes.length < needed;
+        i += AUTHOR_MERGED_BATCH_SIZE
+      ) {
+        const slice = candidates.slice(i, i + AUTHOR_MERGED_BATCH_SIZE);
+        const unknownAuthors = Array.from(
+          new Set(
+            slice
+              .map((n) => n.author?.login)
+              .filter((login): login is string => Boolean(login))
+              .filter((login) => !mergedCountCache.has(login)),
+          ),
+        );
+
+        if (unknownAuthors.length > 0 && repository) {
+          const mergedQuery = buildAuthorMergedCountQuery(repository, unknownAuthors);
+          if (mergedQuery) {
+            const res = await client.graphql<Record<string, { issueCount?: number } | undefined>>(
+              mergedQuery,
+              {},
+            );
+            const counts = parseAuthorMergedCounts(unknownAuthors, res ?? {});
+            for (const [author, count] of counts) {
+              mergedCountCache.set(author, count);
+            }
+          }
+        }
+
+        for (const node of slice) {
+          const login = node.author?.login;
+          if (!login) continue;
+          if ((mergedCountCache.get(login) ?? 0) === 0) {
+            zeroMergedNodes.push(node);
+            if (zeroMergedNodes.length >= needed) break;
+          }
+        }
+      }
+
+      return zeroMergedNodes;
+    },
+  });
+
+  return rows.sort((a, b) => Date.parse(a.CreatedAt) - Date.parse(b.CreatedAt)).slice(0, limit);
 }
 
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
@@ -172,13 +281,14 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
   };
 }
 
-function printRowTable(rows: DepthsRow[], log = console.log): void {
+function printRowTable(rows: DepthsRow[], log = console.log, showCommitCount = false): void {
   if (rows.length === 0) {
     log("  （該当なし）");
     return;
   }
   for (const row of rows) {
-    log(`  ${row.PR.padEnd(8)} | ${row.作成日時} | ${row.更新日時} | ${row.タイトル}`);
+    const commitCol = showCommitCount ? ` | ${String(row.CommitCount ?? "-").padStart(2)}c` : "";
+    log(`  ${row.PR.padEnd(8)}${commitCol} | ${row.作成日時} | ${row.更新日時} | ${row.タイトル}`);
   }
 }
 
@@ -231,11 +341,10 @@ export async function runExploreDepths(
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
-  // 3. 優等生の底（Stale Bottom）: 指摘なく健康になり、そのまま順番を待っている PR の先頭
-  const staleItems = await client.searchIssues(healthyBase, "updated", "asc", STALE_BOTTOM_LIMIT);
-  const staleBottom = staleItems.map(formatDepthsRow);
+  // 3. 優等生の底（Stale Bottom）: 指摘なく健康な1コミット限定 PR の中で更新日時が古い先頭
+  const staleBottom = await fetchStaleBottom(client, healthyBase, STALE_BOTTOM_LIMIT);
 
-  // 4. 初回提出者の底（First-Timer Bottom）: 優等生の底から常連を除外した、純粋な初回提出者の先頭
+  // 4. 初回提出者の底（First-Timer Bottom）: 初回提出者（NONE・生涯マージ 0 回）の健康な PR 全体（手直し込み・起票日時順）
   const firstTimerBottom = await fetchFirstTimerBottom(client, healthyBase, STALE_BOTTOM_LIMIT);
 
   // 5. 特急レーン（Express Lane）
@@ -259,16 +368,16 @@ export async function runExploreDepths(
 
     log("【3. 優等生の底 (Stale Bottom / Healthy Oldest)】");
     log(
-      "説明: 健康体の中で更新日時(updated)が最も古い、指摘なく順番待ちを続けているPR (旧称: 遭難の底)",
+      "説明: 指摘なく健康な1コミット限定PR（常連含む）の中で、更新日時(updated)が最も古い放置前線",
     );
     printRowTable(staleBottom, log);
     log("");
 
     log("【4. 初回提出者の底 (First-Timer Bottom)】");
     log(
-      "説明: 優等生の底から常連を除外した、純粋な初回提出者（authorAssociation = NONE）の順番待ち先頭",
+      "説明: 初回提出者（authorAssociation = NONE・生涯マージ 0 回）の健康なPR全体（手直し込み）の、起票日時(created)が最も古い先頭",
     );
-    printRowTable(firstTimerBottom, log);
+    printRowTable(firstTimerBottom, log, true);
     log("");
 
     if (hasTarget && targetInfo) {

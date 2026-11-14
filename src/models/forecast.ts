@@ -15,6 +15,16 @@ export interface StaleFrontierSample {
   updatedMs: number;
 }
 
+/** 初回提出者の底の先頭（起票が最古の初回提出者 PR）の 1 回分の観測 */
+export interface FirstTimerFrontierSample {
+  /** 観測時刻（UTC ミリ秒） */
+  timestampMs: number;
+  /** 先頭 PR の番号 */
+  pr: number;
+  /** 先頭 PR の起票時刻（UTC ミリ秒） */
+  createdMs: number;
+}
+
 export type ForecastUnavailableReason =
   /** 先頭の観測が無い */
   | "no-samples"

@@ -23,12 +23,12 @@ const sample = (
   updatedMs: T0 - frontierDaysBeforeT0 * DAY,
 });
 
-const row = (number: number, updatedAt: string): DepthsRow => ({
+const row = (number: number, updatedAt: string, createdAt = updatedAt): DepthsRow => ({
   PR: `#${number}`,
   Number: number,
   作成日時: "",
   更新日時: "",
-  CreatedAt: updatedAt,
+  CreatedAt: createdAt,
   UpdatedAt: updatedAt,
   タイトル: "",
   Title: "",
@@ -75,22 +75,24 @@ describe("Domain: extractStaleFrontierSamples", () => {
 });
 
 describe("Domain: extractFirstTimerFrontierSamples", () => {
-  test("初回提出者の底の先頭を時刻昇順で取り出し、空・不正な観測は除く", () => {
+  test("初回提出者の底の先頭を時刻昇順で取り出し、UpdatedAt ではなく CreatedAt（起票時刻）を抽出する", () => {
     const s1 = snapshot("2026-11-01T08:00:00Z", []);
-    s1.FirstTimerBottom = [row(200, "2026-10-10T00:00:00Z")];
+    s1.FirstTimerBottom = [row(200, "2026-10-20T00:00:00Z", "2026-10-10T00:00:00Z")];
     const s2 = snapshot("2026-11-01T00:00:00Z", []);
-    s2.FirstTimerBottom = [row(100, "2026-10-09T00:00:00Z")];
+    s2.FirstTimerBottom = [row(100, "2026-10-19T00:00:00Z", "2026-10-09T00:00:00Z")];
     const s3 = snapshot("2026-11-01T04:00:00Z", []);
     s3.FirstTimerBottom = [];
     const s4 = snapshot("invalid", []);
-    s4.FirstTimerBottom = [row(300, "2026-10-11T00:00:00Z")];
+    s4.FirstTimerBottom = [row(300, "2026-10-11T00:00:00Z", "2026-10-11T00:00:00Z")];
     const s5 = snapshot("2026-11-01T06:00:00Z", []);
-    s5.FirstTimerBottom = [row(400, "not-a-date")];
+    s5.FirstTimerBottom = [row(400, "2026-10-12T00:00:00Z", "not-a-date")];
     const s6 = snapshot("2026-11-01T07:00:00Z", []);
     // FirstTimerBottom 未定義
 
     const samples = extractFirstTimerFrontierSamples([s1, s2, s3, s4, s5, s6]);
     expect(samples.map((s) => s.pr)).toEqual([100, 200]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-10-09T00:00:00Z"));
+    expect(samples[1].createdMs).toBe(Date.parse("2026-10-10T00:00:00Z"));
   });
 });
 
