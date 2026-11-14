@@ -10,7 +10,7 @@ import type {
 } from "../models/dashboard";
 import type { ProgressHistoryRow } from "../models/progress";
 import { DAY_MS, formatJstDate, HOUR_MS, round1 } from "./formatters";
-import { QUEUE_BASIS } from "./progress";
+import { QUEUE_BASIS } from "./progress-csv";
 
 export { formatJstDate };
 

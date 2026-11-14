@@ -1,142 +1,30 @@
 /**
- * 進捗メトリクス計測（progress）に関するドメインロジック。
- * 外部 I/O を行わない純粋関数群であり、src/models の型定義のみに依存する。
+ * 進捗メトリクス計測（progress）の統計集計およびスナップショット構築ロジック。
+ * 外部 I/O を行わない純粋関数群であり、src/models の型定義および同一ドメインモジュールに依存する。
  */
 
 import type {
   MergedCandidateSample,
-  ProgressHistoryRow,
   ProgressPercentileMetrics,
   ProgressRivalPr,
   ProgressSnapshot,
   ProgressStatsSummary,
-  ProgressTimelineEvent,
 } from "../models/progress";
 import { buildGuidance, compareWithSamples, toSnapshotSamples } from "./benchmark";
-import { formatDateTimeWithDay, formatDelta, formatHumanDays } from "./formatters";
+import { formatDateTimeWithDay } from "./formatters";
 
-export { formatDateTimeWithDay, formatDelta, formatHumanDays };
-
-/**
- * 比較条件で必須とされるラベル一覧。
- */
-export const REQUIRED_LABELS: readonly string[] = [
-  "New-Package",
-  "Azure-Pipeline-Passed",
-  "Validation-Completed",
-] as const;
-
-/**
- * 明確な阻害要因となるラベル一覧。
- */
-export const BLOCKED_LABELS: readonly string[] = [
-  "Needs-CLA",
-  "Needs-Author-Feedback",
-  "Changes-Requested",
-  "Blocking-Issue",
-  "Blocked-InstallerType",
-  "Author-Not-Authorized",
-  "Author-Not-Verified",
-  "Manifest-Content-Incomplete",
-  "Package-Metadata-Invalid",
-  "PullRequest-Error",
-  "Unexpected-File",
-  "Network-Blocker",
-  "Possible-Duplicate",
-  "Resolution-Duplicate",
-  "Validation-Merge-Conflict",
-  "Validation-Retry",
-  "Timeout-Retry",
-  "Testing",
-] as const;
-
-/**
- * 調査中・特殊な対応が必要なラベル一覧。
- */
-export const INVESTIGATION_LABELS: readonly string[] = [
-  "Package-Flagged",
-  "PUA-Detection",
-  "Needs-SmartScreen-Investigation",
-  "Validate-Domain-Installer",
-  "Validation-Agreement-Domain",
-  "Validation-Certificate-Root",
-  "Validation-Domain",
-  "Validation-Domains-Mismatch",
-  "Validation-Framework-Package",
-  "Validation-Hash-Flagged",
-  "Validation-Hash-Verification-Failed",
-  "Validation-Unapproved-URL",
-  "Validation-SmartScreen",
-] as const;
-
-/**
- * 名前パターンで判定する除外ラベル正規表現。
- */
-export const BLOCKED_PATTERNS: readonly RegExp[] = [
-  /^Error-/,
-  /-Error$/,
-  /^Policy-Test-/,
-  /^Validation-Submission-(Expired|Failed|Mismatch|Missing|Unsupported)$/,
-] as const;
-
-/**
- * 履歴 CSV の ActiveAhead の算出基準（更新順）。
- * 基準が変わったら値を変え、旧基準の行との前回比・速度計算を避ける。
- */
-export const QUEUE_BASIS = "updated";
-
-/**
- * 「健康な未マージ PR」（比較条件を満たす PR）を検索する GitHub Search クエリの条件部分。
- * progress（前線・待ち件数）と explore-depths（各底）で同じ定義を使い、判定のずれを防ぐ。
- * 名前パターンで判定する阻害ラベル（BLOCKED_PATTERNS）は検索クエリで表現できないため含まない。
- */
-export function buildHealthyQueryParts(repository: string): string[] {
-  return [
-    `repo:${repository}`,
-    "is:pr",
-    "is:open",
-    "draft:false",
-    ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
-    ...BLOCKED_LABELS.map((b) => `-label:"${b}"`),
-    ...INVESTIGATION_LABELS.map((inv) => `-label:"${inv}"`),
-  ];
-}
-
-const BLOCKED_LABEL_SET = new Set<string>(BLOCKED_LABELS);
-const INVESTIGATION_LABEL_SET = new Set<string>(INVESTIGATION_LABELS);
-
-/**
- * 指定されたラベル名が阻害要因・除外対象に該当するか判定する。
- */
-export function isBlockedLabel(name: string): boolean {
-  if (BLOCKED_LABEL_SET.has(name) || INVESTIGATION_LABEL_SET.has(name)) {
-    return true;
-  }
-  for (const pattern of BLOCKED_PATTERNS) {
-    if (pattern.test(name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * ラベル一覧が比較条件（必須ラベルすべて存在、除外ラベルなし）を満たすか判定する。
- */
-export function isEligibleLabels(labels: Iterable<string>): boolean {
-  const labelSet = new Set(labels);
-  for (const required of REQUIRED_LABELS) {
-    if (!labelSet.has(required)) {
-      return false;
-    }
-  }
-  for (const name of labelSet) {
-    if (isBlockedLabel(name)) {
-      return false;
-    }
-  }
-  return true;
-}
+export { formatDateTimeWithDay, formatDelta, formatHumanDays } from "./formatters";
+export {
+  BLOCKED_LABELS,
+  BLOCKED_PATTERNS,
+  buildHealthyQueryParts,
+  INVESTIGATION_LABELS,
+  isBlockedLabel,
+  isEligibleLabels,
+  REQUIRED_LABELS,
+} from "./labels";
+export { parseCsvRows, QUEUE_BASIS, serializeCsvRows, toHistoryRow } from "./progress-csv";
+export { simulateReadySince } from "./timeline";
 
 /**
  * パーセンタイル値を線形補間（R-7 / Excel PERCENTILE.INC 相当）で算出する。
@@ -156,81 +44,6 @@ export function getPercentile(values: number[], percentile: number): number {
   const fraction = position - lower;
 
   return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction;
-}
-
-/**
- * タイムラインイベント履歴を走査し、条件成立（Ready）となった日時を特定する。
- */
-export function simulateReadySince(
-  events: ProgressTimelineEvent[],
-  currentIsDraft: boolean,
-  endAt: Date,
-): Date | null {
-  // 有効なイベントのみ抽出して日付昇順ソート
-  const targetEvents = events
-    .filter((e) =>
-      ["labeled", "unlabeled", "converted_to_draft", "ready_for_review"].includes(e.event),
-    )
-    .filter((e) => e.created_at && !Number.isNaN(new Date(e.created_at).getTime()))
-    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-
-  // 最初の Draft イベントから初期状態を逆算（なければ現在状態を採用）
-  let isDraft = currentIsDraft;
-  for (const event of targetEvents) {
-    if (event.event === "ready_for_review") {
-      isDraft = true;
-      break;
-    }
-    if (event.event === "converted_to_draft") {
-      isDraft = false;
-      break;
-    }
-  }
-
-  const labels = new Set<string>();
-  let readySince: Date | null = null;
-  const endTimestamp = endAt.getTime();
-
-  for (const event of targetEvents) {
-    const eventTime = new Date(event.created_at);
-    if (eventTime.getTime() > endTimestamp) {
-      break;
-    }
-
-    switch (event.event) {
-      case "labeled": {
-        if (event.label?.name) {
-          labels.add(event.label.name);
-        }
-        break;
-      }
-      case "unlabeled": {
-        if (event.label?.name) {
-          labels.delete(event.label.name);
-        }
-        break;
-      }
-      case "converted_to_draft": {
-        isDraft = true;
-        break;
-      }
-      case "ready_for_review": {
-        isDraft = false;
-        break;
-      }
-    }
-
-    const eligible = !isDraft && isEligibleLabels(labels);
-    if (eligible) {
-      if (readySince === null) {
-        readySince = eventTime;
-      }
-    } else {
-      readySince = null;
-    }
-  }
-
-  return readySince;
 }
 
 /**
@@ -265,91 +78,7 @@ export function calculateProgressStats(
   };
 }
 
-/**
- * 簡易 CSV 行パース処理。
- */
-export function parseCsvRows(csvContent: string): ProgressHistoryRow[] {
-  const lines = csvContent
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  if (lines.length <= 1) {
-    return [];
-  }
-
-  const header = lines[0].split(",").map((c) => c.replace(/^"(.*)"$/, "$1").trim());
-  const rows: ProgressHistoryRow[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",").map((c) => c.replace(/^"(.*)"$/, "$1").trim());
-    const raw: Record<string, string> = {};
-    for (let j = 0; j < header.length; j++) {
-      raw[header[j]] = cols[j] ?? "";
-    }
-    rows.push(toHistoryRow(raw));
-  }
-
-  return rows;
-}
-
-/**
- * CSV 1 行分の列マップを ProgressHistoryRow へ変換する。列が欠けている旧スキーマの行は空文字で補う。
- */
-function toHistoryRow(raw: Record<string, string>): ProgressHistoryRow {
-  return {
-    Timestamp: raw.Timestamp ?? "",
-    TargetPr: raw.TargetPr ?? "",
-    FrontNumber: raw.FrontNumber ?? "",
-    FrontCreatedAt: raw.FrontCreatedAt ?? "",
-    ActiveAhead: raw.ActiveAhead ?? "",
-    TotalAhead: raw.TotalAhead ?? "",
-    QueueBasis: raw.QueueBasis ?? "",
-    Behind: raw.Behind ?? "",
-    TotalLifetimeDays: raw.TotalLifetimeDays ?? "",
-    TurnLatencyDays: raw.TurnLatencyDays ?? "",
-    WaitDays: raw.WaitDays ?? "",
-    CommitCount: raw.CommitCount ?? "",
-    MergedOlder: raw.MergedOlder ?? "",
-    ClosedOlder: raw.ClosedOlder ?? "",
-  };
-}
-
-/**
- * ProgressHistoryRow 配列を CSV 文字列にシリアライズする。
- */
-export function serializeCsvRows(rows: ProgressHistoryRow[]): string {
-  const headers: (keyof ProgressHistoryRow)[] = [
-    "Timestamp",
-    "TargetPr",
-    "FrontNumber",
-    "FrontCreatedAt",
-    "ActiveAhead",
-    "TotalAhead",
-    "Behind",
-    "TotalLifetimeDays",
-    "TurnLatencyDays",
-    "WaitDays",
-    "CommitCount",
-    "QueueBasis",
-    "MergedOlder",
-    "ClosedOlder",
-  ];
-
-  const headerLine = headers.map((h) => `"${h}"`).join(",");
-  const lines = [headerLine];
-  for (const row of rows) {
-    const line = headers.map((h) => `"${row[h] ?? ""}"`).join(",");
-    lines.push(line);
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
-/**
- * スナップショット JSON オブジェクトを構築する。
- */
-export function createProgressSnapshot(params: {
+export interface CreateProgressSnapshotParams {
   now: Date;
   repository: string;
   targetPr: number;
@@ -381,52 +110,31 @@ export function createProgressSnapshot(params: {
   firstTimerSampleCount?: number;
   /** 初回提出者コホートの集計窓（日。任意） */
   firstTimerLookbackDays?: number;
-}): ProgressSnapshot {
-  const {
-    now,
-    repository,
-    targetPr,
-    prTitle,
-    prUrl,
-    prState,
-    frontNumber,
-    frontCreatedAt,
-    activeAhead,
-    totalAhead,
-    behind,
-    totalLifetimeDays,
-    turnLatencyDays,
-    waitDays,
-    commitCount,
-    stats,
-    lookbackDays,
-    skippedCount,
-    rivals,
-    samples,
-    targetCreatedAt,
-    targetReadyAt,
-    firstTimerStats,
-    firstTimerSampleCount,
-    firstTimerLookbackDays,
-  } = params;
+}
+
+/**
+ * スナップショット JSON オブジェクトを構築する。
+ */
+export function createProgressSnapshot(params: CreateProgressSnapshotParams): ProgressSnapshot {
+  const { stats, samples, targetPr, lookbackDays, firstTimerStats } = params;
 
   return {
-    Timestamp: now.toISOString(),
-    TimestampJst: formatDateTimeWithDay(now),
-    Repository: repository,
+    Timestamp: params.now.toISOString(),
+    TimestampJst: formatDateTimeWithDay(params.now),
+    Repository: params.repository,
     TargetPr: targetPr,
-    PrTitle: prTitle,
-    PrUrl: prUrl,
-    PrState: prState,
-    FrontNumber: frontNumber,
-    FrontCreatedAt: frontCreatedAt,
-    ActiveAhead: activeAhead,
-    TotalAhead: totalAhead,
-    Behind: behind,
-    TotalLifetimeDays: Number(totalLifetimeDays.toFixed(2)),
-    TurnLatencyDays: Number(turnLatencyDays.toFixed(2)),
-    WaitDays: Number(waitDays.toFixed(2)),
-    CommitCount: commitCount,
+    PrTitle: params.prTitle,
+    PrUrl: params.prUrl,
+    PrState: params.prState,
+    FrontNumber: params.frontNumber,
+    FrontCreatedAt: params.frontCreatedAt,
+    ActiveAhead: params.activeAhead,
+    TotalAhead: params.totalAhead,
+    Behind: params.behind,
+    TotalLifetimeDays: Number(params.totalLifetimeDays.toFixed(2)),
+    TurnLatencyDays: Number(params.turnLatencyDays.toFixed(2)),
+    WaitDays: Number(params.waitDays.toFixed(2)),
+    CommitCount: params.commitCount,
     TotalMedianDays: stats ? stats.total.median : null,
     TotalP75Days: stats ? stats.total.p75 : null,
     TurnMedianDays: stats ? stats.turn.median : null,
@@ -437,10 +145,10 @@ export function createProgressSnapshot(params: {
     TurnMaxDays: stats ? stats.turn.max : null,
     ReadyMaxDays: stats ? stats.ready.max : null,
     LookbackDays: lookbackDays,
-    FirstTimerLookbackDays: firstTimerLookbackDays ?? lookbackDays,
+    FirstTimerLookbackDays: params.firstTimerLookbackDays ?? lookbackDays,
     SampleCount: stats ? stats.sampleCount : 0,
-    SkippedCount: skippedCount,
-    Rivals: rivals.map((r) => ({
+    SkippedCount: params.skippedCount,
+    Rivals: params.rivals.map((r) => ({
       Number: r.number,
       Title: r.title,
       Url: r.url,
@@ -451,15 +159,15 @@ export function createProgressSnapshot(params: {
     Comparison: stats
       ? compareWithSamples(samples, {
           number: targetPr,
-          createdAt: targetCreatedAt,
-          readyAt: targetReadyAt,
+          createdAt: params.targetCreatedAt,
+          readyAt: params.targetReadyAt,
         })
       : null,
     Guidance: stats
       ? buildGuidance(stats, samples, {
-          totalDays: totalLifetimeDays,
-          turnDays: turnLatencyDays,
-          readyDays: waitDays,
+          totalDays: params.totalLifetimeDays,
+          turnDays: params.turnLatencyDays,
+          readyDays: params.waitDays,
         })
       : null,
     FirstTimerMedianDays: firstTimerStats ? firstTimerStats.total.median : null,
@@ -467,6 +175,6 @@ export function createProgressSnapshot(params: {
     FirstTimerTurnMedianDays: firstTimerStats ? firstTimerStats.turn.median : null,
     FirstTimerTurnP75Days: firstTimerStats ? firstTimerStats.turn.p75 : null,
     FirstTimerSampleCount:
-      firstTimerSampleCount ?? (firstTimerStats ? firstTimerStats.sampleCount : 0),
+      params.firstTimerSampleCount ?? (firstTimerStats ? firstTimerStats.sampleCount : 0),
   };
 }

@@ -35,7 +35,7 @@ import {
   formatMonthDay,
   round1,
 } from "../src/domain/formatters";
-import { parseCsvRows } from "../src/domain/progress";
+import { parseCsvRows } from "../src/domain/progress-csv";
 import type { DepthsRow, DepthsSnapshot } from "../src/models/depths";
 import type {
   ExitBreakdownResult,

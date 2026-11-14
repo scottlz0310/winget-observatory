@@ -3,7 +3,7 @@
  * 外部 I/O を行わず、src/models の型定義のみに依存する。
  */
 
-import { isBlockedLabel } from "./progress";
+import { isBlockedLabel } from "./labels";
 
 /** 現在の初回提出者判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃新版） */
 export const CURRENT_FIRST_TIMER_VERSION = 2;

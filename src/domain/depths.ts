@@ -8,7 +8,7 @@ import type {
 } from "../models/depths";
 
 import { formatJstDateTime } from "./formatters";
-import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./progress";
+import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./labels";
 
 export { formatJstDateTime };
 
