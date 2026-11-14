@@ -13,8 +13,7 @@ import type {
   ReferenceGuidance,
   SampleComparison,
 } from "../models/progress";
-
-const round2 = (value: number): number => Number(value.toFixed(2));
+import { round2 } from "./formatters";
 
 /** スナップショットに載せるサンプル一覧の最大件数（表示用。統計・比較は全件で計算する） */
 export const SNAPSHOT_SAMPLE_LIMIT = 30;

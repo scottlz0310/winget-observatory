@@ -12,7 +12,7 @@ import {
   isFirstTimerCandidate,
   isStaleCandidate,
 } from "../domain/depths";
-import { buildAuthorMergedCountQuery, parseAuthorMergedCounts } from "../domain/first-timer";
+import { DEFAULT_AUTHOR_MERGED_BATCH_SIZE, resolveAuthorMergedCounts } from "../domain/first-timer";
 import type {
   DepthsRow,
   DepthsSnapshot,
@@ -24,8 +24,11 @@ import {
   DEFAULT_REPOSITORY,
   parseTargetPrArg,
   readOptionValue,
+  resolveDefaultDataDir,
   resolveDefaultTargetPr,
 } from "./args";
+
+export { resolveDefaultDataDir };
 
 /** 遭難の底（更新が最も古い健康な PR）として取得・表示する件数 */
 export const STALE_BOTTOM_LIMIT = 10;
@@ -77,7 +80,7 @@ export interface GraphQLSearchFirstTimerResponse {
 }
 
 /** 生涯マージ件数チェックの 1 バッチあたり最大作者数 */
-const AUTHOR_MERGED_BATCH_SIZE = 25;
+const AUTHOR_MERGED_BATCH_SIZE = DEFAULT_AUTHOR_MERGED_BATCH_SIZE;
 
 interface CollectBottomOptions {
   client: GitHubApiClient;
@@ -156,36 +159,6 @@ function extractRepositoryFromQuery(baseQuery: string): string | undefined {
 }
 
 /**
- * 未照会の作者 login 群について生涯マージ済み PR 数を GraphQL バッチ照会し、キャッシュへ格納する。
- */
-async function resolveBatchAuthorMergedCounts(
-  client: GitHubApiClient,
-  repository: string | undefined,
-  authors: string[],
-  mergedCountCache: Map<string, number>,
-): Promise<void> {
-  if (!repository) return;
-
-  const unknownAuthors = Array.from(
-    new Set(authors.filter((login) => Boolean(login) && !mergedCountCache.has(login))),
-  );
-  for (let i = 0; i < unknownAuthors.length; i += AUTHOR_MERGED_BATCH_SIZE) {
-    const batch = unknownAuthors.slice(i, i + AUTHOR_MERGED_BATCH_SIZE);
-    const mergedQuery = buildAuthorMergedCountQuery(repository, batch);
-    if (!mergedQuery) continue;
-
-    const res = await client.graphql<Record<string, { issueCount?: number } | undefined>>(
-      mergedQuery,
-      {},
-    );
-    const counts = parseAuthorMergedCounts(batch, res ?? {});
-    for (const [author, count] of counts) {
-      mergedCountCache.set(author, count);
-    }
-  }
-}
-
-/**
  * GraphQL API を用いて優等生の底（Stale Bottom: 1コミット限定・更新日時古い順）を取得する。
  * `authorAssociation === "NONE"` の行については生涯マージ数を照会し、`AuthorMergedCount` に記録する。
  */
@@ -213,9 +186,14 @@ export async function fetchStaleBottom(
     .filter((row) => row.AuthorAssociation === "NONE" && Boolean(row.Author))
     .map((row) => row.Author as string);
 
-  if (noneAuthors.length > 0) {
+  if (noneAuthors.length > 0 && repository) {
     try {
-      await resolveBatchAuthorMergedCounts(client, repository, noneAuthors, mergedCountCache);
+      await resolveAuthorMergedCounts(
+        repository,
+        noneAuthors,
+        (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
+        { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`優等生の底の GraphQL 取得に失敗しました: ${msg}`, {
@@ -266,7 +244,12 @@ export async function fetchFirstTimerBottom(
           .map((n) => n.author?.login)
           .filter((login): login is string => Boolean(login));
 
-        await resolveBatchAuthorMergedCounts(client, repository, authors, mergedCountCache);
+        await resolveAuthorMergedCounts(
+          repository ?? "",
+          authors,
+          (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
+          { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
+        );
 
         for (const node of slice) {
           const login = node.author?.login;
@@ -335,14 +318,6 @@ function printRowTable(rows: DepthsRow[], log = console.log, showCommitCount = f
     const commitCol = showCommitCount ? ` | ${String(row.CommitCount ?? "-").padStart(2)}c` : "";
     log(`  ${row.PR.padEnd(8)}${commitCol} | ${row.作成日時} | ${row.更新日時} | ${row.タイトル}`);
   }
-}
-
-/**
- * 既定の data/ ディレクトリをエントリポイント位置からリポジトリルートを起点に解決する
- */
-export function resolveDefaultDataDir(): string {
-  const repoRoot = resolve(import.meta.dirname, "../..");
-  return resolve(repoRoot, "data");
 }
 
 /**

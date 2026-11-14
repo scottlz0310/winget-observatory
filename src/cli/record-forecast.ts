@@ -25,8 +25,11 @@ import {
   DEFAULT_REPOSITORY,
   parseTargetPrArg,
   readOptionValue,
+  resolveDefaultDataDir,
   resolveDefaultTargetPr,
 } from "./args";
+
+export { resolveDefaultDataDir };
 
 export interface RecordForecastOptions {
   targetPr: number;
@@ -39,10 +42,6 @@ export type RecordForecastResult =
   | { action: "recorded"; record: ForecastRecord }
   | { action: "outcome"; outcome: ForecastOutcomeRecord }
   | { action: "skipped"; reason: string };
-
-export function resolveDefaultDataDir(baseDir: string = import.meta.dirname): string {
-  return resolve(baseDir, "../../data");
-}
 
 export function parseArgs(argv: string[]): RecordForecastOptions {
   let targetPr = resolveDefaultTargetPr();

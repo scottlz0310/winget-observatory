@@ -11,9 +11,7 @@ import type {
   ForecastRecord,
   ForecastScore,
 } from "../models/forecast-history";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const round1 = (value: number): number => Math.round(value * 10) / 10;
+import { DAY_MS, round1 } from "./formatters";
 
 /** 仮説・モデルの表示順（採点表の並び） */
 const KEY_ORDER = [

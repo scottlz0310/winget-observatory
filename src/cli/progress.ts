@@ -2,13 +2,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { GitHubApiClient } from "../api/github";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
+import { DAY_MS, formatDateTimeWithDay, formatDelta, formatHumanDays } from "../domain/formatters";
 import {
   buildHealthyQueryParts,
   calculateProgressStats,
   createProgressSnapshot,
-  formatDateTimeWithDay,
-  formatDelta,
-  formatHumanDays,
   isBlockedLabel,
   parseCsvRows,
   QUEUE_BASIS,
@@ -37,8 +35,11 @@ import {
   parseBoundedInt,
   parseTargetPrArg,
   readOptionValue,
+  resolveDefaultDataDir,
   resolveDefaultTargetPr,
 } from "./args";
+
+export { resolveDefaultDataDir };
 
 export interface ProgressCliOptions {
   targetPr: number;
@@ -137,10 +138,6 @@ function saveSampleCache(path: string, entries: SampleCacheEntry[]): void {
   writeFileSync(path, serializeSampleCacheEntries(entries), "utf-8");
 }
 
-export function resolveDefaultDataDir(baseDir: string = import.meta.dirname): string {
-  return resolve(baseDir, "../../data");
-}
-
 export async function runProgressCli(
   options: ProgressCliOptions,
   client: GitHubApiClient = new GitHubApiClient(),
@@ -156,8 +153,8 @@ export async function runProgressCli(
   const latestCommit = commitCount > 0 ? commits[commitCount - 1] : null;
   const latestCommittedDate = latestCommit ? new Date(latestCommit.committedDate) : created;
 
-  const totalLifetimeDays = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
-  const turnLatencyDays = (now.getTime() - latestCommittedDate.getTime()) / (1000 * 60 * 60 * 24);
+  const totalLifetimeDays = (now.getTime() - created.getTime()) / DAY_MS;
+  const turnLatencyDays = (now.getTime() - latestCommittedDate.getTime()) / DAY_MS;
 
   log(pr.title);
   log(pr.url);
@@ -185,8 +182,8 @@ export async function runProgressCli(
   if (pr.state !== "OPEN") {
     const endText = pr.state === "MERGED" ? pr.mergedAt : pr.closedAt;
     const endAt = endText ? new Date(endText) : now;
-    const endTotalDays = (endAt.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
-    const endTurnDays = (endAt.getTime() - latestCommittedDate.getTime()) / (1000 * 60 * 60 * 24);
+    const endTotalDays = (endAt.getTime() - created.getTime()) / DAY_MS;
+    const endTurnDays = (endAt.getTime() - latestCommittedDate.getTime()) / DAY_MS;
 
     log(`通算所要日数 (作成〜終了)   : ${formatHumanDays(endTotalDays)}`);
     log(`最終ターン所要日数 (最新〜) : ${formatHumanDays(endTurnDays)}`);
@@ -215,7 +212,7 @@ export async function runProgressCli(
     throw new Error("対象PRの条件成立日時を履歴から特定できませんでした。");
   }
 
-  const waitDays = (now.getTime() - targetReady.getTime()) / (1000 * 60 * 60 * 24);
+  const waitDays = (now.getTime() - targetReady.getTime()) / DAY_MS;
   log(`条件が整った日時 (ReadyAt) : ${formatDateTimeWithDay(targetReady)}`);
   log(`整ってからの待機 (Ready)   : ${formatHumanDays(waitDays)}`);
 

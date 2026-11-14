@@ -13,7 +13,6 @@ import {
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
-  formatJstDate,
   selectComparableHistory,
 } from "../src/domain/dashboard";
 import { calculateExitBreakdown, DEFAULT_EXIT_WINDOW_HOURS } from "../src/domain/exit-breakdown";
@@ -27,7 +26,16 @@ import {
   calculateForecastComparison,
 } from "../src/domain/forecast-comparison";
 import { parseForecastHistory, scoreForecasts } from "../src/domain/forecast-history";
-import { formatDateTimeWithDay, formatHumanDays, parseCsvRows } from "../src/domain/progress";
+import {
+  DAY_MS,
+  formatDateTimeWithDay,
+  formatHumanDays,
+  formatJstDate,
+  formatJstDateTime,
+  formatMonthDay,
+  round1,
+} from "../src/domain/formatters";
+import { parseCsvRows } from "../src/domain/progress";
 import type { DepthsRow, DepthsSnapshot } from "../src/models/depths";
 import type {
   ExitBreakdownResult,
@@ -127,7 +135,7 @@ function renderBottomRowTable(
       const lag =
         Number.isNaN(observedMs) || Number.isNaN(baseMs)
           ? "-"
-          : `${Math.round(((observedMs - baseMs) / 86_400_000) * 10) / 10} 日`;
+          : `${round1((observedMs - baseMs) / DAY_MS)} 日`;
       const isRepeater =
         (Boolean(item.AuthorAssociation) && item.AuthorAssociation !== "NONE") ||
         (item.AuthorMergedCount ?? 0) > 0;
@@ -202,8 +210,6 @@ function renderFirstTimerBottomTable(depths: LatestDepths | null): string {
   });
 }
 
-const DAY_MS = 86_400_000;
-
 /** チャートに載せる観測の最大数（直近のものを使う） */
 const CHART_MAX_POINTS = 120;
 
@@ -235,7 +241,7 @@ function renderFirstTimerHeroSummary(
   let p50DateStr = "-";
   let p50EtaStr = "";
   if (p50 !== undefined && p50 !== null) {
-    const eta = Math.max(0, Math.round((p50 - currentLifetime) * 10) / 10);
+    const eta = Math.max(0, round1(p50 - currentLifetime));
     p50EtaStr = eta === 0 ? "（到達済み）" : `（残り約 ${eta} 日）`;
     if (!Number.isNaN(createdMs)) {
       p50DateStr = formatJstDate(createdMs + p50 * DAY_MS);
@@ -247,7 +253,7 @@ function renderFirstTimerHeroSummary(
   let p75DateStr = "-";
   let p75EtaStr = "";
   if (p75 !== undefined && p75 !== null) {
-    const eta = Math.max(0, Math.round((p75 - currentLifetime) * 10) / 10);
+    const eta = Math.max(0, round1(p75 - currentLifetime));
     p75EtaStr = eta === 0 ? "（到達済み）" : `（残り約 ${eta} 日）`;
     if (!Number.isNaN(createdMs)) {
       p75DateStr = formatJstDate(createdMs + p75 * DAY_MS);
@@ -453,7 +459,7 @@ function renderRivalsSection(progress: LatestProgress | null): string {
       const idle =
         Number.isNaN(observedMs) || Number.isNaN(updatedMs)
           ? "-"
-          : `${Math.round(((observedMs - updatedMs) / DAY_MS) * 10) / 10} 日`;
+          : `${round1((observedMs - updatedMs) / DAY_MS)} 日`;
       return `
         <tr>
           <td><a href="${escapeHtml(r.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(r.Number)}</a></td>
@@ -552,11 +558,6 @@ const HYPOTHESIS_STYLE: Record<HypothesisId, { mark: string; color: string }> = 
   "creation-order": { mark: "③", color: "var(--success)" },
 };
 
-/** "2026-12-03" → "12/03" */
-function toMonthDay(timeMs: number): string {
-  return formatJstDate(timeMs).slice(5).replace("-", "/");
-}
-
 function formatEtaDays(days: number): string {
   return days === 0 ? "到達済み" : `約 ${days} 日後`;
 }
@@ -579,7 +580,7 @@ function renderForecastPanel(comparison: ForecastComparison): string {
     h.estimates
       .filter((e) => e.primary)
       .map((e) => ({
-        label: `${HYPOTHESIS_STYLE[h.id].mark} ${toMonthDay(e.dateMs)}`,
+        label: `${HYPOTHESIS_STYLE[h.id].mark} ${formatMonthDay(e.dateMs)}`,
         dateMs: e.dateMs,
         color: HYPOTHESIS_STYLE[h.id].color,
       })),
@@ -640,10 +641,10 @@ function renderForecastSection(samples: StaleFrontierSample[]): string {
   const recent = samples.slice(-FORECAST_RECENT_TABLE_LIMIT).reverse();
   const rows = recent
     .map((sample) => {
-      const lag = Math.round(((sample.timestampMs - sample.updatedMs) / DAY_MS) * 10) / 10;
+      const lag = round1((sample.timestampMs - sample.updatedMs) / DAY_MS);
       return `
         <tr>
-          <td>${escapeHtml(formatJstDate(sample.timestampMs))} ${escapeHtml(new Date(sample.timestampMs + 9 * 3_600_000).toISOString().slice(11, 16))}</td>
+          <td>${escapeHtml(formatJstDateTime(sample.timestampMs))}</td>
           <td>#${escapeHtml(sample.pr)}</td>
           <td>${escapeHtml(formatJstDate(sample.updatedMs))}</td>
           <td>${lag} 日</td>
@@ -743,14 +744,9 @@ const EXIT_UNAVAILABLE_TEXT: Record<ExitBreakdownUnavailableReason, string> = {
   inconsistent: "累積件数が減っているなど、記録が矛盾しているため、内訳を出せません。",
 };
 
-/** JST の "YYYY-MM-DD HH:mm" */
-function formatJstDateTime(timeMs: number): string {
-  return `${formatJstDate(timeMs)} ${new Date(timeMs + 9 * 3_600_000).toISOString().slice(11, 16)}`;
-}
-
 /** 待ち行列からの離脱の内訳: 実質待ちの減少が、実際のマージによるものか、それ以外かを分解して示す */
 function renderExitBreakdownSection(result: ExitBreakdownResult): string {
-  const targetDays = Math.round((DEFAULT_EXIT_WINDOW_HOURS / 24) * 10) / 10;
+  const targetDays = round1(DEFAULT_EXIT_WINDOW_HOURS / 24);
   const head = `
     <h2 class="section-title">🧮 待ち行列からの離脱の内訳</h2>
     <p class="section-note">

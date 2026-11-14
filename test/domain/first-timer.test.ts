@@ -8,6 +8,7 @@ import {
   isCandidateEligibleForFirstTimerDetail,
   isFirstTimerSampleCandidate,
   parseAuthorMergedCounts,
+  resolveAuthorMergedCounts,
   shouldReevaluateCachedSample,
   shouldReevaluateSkippedCandidate,
 } from "../../src/domain/first-timer";
@@ -375,5 +376,74 @@ describe("Domain: shouldReevaluateSkippedCandidate", () => {
         isEligibleForDetail: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("Domain: resolveAuthorMergedCounts", () => {
+  test("重複 login・空文字を除外し、batchSize ごとに分割して GraphQL 解決する", async () => {
+    const executedQueries: string[] = [];
+    const result = await resolveAuthorMergedCounts(
+      "microsoft/winget-pkgs",
+      ["alice", "bob", "alice", "", "charlie"],
+      async (query) => {
+        executedQueries.push(query);
+        if (query.includes("author:alice")) {
+          return { u_0: { issueCount: 1 }, u_1: { issueCount: 4 } };
+        }
+        return { u_0: { issueCount: 0 } };
+      },
+      { batchSize: 2 },
+    );
+
+    expect(executedQueries).toHaveLength(2);
+    expect(executedQueries[0]).toContain("author:alice");
+    expect(executedQueries[0]).toContain("author:bob");
+    expect(executedQueries[1]).toContain("author:charlie");
+    expect(result.get("alice")).toBe(1);
+    expect(result.get("bob")).toBe(4);
+    expect(result.get("charlie")).toBe(0);
+    expect(result.size).toBe(3);
+  });
+
+  test("cache 指定時は未解決の login のみ照会し、結果を cache へも追記する", async () => {
+    const cache = new Map<string, number>([["alice", 3]]);
+    const executedQueries: string[] = [];
+
+    const result = await resolveAuthorMergedCounts(
+      "microsoft/winget-pkgs",
+      ["alice", "bob"],
+      async (query) => {
+        executedQueries.push(query);
+        return { u_0: { issueCount: 0 } };
+      },
+      { cache },
+    );
+
+    expect(executedQueries).toHaveLength(1);
+    expect(executedQueries[0]).not.toContain("author:alice");
+    expect(executedQueries[0]).toContain("author:bob");
+    expect(result.get("alice")).toBe(3);
+    expect(result.get("bob")).toBe(0);
+    expect(cache.get("bob")).toBe(0);
+  });
+
+  test("repository が空、または logins が空なら GraphQL を呼ばず空 Map を返す", async () => {
+    let called = false;
+    const executor = async () => {
+      called = true;
+      return {};
+    };
+
+    expect((await resolveAuthorMergedCounts("", ["alice"], executor)).size).toBe(0);
+    expect((await resolveAuthorMergedCounts("microsoft/winget-pkgs", [], executor)).size).toBe(0);
+    expect(called).toBe(false);
+  });
+
+  test("batchSize が正の整数でない場合は RangeError を投げる", async () => {
+    await expect(
+      resolveAuthorMergedCounts("microsoft/winget-pkgs", ["alice"], async () => ({}), {
+        batchSize: 0,
+      }),
+    ).rejects.toThrow(RangeError);
   });
 });

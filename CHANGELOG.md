@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `src/domain/formatters.ts`, `test/domain/formatters.test.ts`: ドメイン共通の時間定数（`HOUR_MS`, `DAY_MS`, `JST_OFFSET_MS`）、数値丸め（`round1`, `round2`）、JST 日時・月日・期間・差分フォーマッタ（`formatJstDate`, `formatJstDateTime`, `formatDateTimeWithDay`, `formatMonthDay`, `formatHumanDays`, `formatDelta`）を新設し、単体テストを追加（Issue #86）
+- `src/domain/first-timer.ts`, `test/domain/first-timer.test.ts`: login 重複排除・キャッシュ確認・チャンク分割・GraphQL エイリアス照会を一括で行う共通関数 `resolveAuthorMergedCounts` を追加（Issue #86）
+- `src/cli/args.ts`, `test/cli/args.test.ts`: リポジトリルート基準で既定のデータディレクトリを解決する `resolveDefaultDataDir` を共通化（Issue #86）
+
 ### Changed
+
+- `src/domain/*.ts`, `src/cli/*.ts`, `scripts/build-pages.ts`: 各モジュールに散在していた `DAY_MS`・`HOUR_MS`・`JST_OFFSET_MS`・`round1`・`round2`・各種 JST フォーマッタの重複実装とインライン計算を `src/domain/formatters.ts` に統一（`progress.ts`, `depths.ts`, `dashboard.ts` からは互換 re-export を維持）。あわせて `src/cli/explore-depths.ts` と `src/domain/sample-collector.ts` のバッチ著者マージ数解決を `resolveAuthorMergedCounts` へ統合し、`explore-depths.ts` / `progress.ts` / `record-forecast.ts` の `resolveDefaultDataDir` を `src/cli/args.ts` 参照へ一本化（Issue #86）
 
 - `src/api/github.ts`, `src/api/graphql-adapters.ts`, `src/api/graphql-types.ts`, `test/api/graphql-adapters.test.ts`: `graphql-adapters.ts` から `./github` への循環型 import を解消し（`../models/progress` と `./graphql-types` 参照へ一本化）、未使用だった `adaptGraphQLToDetailedSearchResult` に `pageInfo` を追加して `GitHubApiClient.searchIssuesDetailed` から利用するよう統合、あわせて未使用型 `GraphQLTimelineConnection` を `GraphQLTimelineItemsResponse` へ適用（Issue #85）
 - `scripts/build-pages.ts`, `src/domain/forecast-comparison.ts`, `test/build-pages.test.ts`, `test/domain/forecast-comparison.test.ts`: ダッシュボード各セクションの集計期間（`FirstTimerLookbackDays`・`LookbackDays`・7日窓）、統計母集団、待機指標ラベル、表示件数上限の説明を明確化（Issue #81）。「🎯 初回提出者サマリー」内の追い越し分離内訳に全体採用サンプル（`LookbackDays` 日間）の集計である旨を追記し、仮説③（作成順）の前提・注記へ `LookbackDays` / `FirstTimerLookbackDays` を引き渡して全体実績の母集団と初回提出者コホートとの差異を動的反映。あわせて KPI カード 4 見出しの整理、統合時系列チャート（最大 120 観測点）・仮説②根拠テーブル（最新 5 件）・離脱内訳（約 7 日間 / 168 時間窓基準）・除外件数および初期健康体条件の補足を追加し、`renderFirstTimerHeroSummary` の `TotalLifetimeDays` 参照を Nullish coalescing（`??`）へ修正

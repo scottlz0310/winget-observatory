@@ -11,16 +11,16 @@ import type {
 } from "../models/progress";
 import type { SampleCacheEntry } from "../models/sample-cache";
 import {
-  buildAuthorMergedCountQuery,
   CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
   isFirstTimerSampleCandidate,
-  parseAuthorMergedCounts,
+  resolveAuthorMergedCounts,
   shouldReevaluateCachedSample,
   shouldReevaluateSkippedCandidate,
 } from "./first-timer";
+import { DAY_MS, round2 } from "./formatters";
 import { simulateReadySince } from "./progress";
 import { fromCachedSample, indexSampleCache, toCachedSample } from "./sample-cache";
 
@@ -188,7 +188,7 @@ export async function orchestrateSampleCollection(
           continue;
         }
 
-        const readyDays = (mergedAt.getTime() - readyAt.getTime()) / (1000 * 60 * 60 * 24);
+        const readyDays = (mergedAt.getTime() - readyAt.getTime()) / DAY_MS;
         if (readyDays < 0) {
           skipped++;
           skippedCandidates.push({ number: cand.number, mergedAt });
@@ -212,9 +212,8 @@ export async function orchestrateSampleCollection(
           ? new Date(candLatestCommit.committedDate)
           : candCreatedAt;
 
-        const totalDays = (mergedAt.getTime() - candCreatedAt.getTime()) / (1000 * 60 * 60 * 24);
-        const turnDays =
-          (mergedAt.getTime() - candLatestCommittedDate.getTime()) / (1000 * 60 * 60 * 24);
+        const totalDays = (mergedAt.getTime() - candCreatedAt.getTime()) / DAY_MS;
+        const turnDays = (mergedAt.getTime() - candLatestCommittedDate.getTime()) / DAY_MS;
 
         const isCandidate = isFirstTimerSampleCandidate({
           commitCount: candCommits.length,
@@ -230,9 +229,9 @@ export async function orchestrateSampleCollection(
           commitCount: candCommits.length,
           readyAt: readyAt.toISOString(),
           mergedAt: mergedAt.toISOString(),
-          totalDays: Number(totalDays.toFixed(2)),
-          turnDays: Number(turnDays.toFixed(2)),
-          days: Number(readyDays.toFixed(2)),
+          totalDays: round2(totalDays),
+          turnDays: round2(turnDays),
+          days: round2(readyDays),
           author: candDetail.author,
           firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
           ...(!isCandidate
@@ -282,19 +281,12 @@ export async function orchestrateSampleCollection(
 
     const candidateAuthors = extractSingleHitCandidateLogins(samples);
     if (candidateAuthors.length > 0) {
-      const CHUNK_SIZE = 30;
-      const authorMergedCounts = new Map<string, number>();
-      for (let i = 0; i < candidateAuthors.length; i += CHUNK_SIZE) {
-        const chunk = candidateAuthors.slice(i, i + CHUNK_SIZE);
-        const query = buildAuthorMergedCountQuery(repository, chunk);
-        if (query) {
-          const data = await client.graphql<Record<string, { issueCount?: number }>>(query);
-          const counts = parseAuthorMergedCounts(chunk, data);
-          for (const [author, count] of counts) {
-            authorMergedCounts.set(author, count);
-          }
-        }
-      }
+      const authorMergedCounts = await resolveAuthorMergedCounts(
+        repository,
+        candidateAuthors,
+        (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query),
+        { batchSize: 30 },
+      );
 
       for (const s of samples) {
         if (s.author && authorMergedCounts.has(s.author)) {

@@ -14,11 +14,10 @@ import type {
 import type { ProgressSnapshot } from "../models/progress";
 import { calculateVelocityMetrics } from "./dashboard";
 import { calculateLifetimeForecast, calculateStaleFrontierForecast } from "./forecast";
+import { DAY_MS, round1 } from "./formatters";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LOOKBACK_DAYS = 30;
 const DEFAULT_FIRST_TIMER_LOOKBACK_DAYS = 90;
-const round1 = (value: number): number => Math.round(value * 10) / 10;
 const positiveDays = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 
