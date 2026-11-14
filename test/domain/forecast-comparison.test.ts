@@ -89,10 +89,12 @@ describe("Domain: calculateForecastComparison", () => {
     expect(result.range?.maxDays).toBe(34);
   });
 
-  test("作成順の進捗は、起票からの経過日数 / 中央値の割合で表す", () => {
+  test("作成順の進捗は、起票からの経過日数 / 中央値の割合で表し、全体30日実績であることを明記する", () => {
     const creation = calculateForecastComparison(baseSource()).hypotheses[2];
     expect(creation.progressRatio).toBeCloseTo(10 / 44, 6);
     expect(creation.progressText).toContain("起票から 10 日 / 通算所要日数の中央値 44 日（23%）");
+    expect(creation.premise).toContain("直近（30日間）の全体マージ実績（常連・特急含む）");
+    expect(creation.note).toContain("上部の初回提出者90日コホート統計とは母集団が異なります");
     // 割合が自然に定義できない仮説は持たない
     expect(calculateForecastComparison(baseSource()).hypotheses[0].progressRatio).toBeNull();
     expect(calculateForecastComparison(baseSource()).hypotheses[1].progressRatio).toBeNull();

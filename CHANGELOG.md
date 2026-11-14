@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/build-pages.ts`, `src/domain/forecast-comparison.ts`, `test/build-pages.test.ts`, `test/domain/forecast-comparison.test.ts`: ダッシュボード各セクションの集計期間（90日・30日・7日窓）、統計母集団、待機指標ラベル、表示件数上限の説明を明確化（Issue #81）。「🎯 初回提出者サマリー」内の追い越し分離内訳に直近 30 日間の全体採用サンプル集計である旨を追記し、仮説③（作成順）の前提・注記に全体実績（常連含む 30 日間）の母集団を明示。あわせて KPI カード 4 見出しの整理、統合時系列チャート（最大 120 観測点）・仮説②根拠テーブル（最新 5 件）・離脱内訳（約 7 日間 / 168 時間窓基準）・除外件数および初期健康体条件の補足を追加し、`renderFirstTimerHeroSummary` の `TotalLifetimeDays` 参照を Nullish coalescing（`??`）へ修正
+
 ### Fixed
 
 - `scripts/build-pages.ts`, `test/build-pages.test.ts`: 「📊 トリアージキュー構造」右端ノードの誤記「後続キュー（CI 通過待ち含む）」を実際のクエリ条件および KPI カード 5 と一致する「後続の準備完了 PR（CI・検証通過済みの健康体）」へ修正し、「🧭 キュー境界探索」見出しから旧称の「遭難」を外して各カテゴリの抽出条件・件数上限注記を追加（Issue #80）。あわせて「🔮 仮説② の根拠」のテーブル表示条件をフォールバック文言どおり観測 2 件以上（`recent.length >= 2`）に修正

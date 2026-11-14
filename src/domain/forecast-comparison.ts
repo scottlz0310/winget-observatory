@@ -192,11 +192,12 @@ function summarizeCreationOrder(
   return {
     id: "creation-order",
     title: "③ 作成順",
-    premise: "直近のマージ実績の通算所要日数が基準 PR にも当てはまる（作成順に近く消化される）",
+    premise:
+      "直近（30日間）の全体マージ実績（常連・特急含む）の通算所要日数が基準 PR にも当てはまる（作成順に近く消化される）",
     progressText,
     progressRatio,
     estimates,
-    note: "更新の入れ替わりの影響を受けない",
+    note: "更新の入れ替わりの影響を受けない（上部の初回提出者90日コホート統計とは母集団が異なります）",
   };
 }
 
