@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-14
+
 ### Added
 
 - `scripts/pages/types.ts`, `scripts/pages/formatters.ts`, `scripts/pages/styles.ts`, `scripts/pages/sections/hero-and-kpi.ts`, `scripts/pages/sections/stats-and-samples.ts`, `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/template.ts`, `test/scripts/pages.test.ts`: `scripts/build-pages.ts` に混在していた ViewModel 型定義（`BuildOptions`, `LatestProgress`, `LatestDepths`, `DeltaBadge`, `DashboardRenderInput`）、HTML 表示フォーマッタ（`escapeHtml`, `formatNumber`, `renderBadgeHtml`, `formatDaysStat`, `formatEtaDays`, `formatErrorDays`）、埋め込み CSS（`DASHBOARD_CSS`）、各セクション描画関数群、および統合 HTML テンプレート生成関数（`generateDashboardHtml`）を `scripts/pages/` 配下の純粋描画モジュールとして分離し、単体テストを追加（Issue #89）
@@ -222,6 +224,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/scottlz0310/winget-observatory/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/scottlz0310/winget-observatory/releases/tag/v0.1.0
