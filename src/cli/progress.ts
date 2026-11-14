@@ -3,17 +3,9 @@ import { dirname, resolve } from "node:path";
 import { GitHubApiClient } from "../api/github";
 import { buildExitCountQueries } from "../domain/exit-breakdown";
 import { DAY_MS, formatDateTimeWithDay, formatDelta, formatHumanDays } from "../domain/formatters";
-import {
-  buildHealthyQueryParts,
-  calculateProgressStats,
-  createProgressSnapshot,
-  isBlockedLabel,
-  parseCsvRows,
-  QUEUE_BASIS,
-  REQUIRED_LABELS,
-  serializeCsvRows,
-  simulateReadySince,
-} from "../domain/progress";
+import { buildHealthyQueryParts, isBlockedLabel, REQUIRED_LABELS } from "../domain/labels";
+import { calculateProgressStats, createProgressSnapshot } from "../domain/progress";
+import { parseCsvRows, QUEUE_BASIS, serializeCsvRows } from "../domain/progress-csv";
 import {
   formatFrontDeltaText,
   logBenchmark,
@@ -23,6 +15,7 @@ import {
 import { parseSampleCache, serializeSampleCacheEntries } from "../domain/sample-cache";
 import { orchestrateSampleCollection } from "../domain/sample-collector";
 import { collectMergedCandidates } from "../domain/search-window";
+import { simulateReadySince } from "../domain/timeline";
 import type {
   ProgressHistoryRow,
   ProgressQueueInfo,

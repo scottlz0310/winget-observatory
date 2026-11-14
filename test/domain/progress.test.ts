@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { buildHealthyQueryParts as buildHealthyQueryPartsDirect } from "../../src/domain/labels";
 import {
   BLOCKED_LABELS,
+  buildHealthyQueryParts,
   calculateProgressStats,
   createProgressSnapshot,
   formatDateTimeWithDay,
@@ -11,9 +13,12 @@ import {
   isBlockedLabel,
   isEligibleLabels,
   parseCsvRows,
+  QUEUE_BASIS,
   serializeCsvRows,
   simulateReadySince,
 } from "../../src/domain/progress";
+import { QUEUE_BASIS as QUEUE_BASIS_DIRECT, toHistoryRow } from "../../src/domain/progress-csv";
+import { simulateReadySince as simulateReadySinceDirect } from "../../src/domain/timeline";
 import type { MergedCandidateSample, ProgressTimelineEvent } from "../../src/models/progress";
 
 describe("Domain: progress label evaluation", () => {
@@ -57,6 +62,14 @@ describe("Domain: progress label evaluation", () => {
 
   test.each(["Validation-Completed", "New-Package"])("正常ラベル %s は除外されない", (name) => {
     expect(isBlockedLabel(name)).toBeFalse();
+  });
+
+  test("buildHealthyQueryParts が labels モジュールと progress re-export で一致する", () => {
+    const parts = buildHealthyQueryPartsDirect("microsoft/winget-pkgs");
+    expect(parts).toEqual(buildHealthyQueryParts("microsoft/winget-pkgs"));
+    expect(parts).toContain("repo:microsoft/winget-pkgs");
+    expect(parts).toContain('label:"New-Package"');
+    expect(parts).toContain('-label:"Needs-CLA"');
   });
 });
 
@@ -174,6 +187,31 @@ describe("Domain: simulateReadySince", () => {
 
     expect(readyAt).not.toBeNull();
     expect(readyAt?.toISOString()).toBe("2026-11-03T10:00:00.000Z");
+  });
+
+  test("endAt より後のイベントは無視され timeline モジュール直参照とも一致する", () => {
+    const events: ProgressTimelineEvent[] = [
+      { event: "labeled", created_at: "2026-11-01T10:00:00Z", label: { name: "New-Package" } },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T11:00:00Z",
+        label: { name: "Azure-Pipeline-Passed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T12:00:00Z",
+        label: { name: "Validation-Completed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-05T00:00:00Z",
+        label: { name: "Changes-Requested" },
+      },
+    ];
+    const endAt = new Date("2026-11-02T00:00:00Z");
+    expect(simulateReadySinceDirect(events, false, endAt)?.toISOString()).toBe(
+      "2026-11-01T12:00:00.000Z",
+    );
   });
 });
 
@@ -297,6 +335,10 @@ ${Object.values(oldRow).join(",")}
     expect(migrated.TotalLifetimeDays).toBe("");
     expect(migrated.TurnLatencyDays).toBe("");
     expect(migrated.WaitDays).toBe("3.2");
+    expect(parseCsvRows("Timestamp,TargetPr\n")).toEqual([]);
+    expect(QUEUE_BASIS_DIRECT).toBe(QUEUE_BASIS);
+    expect(toHistoryRow({ TargetPr: "123" }).TargetPr).toBe("123");
+    expect(toHistoryRow({ TargetPr: "123" }).MergedOlder).toBe("");
   });
 
   test("createProgressSnapshot がスナップショットを生成する", () => {

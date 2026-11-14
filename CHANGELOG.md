@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `src/domain/labels.ts`, `src/domain/timeline.ts`, `src/domain/progress-csv.ts`: `src/domain/progress.ts` に混在していたラベル定数・健全性判定（`REQUIRED_LABELS`, `BLOCKED_LABELS`, `INVESTIGATION_LABELS`, `BLOCKED_PATTERNS`, `buildHealthyQueryParts`, `isBlockedLabel`, `isEligibleLabels`）、タイムライン状態遷移（`simulateReadySince`）、CSV パース/直列化（`QUEUE_BASIS`, `parseCsvRows`, `toHistoryRow`, `serializeCsvRows`）を単一責務モジュールとして分離（Issue #87）
 - `src/domain/formatters.ts`, `test/domain/formatters.test.ts`: ドメイン共通の時間定数（`HOUR_MS`, `DAY_MS`, `JST_OFFSET_MS`）、数値丸め（`round1`, `round2`）、JST 日時・月日・期間・差分フォーマッタ（`formatJstDate`, `formatJstDateTime`, `formatDateTimeWithDay`, `formatMonthDay`, `formatHumanDays`, `formatDelta`）を新設し、単体テストを追加（Issue #86）
 - `src/domain/first-timer.ts`, `test/domain/first-timer.test.ts`: login 重複排除・キャッシュ確認・チャンク分割・GraphQL エイリアス照会を一括で行う共通関数 `resolveAuthorMergedCounts` を追加（Issue #86）
 - `src/cli/args.ts`, `test/cli/args.test.ts`: リポジトリルート基準で既定のデータディレクトリを解決する `resolveDefaultDataDir` を共通化（Issue #86）
 
 ### Changed
+
+- `src/domain/progress.ts`, `src/domain/sample-collector.ts`, `src/domain/*.ts`, `src/cli/*.ts`, `scripts/build-pages.ts`, `test/domain/progress.test.ts`, `test/domain/sample-collector.test.ts`: `src/domain/progress.ts` を統計計算（`getPercentile`, `calculateProgressStats`）とスナップショット組み立て（`createProgressSnapshot`）へ整理しつつ互換 re-export を維持し、本番コード側の import を新設モジュールへ切り替え。あわせて `src/domain/sample-collector.ts` の `orchestrateSampleCollection` を段階別ヘルパー関数（`resolveCachedCandidate`, `createOutsideWindowPreSkipEntry`, `fetchUncachedCandidateSample`, `resolveBatchFirstTimerFlags`）へ分解し、キャッシュ補完・再評価・中断時保存の回帰テストを追加（Issue #87）
 
 - `src/domain/*.ts`, `src/cli/*.ts`, `scripts/build-pages.ts`: 各モジュールに散在していた `DAY_MS`・`HOUR_MS`・`JST_OFFSET_MS`・`round1`・`round2`・各種 JST フォーマッタの重複実装とインライン計算を `src/domain/formatters.ts` に統一（`progress.ts`, `depths.ts`, `dashboard.ts` からは互換 re-export を維持）。あわせて `src/cli/explore-depths.ts` と `src/domain/sample-collector.ts` のバッチ著者マージ数解決を `resolveAuthorMergedCounts` へ統合し、`explore-depths.ts` / `progress.ts` / `record-forecast.ts` の `resolveDefaultDataDir` を `src/cli/args.ts` 参照へ一本化（Issue #86）
 

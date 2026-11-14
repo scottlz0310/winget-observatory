@@ -13,7 +13,7 @@ import {
   parseForecastHistory,
   toForecastRecord,
 } from "../domain/forecast-history";
-import { parseCsvRows } from "../domain/progress";
+import { parseCsvRows } from "../domain/progress-csv";
 import type { DepthsSnapshot } from "../models/depths";
 import type {
   ForecastHistoryLine,

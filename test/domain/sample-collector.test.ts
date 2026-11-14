@@ -296,4 +296,180 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples[0]?.turnDays).toBe(1.04);
     expect(result.samples[0]?.days).toBe(1.04);
   });
+
+  it("旧版キャッシュの複数コミット常連サンプルは API を呼ばずに recurring-author へ補完される", async () => {
+    const legacyCached: SampleCacheEntry = {
+      Type: "sample",
+      Number: 901,
+      CreatedAt: "2026-10-01T00:00:00Z",
+      LatestCommittedDate: "2026-10-02T00:00:00Z",
+      CommitCount: 2,
+      ReadyAt: "2026-10-02T00:00:00Z",
+      MergedAt: "2026-10-05T00:00:00Z",
+      ReadyDays: 3.0,
+      TotalDays: 4.0,
+      TurnDays: 3.0,
+      Title: "Legacy Recurring PR",
+      Author: "repeat-legacy",
+      IsFirstTimer: false,
+      FirstTimerVersion: 1,
+    };
+
+    let apiCalled = false;
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async () => {
+        apiCalled = true;
+        return [];
+      },
+      getPullRequestDetails: async () => {
+        apiCalled = true;
+        return {} as ProgressPrDetail;
+      },
+      graphql: async <T = unknown>() => {
+        apiCalled = true;
+        return {} as T;
+      },
+    };
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [
+        createSearchItem(901, "2026-10-05T00:00:00Z", "repeat-legacy"),
+        createSearchItem(902, "2026-10-06T00:00:00Z", "repeat-legacy"),
+      ],
+      overallSinceDate: new Date("2026-09-01T00:00:00Z"),
+      fetchBudget: 0,
+      initialCache: [legacyCached],
+    });
+
+    expect(apiCalled).toBeFalse();
+    expect(result.cacheModified).toBeTrue();
+    const updated901 = result.finalCache.find((c) => c.Number === 901 && c.Type === "sample");
+    expect(updated901?.Type === "sample" && updated901.FirstTimerReason).toBe("recurring-author");
+    expect(updated901?.Type === "sample" && updated901.FirstTimerVersion).toBe(2);
+  });
+
+  it("全体窓外の not-first-timer-candidate キャッシュが窓内判定になれば再評価して取得する", async () => {
+    const skippedCached: SampleCacheEntry = {
+      Type: "skipped",
+      Number: 951,
+      MergedAt: "2026-10-10T00:00:00Z",
+      Reason: "not-first-timer-candidate",
+    };
+
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async () => createTimeline("2026-10-02T00:00:00Z"),
+      getPullRequestDetails: async (_repo, num) =>
+        createPrDetail(num, "2026-10-01T00:00:00Z", "single-user"),
+      graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
+    };
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [createSearchItem(951, "2026-10-10T00:00:00Z", "single-user")],
+      overallSinceDate: new Date("2026-10-01T00:00:00Z"),
+      fetchBudget: 5,
+      initialCache: [skippedCached],
+    });
+
+    expect(result.fetchedCount).toBe(1);
+    expect(result.samples).toHaveLength(1);
+    expect(result.samples[0]?.isFirstTimer).toBeTrue();
+  });
+
+  it("途中失敗時も取得済みキャッシュを onCacheUpdated へ通知しエラーを伝播する", async () => {
+    let notifiedEntries: SampleCacheEntry[] = [];
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async (_repo, num) => {
+        if (num === 992) {
+          throw new Error("timeline boom");
+        }
+        return createTimeline("2026-10-02T00:00:00Z");
+      },
+      getPullRequestDetails: async (_repo, num) =>
+        createPrDetail(num, "2026-10-01T00:00:00Z", `author-${num}`),
+      graphql: async <T = unknown>() => ({}) as T,
+    };
+
+    await expect(
+      orchestrateSampleCollection({
+        client,
+        repository: "microsoft/winget-pkgs",
+        candidates: [
+          createSearchItem(991, "2026-10-10T00:00:00Z", "author-991"),
+          createSearchItem(992, "2026-10-11T00:00:00Z", "author-992"),
+        ],
+        overallSinceDate: new Date("2026-09-01T00:00:00Z"),
+        fetchBudget: 10,
+        initialCache: [],
+        onCacheUpdated: (entries) => {
+          notifiedEntries = entries;
+        },
+      }),
+    ).rejects.toThrow("マージ済み PR #992 のサンプル計測に失敗しました: timeline boom");
+
+    expect(notifiedEntries.some((e) => e.Number === 991 && e.Type === "sample")).toBeTrue();
+  });
+
+  it("全候補キャッシュ済みで単発著者照会が失敗しても、先行確定した recurring-author 判定は onCacheUpdated で保存される", async () => {
+    const createUnjudgedCachedSample = (number: number, author: string): SampleCacheEntry => ({
+      Type: "sample",
+      Number: number,
+      CreatedAt: "2026-10-01T00:00:00Z",
+      LatestCommittedDate: "2026-10-01T00:00:00Z",
+      CommitCount: 1,
+      ReadyAt: "2026-10-02T00:00:00Z",
+      MergedAt: "2026-10-10T00:00:00Z",
+      ReadyDays: 8.0,
+      TotalDays: 9.0,
+      TurnDays: 9.0,
+      Title: `PR #${number}`,
+      Author: author,
+    });
+
+    const initialCache: SampleCacheEntry[] = [
+      createUnjudgedCachedSample(1001, "repeat-cached"),
+      createUnjudgedCachedSample(1002, "repeat-cached"),
+      createUnjudgedCachedSample(1003, "single-cached"),
+    ];
+
+    let notifyCount = 0;
+    let notifiedEntries: SampleCacheEntry[] = [];
+    const client: SampleCollectorClient = {
+      getIssueTimeline: async () => [],
+      getPullRequestDetails: async () => ({}) as ProgressPrDetail,
+      graphql: async <_T = unknown>() => {
+        throw new Error("graphql failure");
+      },
+    };
+
+    await expect(
+      orchestrateSampleCollection({
+        client,
+        repository: "microsoft/winget-pkgs",
+        candidates: [
+          createSearchItem(1001, "2026-10-10T00:00:00Z", "repeat-cached"),
+          createSearchItem(1002, "2026-10-10T00:00:00Z", "repeat-cached"),
+          createSearchItem(1003, "2026-10-10T00:00:00Z", "single-cached"),
+        ],
+        overallSinceDate: new Date("2026-09-01T00:00:00Z"),
+        fetchBudget: 0,
+        initialCache,
+        onCacheUpdated: (entries) => {
+          notifyCount++;
+          notifiedEntries = entries;
+        },
+      }),
+    ).rejects.toThrow("graphql failure");
+
+    expect(notifyCount).toBe(1);
+    const saved1001 = notifiedEntries.find((e) => e.Number === 1001);
+    const saved1002 = notifiedEntries.find((e) => e.Number === 1002);
+    expect(saved1001?.Type === "sample" && saved1001.IsFirstTimer).toBeFalse();
+    expect(saved1001?.Type === "sample" && saved1001.FirstTimerReason).toBe("recurring-author");
+    expect(saved1002?.Type === "sample" && saved1002.IsFirstTimer).toBeFalse();
+    expect(saved1002?.Type === "sample" && saved1002.FirstTimerReason).toBe("recurring-author");
+  });
 });
