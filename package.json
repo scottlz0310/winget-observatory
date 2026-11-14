@@ -1,6 +1,6 @@
 {
   "name": "winget-observatory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Observation and analytics tools for microsoft/winget-pkgs review triage queue",
   "type": "module",
