@@ -9,12 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/api/github.ts`, `src/api/graphql-adapters.ts`, `src/api/graphql-types.ts`, `test/api/graphql-adapters.test.ts`: `graphql-adapters.ts` から `./github` への循環型 import を解消し（`../models/progress` と `./graphql-types` 参照へ一本化）、未使用だった `adaptGraphQLToDetailedSearchResult` に `pageInfo` を追加して `GitHubApiClient.searchIssuesDetailed` から利用するよう統合、あわせて未使用型 `GraphQLTimelineConnection` を `GraphQLTimelineItemsResponse` へ適用（Issue #85）
 - `scripts/build-pages.ts`, `src/domain/forecast-comparison.ts`, `test/build-pages.test.ts`, `test/domain/forecast-comparison.test.ts`: ダッシュボード各セクションの集計期間（`FirstTimerLookbackDays`・`LookbackDays`・7日窓）、統計母集団、待機指標ラベル、表示件数上限の説明を明確化（Issue #81）。「🎯 初回提出者サマリー」内の追い越し分離内訳に全体採用サンプル（`LookbackDays` 日間）の集計である旨を追記し、仮説③（作成順）の前提・注記へ `LookbackDays` / `FirstTimerLookbackDays` を引き渡して全体実績の母集団と初回提出者コホートとの差異を動的反映。あわせて KPI カード 4 見出しの整理、統合時系列チャート（最大 120 観測点）・仮説②根拠テーブル（最新 5 件）・離脱内訳（約 7 日間 / 168 時間窓基準）・除外件数および初期健康体条件の補足を追加し、`renderFirstTimerHeroSummary` の `TotalLifetimeDays` 参照を Nullish coalescing（`??`）へ修正
 
 ### Fixed
 
 - `scripts/build-pages.ts`, `test/build-pages.test.ts`: 「📊 トリアージキュー構造」右端ノードの誤記「後続キュー（CI 通過待ち含む）」を実際のクエリ条件および KPI カード 5 と一致する「後続の準備完了 PR（CI・検証通過済みの健康体）」へ修正し、「🧭 キュー境界探索」見出しから旧称の「遭難」を外して各カテゴリの抽出条件・件数上限注記を追加（Issue #80）。あわせて「🔮 仮説② の根拠」のテーブル表示条件をフォールバック文言どおり観測 2 件以上（`recent.length >= 2`）に修正
 - `src/models/depths.ts`, `src/cli/explore-depths.ts`, `scripts/build-pages.ts`, `test/cli/explore-depths.test.ts`, `test/build-pages.test.ts`: 「🌱 初回提出者の底」テーブルの経過日数カラムが `UpdatedAt` 基準（「更新からの経過」）になっていた不整合を修正し、起票日時順の定義・統合時系列チャートと一致する `CreatedAt` 基準（「起票からの経過」）で計算・表示するよう変更（Issue #79）。あわせて `StaleBottom`（優等生の底）で `AuthorAssociation === "NONE"` かつ生涯マージ歴が 1 件以上の隠れ常連にも「常連除外」バッジが付くよう `DepthsRow.AuthorMergedCount` を追加し、`fetchStaleBottom` と `fetchFirstTimerBottom` で生涯マージ数キャッシュを共有して GraphQL 照会重複を回避
+
+### Removed
+
+- `src/domain/chart.ts`, `src/domain/depths.ts`, `src/api/github.ts`, `src/cli/progress.ts`, `test/domain/chart.test.ts`, `test/domain/depths.test.ts`, `test/cli/progress.test.ts`: 本番未参照の旧単軸チャート `renderLineChartSvg`・`LineChartOptions`・専用定数、未使用フィルタ関数 `filterCandidates` / `filterStaleCandidates` / `filterFirstTimerCandidates`、廃止済み `@deprecated` プロパティ `GitHubRateLimit.core` / `search`、および不要な通過 re-export `export { reportSkippedObservation }` を削除（Issue #85）
 
 ## [0.2.0] - 2026-11-14
 

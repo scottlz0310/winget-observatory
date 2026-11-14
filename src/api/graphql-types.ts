@@ -94,3 +94,20 @@ export interface GraphQLRateLimitData {
   remaining: number;
   resetAt: string;
 }
+
+/** レート制限の 1 枠（graphql）の残量 */
+export interface GitHubRateLimitBucket {
+  limit: number;
+  remaining: number;
+  /** 枠がリセットされる時刻（ISO 8601, UTC）。不明なら null */
+  resetAt: string | null;
+}
+
+export interface GraphQLRateLimitBucket extends GitHubRateLimitBucket {
+  cost?: number;
+}
+
+export interface GitHubRateLimit {
+  /** GraphQL レート制限枠 */
+  graphql: GraphQLRateLimitBucket;
+}

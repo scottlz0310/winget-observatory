@@ -119,6 +119,7 @@ describe("GraphQL Adapters", () => {
     test("コネクション全体の件数とアイテム配列を変換できる", () => {
       const connection: GraphQLSearchConnection = {
         issueCount: 42,
+        pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
         nodes: [
           {
             number: 1,
@@ -142,6 +143,7 @@ describe("GraphQL Adapters", () => {
       expect(result.items.length).toBe(2);
       expect(result.items[0].number).toBe(1);
       expect(result.items[1].number).toBe(2);
+      expect(result.pageInfo).toEqual({ hasNextPage: true, endCursor: "cursor-1" });
     });
 
     test("nodes が空または未定義の場合も安全に動作する", () => {
