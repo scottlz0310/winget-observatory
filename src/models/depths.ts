@@ -9,6 +9,8 @@ export interface GitHubSearchItem {
   updated_at: string;
   author?: string;
   author_association?: string;
+  /** PR 作成者を除いた第三者 Assignees（GraphQL で assignees 取得時のみ設定） */
+  third_party_assignees?: string[];
 }
 
 /**
@@ -20,6 +22,9 @@ export interface GitHubPrView {
   url: string;
   createdAt: string;
   updatedAt: string;
+  author?: string;
+  /** PR 作成者を除いた第三者 Assignees（GraphQL で assignees 取得時のみ設定） */
+  thirdPartyAssignees?: string[];
 }
 
 /**
@@ -33,6 +38,10 @@ export interface TargetPrInfo {
   CreatedAtJst: string;
   /** 基準 PR の最終更新時刻（マージ時期の予想モデルが使う） */
   UpdatedAt: string;
+  /** PR 作成者ログイン名（旧データ互換のためオプショナル） */
+  Author?: string;
+  /** PR 作成者を除いた第三者 Assignees（旧データ互換のためオプショナル） */
+  ThirdPartyAssignees?: string[];
 }
 
 /**
@@ -56,10 +65,15 @@ export interface GraphQLPrNode {
       name: string;
     }>;
   } | null;
+  assignees?: {
+    nodes?: Array<{
+      login?: string | null;
+    } | null> | null;
+  } | null;
 }
 
 /**
- * 各底（Healthy, Absolute, Stale, FirstTimer, Express）の 1 行データ
+ * 各底（Healthy, Absolute, Stale, FirstTimer, Express, Unassigned, Assigned）の 1 行データ
  */
 export interface DepthsRow {
   PR: string;
@@ -77,6 +91,8 @@ export interface DepthsRow {
   AuthorMergedCount?: number;
   /** コミット数（GraphQL 経由の底取得時に記録。旧データ互換のためオプショナル） */
   CommitCount?: number;
+  /** PR 作成者を除いた第三者 Assignees 一覧（旧データ互換のためオプショナル） */
+  ThirdPartyAssignees?: string[];
 }
 
 /**
@@ -95,6 +111,10 @@ export interface DepthsSnapshot {
   StaleBottom: DepthsRow[];
   /** 初回提出者の底（手直しコミット込み・生涯マージ 0 回の初回提出者の中で起票日時が最も古い健康な PR） */
   FirstTimerBottom?: DepthsRow[];
+  /** 未アサイン前線（健康な待機 PR のうち第三者 Assignees なし・起票日時順） */
+  UnassignedBottom?: DepthsRow[];
+  /** アサイン済み前線（健康な待機 PR のうち第三者 Assignees あり・起票日時順） */
+  AssignedBottom?: DepthsRow[];
   ExpressLane: DepthsRow[];
 }
 

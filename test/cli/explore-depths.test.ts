@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient } from "../../src/api/github";
 import {
+  fetchAssigneeFrontiers,
   fetchFirstTimerBottom,
   fetchStaleBottom,
   parseArgs,
@@ -850,6 +851,206 @@ describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）�
       // 失敗時はファイルへの書き込みが行われないこと
       expect(existsSync(outputPath)).toBeFalse();
       expect(existsSync(historyPath)).toBeFalse();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("CLI: explore-depths の未アサイン前線・アサイン済み前線（fetchAssigneeFrontiers）", () => {
+  const createAssigneeNode = (
+    number: number,
+    createdAt: string,
+    author: string | null,
+    assignees: string[],
+  ): GraphQLPrNode => ({
+    number,
+    title: `PR #${number}`,
+    url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
+    createdAt,
+    updatedAt: createdAt,
+    author: author ? { login: author } : null,
+    authorAssociation: "NONE",
+    commits: { totalCount: 1 },
+    labels: { nodes: [{ name: "New-Package" }] },
+    assignees: { nodes: assignees.map((login) => ({ login })) },
+  });
+
+  test("1 回のページング走査で未アサイン（セルフアサイン含む）と第三者アサイン済みを分離し、両側が上限に達したら停止する", async () => {
+    const page1 = [
+      createAssigneeNode(501, "2026-10-01T00:00:00Z", "alice", []),
+      createAssigneeNode(502, "2026-10-02T00:00:00Z", "bob", ["bob"]), // セルフアサインのみ -> 未アサイン側
+      createAssigneeNode(503, "2026-10-03T00:00:00Z", "carol", ["stephengillie"]), // 第三者あり (1件目)
+      createAssigneeNode(504, "2026-10-04T00:00:00Z", "dave", []), // limit=2 のため採用されない
+    ];
+    const page2 = [
+      createAssigneeNode(505, "2026-10-05T00:00:00Z", "eve", ["eve", "trenly"]), // セルフ＋第三者 (2件目)
+      createAssigneeNode(506, "2026-10-06T00:00:00Z", "frank", ["stephengillie"]), // 打ち切り後なので取得されない
+    ];
+
+    let queryCalls = 0;
+    const mockClient = {
+      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
+        queryCalls++;
+        expect(variables.query).toContain("sort:created-asc");
+        if (!variables.after) {
+          return {
+            search: { pageInfo: { hasNextPage: true, endCursor: "c1" }, nodes: page1 },
+          } as unknown as T;
+        }
+        if (variables.after === "c1") {
+          return {
+            search: { pageInfo: { hasNextPage: true, endCursor: "c2" }, nodes: page2 },
+          } as unknown as T;
+        }
+        throw new Error("3ページ目は呼び出されないはず");
+      },
+    } as unknown as GitHubApiClient;
+
+    const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
+      mockClient,
+      "repo:microsoft/winget-pkgs",
+      2,
+      1000,
+    );
+
+    expect(queryCalls).toBe(2);
+    expect(unassignedBottom.map((r) => r.Number)).toEqual([501, 502]);
+    expect(unassignedBottom[0].ThirdPartyAssignees).toEqual([]);
+    expect(unassignedBottom[1].ThirdPartyAssignees).toEqual([]);
+    expect(assignedBottom.map((r) => r.Number)).toEqual([503, 505]);
+    expect(assignedBottom[0].ThirdPartyAssignees).toEqual(["stephengillie"]);
+    expect(assignedBottom[1].ThirdPartyAssignees).toEqual(["trenly"]);
+  });
+
+  test("fetchAssigneeFrontiers は GraphQL 失敗時にコンテキスト付き例外をスローする", async () => {
+    const mockClient = {
+      graphql: async () => {
+        throw new Error("HTTP 502 Bad Gateway");
+      },
+    } as unknown as GitHubApiClient;
+
+    await expect(
+      fetchAssigneeFrontiers(mockClient, "repo:microsoft/winget-pkgs", 10, 1000),
+    ).rejects.toThrow(
+      "未アサイン前線・アサイン済み前線の GraphQL 取得に失敗しました: HTTP 502 Bad Gateway",
+    );
+  });
+
+  test("片側（アサイン済み PR）が上限件数未満で走査終端（hasNextPage=false）に達しても異常終了せず収集分を返す", async () => {
+    const nodes = [
+      createAssigneeNode(601, "2026-10-01T00:00:00Z", "u1", []),
+      createAssigneeNode(602, "2026-10-02T00:00:00Z", "u2", ["u2"]),
+      createAssigneeNode(603, "2026-10-03T00:00:00Z", null, ["stephengillie"]), // author null でも第三者あり
+      createAssigneeNode(604, "2026-10-04T00:00:00Z", "u4", []),
+    ];
+
+    const mockClient = {
+      graphql: async <T>(): Promise<T> =>
+        ({
+          search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+        }) as unknown as T,
+    } as unknown as GitHubApiClient;
+
+    const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
+      mockClient,
+      "repo:microsoft/winget-pkgs",
+      10,
+      1000,
+    );
+
+    expect(unassignedBottom.map((r) => r.Number)).toEqual([601, 602, 604]);
+    expect(assignedBottom.map((r) => r.Number)).toEqual([603]);
+    expect(assignedBottom[0].ThirdPartyAssignees).toEqual(["stephengillie"]);
+  });
+
+  test("片側が上限件数未満のまま maxTraverseNodes 上限に達しても異常終了せず収集済みの結果を返す", async () => {
+    const nodes = [
+      createAssigneeNode(701, "2026-10-01T00:00:00Z", "u1", []),
+      createAssigneeNode(702, "2026-10-02T00:00:00Z", "u2", []),
+      createAssigneeNode(703, "2026-10-03T00:00:00Z", "u3", ["stephengillie"]),
+    ];
+
+    const mockClient = {
+      graphql: async <T>(): Promise<T> =>
+        ({
+          search: { pageInfo: { hasNextPage: true, endCursor: "c-next" }, nodes },
+        }) as unknown as T,
+    } as unknown as GitHubApiClient;
+
+    const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
+      mockClient,
+      "repo:microsoft/winget-pkgs",
+      10,
+      3,
+    );
+
+    expect(unassignedBottom.map((r) => r.Number)).toEqual([701, 702]);
+    expect(assignedBottom.map((r) => r.Number)).toEqual([703]);
+  });
+
+  test("runExploreDepths は DepthsVersion=2 を維持したまま UnassignedBottom / AssignedBottom / TargetPr.ThirdPartyAssignees を保存する", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-depths-assignees-"));
+    const outputPath = join(tempDir, "latest-depths.json");
+    const historyPath = join(tempDir, "depths-history.jsonl");
+
+    const sampleItem: GitHubSearchItem = {
+      number: 12345,
+      title: "Sample item",
+      html_url: "https://github.com/microsoft/winget-pkgs/pull/12345",
+      created_at: "2026-10-01T10:00:00Z",
+      updated_at: "2026-11-01T10:00:00Z",
+    };
+
+    const mockClient = {
+      getPullRequest: async (_repo: string, prNumber: number): Promise<GitHubPrView> => ({
+        number: prNumber,
+        title: "Target PR title",
+        url: `https://github.com/microsoft/winget-pkgs/pull/${prNumber}`,
+        createdAt: "2026-10-15T00:00:00Z",
+        updatedAt: "2026-10-16T00:00:00Z",
+        author: "target-author",
+        thirdPartyAssignees: ["stephengillie"],
+      }),
+      searchIssues: async (): Promise<GitHubSearchItem[]> => [sampleItem],
+      graphql: async <T>(): Promise<T> =>
+        ({
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              createAssigneeNode(801, "2026-10-05T00:00:00Z", "first-timer", ["first-timer"]),
+              createAssigneeNode(802, "2026-10-06T00:00:00Z", "stuck-user", ["stephengillie"]),
+            ],
+          },
+        }) as unknown as T,
+    } as unknown as GitHubApiClient;
+
+    try {
+      const snapshot = await runExploreDepths(
+        {
+          targetPr: 464302,
+          repository: "microsoft/winget-pkgs",
+          outputPath,
+          historyPath,
+          noTargetPr: false,
+          noHistory: false,
+          asJson: false,
+        },
+        mockClient,
+        () => {},
+      );
+
+      expect(snapshot.DepthsVersion).toBe(2);
+      expect(snapshot.TargetPr?.ThirdPartyAssignees).toEqual(["stephengillie"]);
+      expect(snapshot.UnassignedBottom?.map((r) => r.Number)).toEqual([801]);
+      expect(snapshot.AssignedBottom?.map((r) => r.Number)).toEqual([802]);
+      expect(snapshot.StaleBottom[0].ThirdPartyAssignees).toEqual([]);
+      expect(snapshot.StaleBottom[1].ThirdPartyAssignees).toEqual(["stephengillie"]);
+
+      const saved = JSON.parse(readFileSync(outputPath, "utf-8"));
+      expect(saved.DepthsVersion).toBe(2);
+      expect(saved.UnassignedBottom[0].Number).toBe(801);
+      expect(saved.AssignedBottom[0].ThirdPartyAssignees).toEqual(["stephengillie"]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 第三者 `Assignees` 分離と未アサイン前線追跡（#96）:
+  - `src/models/depths.ts` / `src/api/graphql-queries.ts` / `src/api/graphql-adapters.ts` / `src/domain/depths.ts` に `author`・`assignees` 取得と `extractThirdPartyAssignees` / `getThirdPartyAssignees` / `summarizeAssigneeFrontier` を追加し、自己アサインを誤除外せず第三者アサインのみを分離
+  - `src/cli/explore-depths.ts` に `sort:created-asc` 1 パス走査 `fetchAssigneeFrontiers` を追加し、未アサイン（`UnassignedBottom`）・アサイン済（`AssignedBottom`）の前線サマリーとログ出力・スナップショット保存を追加
+  - `src/models/forecast.ts` / `src/domain/forecast.ts` に `extractUnassignedFrontierSamples` と `calculateFirstReviewForecast`（初回レビュー到達予想）を追加
+  - ダッシュボード（`scripts/build-pages.ts`, `scripts/pages/`）に初回レビュー到達予想パネル、未アサイン vs アサイン済前線比較セクション、滞留底・初回提出者底の `アサイン済` バッジ、および推移グラフの未アサイン前線シリーズを追加
+
+### Changed
+
+- `src/domain/chart.ts` の 2 軸折れ線グラフ凡例レイアウトを 3 項目以上の右軸シリーズで重ならないよう調整（#96）
+
 ## [0.2.1] - 2026-11-14
 
 ### Added

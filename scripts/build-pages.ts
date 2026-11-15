@@ -6,11 +6,16 @@ import { join, resolve } from "node:path";
 import {
   extractFirstTimerFrontierSamples,
   extractStaleFrontierSamples,
+  extractUnassignedFrontierSamples,
   parseDepthsHistory,
 } from "../src/domain/forecast";
 import { parseForecastHistory } from "../src/domain/forecast-history";
 import { parseCsvRows } from "../src/domain/progress-csv";
-import type { FirstTimerFrontierSample, StaleFrontierSample } from "../src/models/forecast";
+import type {
+  FirstTimerFrontierSample,
+  StaleFrontierSample,
+  UnassignedFrontierSample,
+} from "../src/models/forecast";
 import type { ForecastHistoryLine } from "../src/models/forecast-history";
 import type { ProgressHistoryRow } from "../src/models/progress";
 import { generateDashboardHtml } from "./pages/template";
@@ -86,21 +91,24 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     [],
   );
 
-  const { frontierSamples, firstTimerFrontierSamples } = readOptionalParsed<{
-    frontierSamples: StaleFrontierSample[];
-    firstTimerFrontierSamples: FirstTimerFrontierSample[];
-  }>(
-    join(dataDir, "depths-history.jsonl"),
-    "キュー境界履歴",
-    (raw) => {
-      const depthsHistory = parseDepthsHistory(raw);
-      return {
-        frontierSamples: extractStaleFrontierSamples(depthsHistory),
-        firstTimerFrontierSamples: extractFirstTimerFrontierSamples(depthsHistory),
-      };
-    },
-    { frontierSamples: [], firstTimerFrontierSamples: [] },
-  );
+  const { frontierSamples, firstTimerFrontierSamples, unassignedFrontierSamples } =
+    readOptionalParsed<{
+      frontierSamples: StaleFrontierSample[];
+      firstTimerFrontierSamples: FirstTimerFrontierSample[];
+      unassignedFrontierSamples: UnassignedFrontierSample[];
+    }>(
+      join(dataDir, "depths-history.jsonl"),
+      "キュー境界履歴",
+      (raw) => {
+        const depthsHistory = parseDepthsHistory(raw);
+        return {
+          frontierSamples: extractStaleFrontierSamples(depthsHistory),
+          firstTimerFrontierSamples: extractFirstTimerFrontierSamples(depthsHistory),
+          unassignedFrontierSamples: extractUnassignedFrontierSamples(depthsHistory),
+        };
+      },
+      { frontierSamples: [], firstTimerFrontierSamples: [], unassignedFrontierSamples: [] },
+    );
 
   const forecastHistory = readOptionalParsed<ForecastHistoryLine[]>(
     join(dataDir, "forecast-history.jsonl"),
@@ -116,6 +124,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     frontierSamples,
     forecastHistory,
     firstTimerFrontierSamples,
+    unassignedFrontierSamples,
   });
   const htmlPath = join(outputDir, "index.html");
   writeFileSync(htmlPath, html, "utf-8");

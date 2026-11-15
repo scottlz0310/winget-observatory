@@ -10,8 +10,10 @@ import {
   formatDepthsRow,
   formatGraphQLDepthsRow,
   formatTargetPrInfo,
+  getThirdPartyAssignees,
   isFirstTimerCandidate,
   isStaleCandidate,
+  summarizeAssigneeFrontier,
 } from "../domain/depths";
 import { DEFAULT_AUTHOR_MERGED_BATCH_SIZE, resolveAuthorMergedCounts } from "../domain/first-timer";
 import type {
@@ -239,6 +241,85 @@ export async function fetchFirstTimerBottom(
   return rows.sort((a, b) => Date.parse(a.CreatedAt) - Date.parse(b.CreatedAt)).slice(0, limit);
 }
 
+export interface AssigneeFrontiersResult {
+  unassignedBottom: DepthsRow[];
+  assignedBottom: DepthsRow[];
+}
+
+/**
+ * 健康な待機 PR（sort:created-asc）を 1 回のページング走査で走査し、
+ * 第三者 Assignees の有無によって「未アサイン前線」と「アサイン済み前線」に分離して各上位 limit 件を抽出する。
+ * 片側または両側が limit 未満で走査終端・走査上限に達しても異常終了せず収集済み結果を返す。
+ */
+export async function fetchAssigneeFrontiers(
+  client: GitHubApiClient,
+  baseQuery: string,
+  limit = STALE_BOTTOM_LIMIT,
+  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+): Promise<AssigneeFrontiersResult> {
+  let cursor: string | null = null;
+  let hasNext = true;
+  let traversedCount = 0;
+  const unassignedBottom: DepthsRow[] = [];
+  const assignedBottom: DepthsRow[] = [];
+  const query = `${baseQuery} sort:created-asc`;
+
+  while (
+    hasNext &&
+    traversedCount < maxTraverseNodes &&
+    (unassignedBottom.length < limit || assignedBottom.length < limit)
+  ) {
+    const fetchCount = Math.min(FIRST_TIMER_PAGE_SIZE, maxTraverseNodes - traversedCount);
+    try {
+      const gqlRes: GraphQLSearchFirstTimerResponse =
+        await client.graphql<GraphQLSearchFirstTimerResponse>(FIRST_TIMER_GRAPHQL_QUERY, {
+          query,
+          first: fetchCount,
+          ...(cursor ? { after: cursor } : {}),
+        });
+
+      const nodes = gqlRes.search?.nodes ?? [];
+      traversedCount += nodes.length;
+
+      for (const node of nodes) {
+        if (!node?.number) continue;
+        const thirdParty = getThirdPartyAssignees(node);
+        const row = formatGraphQLDepthsRow(node);
+        if (thirdParty.length === 0) {
+          if (unassignedBottom.length < limit) {
+            unassignedBottom.push(row);
+          }
+        } else if (assignedBottom.length < limit) {
+          assignedBottom.push(row);
+        }
+        if (unassignedBottom.length >= limit && assignedBottom.length >= limit) {
+          break;
+        }
+      }
+
+      hasNext = Boolean(gqlRes.search?.pageInfo?.hasNextPage);
+      cursor = gqlRes.search?.pageInfo?.endCursor ?? null;
+
+      if (!cursor || nodes.length === 0) {
+        break;
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`未アサイン前線・アサイン済み前線の GraphQL 取得に失敗しました: ${msg}`, {
+        cause: err,
+      });
+    }
+  }
+
+  const byCreatedAsc = (a: DepthsRow, b: DepthsRow) =>
+    Date.parse(a.CreatedAt) - Date.parse(b.CreatedAt);
+
+  return {
+    unassignedBottom: unassignedBottom.sort(byCreatedAsc).slice(0, limit),
+    assignedBottom: assignedBottom.sort(byCreatedAsc).slice(0, limit),
+  };
+}
+
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
   let targetPr = resolveDefaultTargetPr();
   let repository = process.env.WINGET_REPOSITORY ?? DEFAULT_REPOSITORY;
@@ -280,14 +361,28 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
   };
 }
 
-function printRowTable(rows: DepthsRow[], log = console.log, showCommitCount = false): void {
+function printRowTable(
+  rows: DepthsRow[],
+  log = console.log,
+  options: { showCommitCount?: boolean; showThirdPartyAssignees?: boolean } | boolean = false,
+): void {
+  const showCommitCount =
+    typeof options === "boolean" ? options : (options.showCommitCount ?? false);
+  const showThirdPartyAssignees =
+    typeof options === "boolean" ? false : (options.showThirdPartyAssignees ?? false);
   if (rows.length === 0) {
     log("  （該当なし）");
     return;
   }
   for (const row of rows) {
     const commitCol = showCommitCount ? ` | ${String(row.CommitCount ?? "-").padStart(2)}c` : "";
-    log(`  ${row.PR.padEnd(8)}${commitCol} | ${row.作成日時} | ${row.更新日時} | ${row.タイトル}`);
+    const assigneeCol =
+      showThirdPartyAssignees && row.ThirdPartyAssignees && row.ThirdPartyAssignees.length > 0
+        ? ` | [${row.ThirdPartyAssignees.join(", ")}]`
+        : "";
+    log(
+      `  ${row.PR.padEnd(8)}${commitCol} | ${row.作成日時} | ${row.更新日時}${assigneeCol} | ${row.タイトル}`,
+    );
   }
 }
 
@@ -352,13 +447,25 @@ export async function runExploreDepths(
     mergedCountCache,
   );
 
-  // 5. 特急レーン（Express Lane）
+  // 5. 未アサイン前線／アサイン済み前線（健康な待機 PR を第三者 Assignees 有無で分離・起票日時順）
+  const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
+    client,
+    healthyBase,
+    STALE_BOTTOM_LIMIT,
+    FIRST_TIMER_MAX_NODES,
+  );
+
+  // 6. 特急レーン（Express Lane）
   let expressBottom: DepthsRow[] = [];
   if (hasTarget && targetCreatedAtIso) {
     const expressQuery = buildExpressQuery(options.repository, targetCreatedAtIso);
     const expressItems = await client.searchIssues(expressQuery, "updated", "desc", 5);
     expressBottom = expressItems.map(formatDepthsRow);
   }
+
+  const now = new Date();
+  const unassignedSummary = summarizeAssigneeFrontier(unassignedBottom, now);
+  const assignedSummary = summarizeAssigneeFrontier(assignedBottom, now);
 
   if (!options.asJson) {
     log("【1. 健康的な大底 (Healthy Bottom)】");
@@ -375,18 +482,36 @@ export async function runExploreDepths(
     log(
       "説明: 指摘なく健康な1コミット限定PR（常連含む）の中で、更新日時(updated)が最も古い放置前線",
     );
-    printRowTable(staleBottom, log);
+    printRowTable(staleBottom, log, { showThirdPartyAssignees: true });
     log("");
 
     log("【4. 初回提出者の底 (First-Timer Bottom)】");
     log(
       "説明: 初回提出者（authorAssociation = NONE・生涯マージ 0 回）の健康なPR全体（手直し込み）の、起票日時(created)が最も古い先頭",
     );
-    printRowTable(firstTimerBottom, log, true);
+    printRowTable(firstTimerBottom, log, { showCommitCount: true, showThirdPartyAssignees: true });
+    log("");
+
+    log("【5A. 未アサイン前線 (Unassigned Frontier / 純粋未着手)】");
+    log(
+      `説明: 第三者 Assignees が付いていない健康なPR（セルフアサイン含む）の起票順先頭 (上位 ${unassignedSummary.count} 件 / 先頭: ${unassignedSummary.head ? `${unassignedSummary.head.PR} 起票 ${unassignedSummary.head.作成日時}・経過 ${unassignedSummary.headElapsedDays ?? "-"} 日` : "該当なし"})`,
+    );
+    printRowTable(unassignedBottom, log, { showCommitCount: true });
+    log("");
+
+    log("【5B. アサイン済み前線 (Assigned Frontier / 介入済み・仕掛かり)】");
+    const assigneeBreakdown =
+      assignedSummary.assigneeCounts.length > 0
+        ? ` / 内訳: ${assignedSummary.assigneeCounts.map((a) => `${a.login}(${a.count})`).join(", ")}`
+        : "";
+    log(
+      `説明: 第三者 Assignees が付いている健康なPRの起票順先頭 (上位 ${assignedSummary.count} 件 / 先頭: ${assignedSummary.head ? `${assignedSummary.head.PR} 起票 ${assignedSummary.head.作成日時}・経過 ${assignedSummary.headElapsedDays ?? "-"} 日` : "該当なし"}${assigneeBreakdown})`,
+    );
+    printRowTable(assignedBottom, log, { showCommitCount: true, showThirdPartyAssignees: true });
     log("");
 
     if (hasTarget && targetInfo) {
-      log("【5. 特急レーン・追い越し (Express Lane)】");
+      log("【6. 特急レーン・追い越し (Express Lane)】");
       log(`説明: あなたのPR作成日(${targetInfo.CreatedAtJst})以降に作成され、すでにマージされたPR`);
       if (expressBottom.length > 0) {
         printRowTable(expressBottom, log);
@@ -398,13 +523,15 @@ export async function runExploreDepths(
   }
 
   const snapshot = createDepthsSnapshot({
-    now: new Date(),
+    now,
     repository: options.repository,
     targetPr: targetInfo,
     healthyBottom,
     absoluteBottom,
     staleBottom,
     firstTimerBottom,
+    unassignedBottom,
+    assignedBottom,
     expressLane: expressBottom,
   });
 

@@ -1,6 +1,7 @@
 // キュー境界探索テーブル・待機列の底の比較・仮説②根拠・予想答え合わせ・離脱内訳・直近10回履歴テーブルの描画セクション
 
 import { formatDeltaBadge } from "../../../src/domain/dashboard";
+import { summarizeAssigneeFrontier } from "../../../src/domain/depths";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
 import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
 import type { HistoryRowWithDelta } from "../../../src/models/dashboard";
@@ -18,6 +19,7 @@ interface BottomTableRenderOptions {
   showAuthor?: boolean;
   showCommitCount?: boolean;
   highlightRepeaters?: boolean;
+  highlightThirdPartyAssignees?: boolean;
   elapsedBasis?: "updated" | "created";
 }
 
@@ -31,6 +33,7 @@ function renderBottomRowTable(
     showAuthor = false,
     showCommitCount = false,
     highlightRepeaters = false,
+    highlightThirdPartyAssignees = true,
     elapsedBasis = "updated",
   } = options;
   const observedMs = Date.parse(timestampIso);
@@ -49,13 +52,18 @@ function renderBottomRowTable(
         highlightRepeaters && isRepeater
           ? `<span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者ではないため、初回提出者の底では除外">常連除外</span>`
           : "";
+      const thirdPartyAssignees = item.ThirdPartyAssignees ?? [];
+      const assigneeBadge =
+        highlightThirdPartyAssignees && thirdPartyAssignees.length > 0
+          ? `<span class="badge" style="background: #fef3c7; color: #b45309; font-size: 0.7rem; margin-left: 0.35rem;" title="作成者以外の第三者 Assignees（${escapeHtml(thirdPartyAssignees.join(", "))}）が付与済み">アサイン済: ${escapeHtml(thirdPartyAssignees.join(", "))}</span>`
+          : "";
       const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
       const commitCountText = item.CommitCount !== undefined ? `${item.CommitCount}` : "-";
       const commitCountCell = showCommitCount ? `<td>${commitCountText}</td>` : "";
       return `
         <tr>
           <td>${index + 1}</td>
-          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}</td>
+          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}${assigneeBadge}</td>
           ${authorCell}
           ${commitCountCell}
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
@@ -166,7 +174,7 @@ export function renderBoundaryTableSection(depths: LatestDepths | null): string 
 export function renderBottomComparisonSection(depths: LatestDepths | null): string {
   return `<h2 class="section-title">🧗 待機列の底の比較（優等生 vs 初回提出者）</h2>
     <p class="section-note">
-      左は「1コミット完全放置」の待機前線（常連含む）、右はコミット数制限を外した「初回提出者全体（手直し込み）」の待機前線です。
+      左は「1コミット完全放置」の待機前線（常連含む）、右はコミット数制限を外した「初回提出者全体（手直し込み）」の待機前線です。第三者 Assignees が付いている PR は「アサイン済」バッジで識別できます。
     </p>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
       <div class="card" style="padding: 1.25rem; overflow-x: auto;">
@@ -189,6 +197,90 @@ export function renderBottomComparisonSection(depths: LatestDepths | null): stri
           初回提出者（authorAssociation = NONE・生涯マージ 0 回）の健康なPR全体（手直しコミット込み）。起票日時の古い順です。
         </p>
         ${renderFirstTimerBottomTable(depths)}
+      </div>
+    </div>`;
+}
+
+/** 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）比較セクションを描画する */
+export function renderAssigneeFrontierComparisonSection(depths: LatestDepths | null): string {
+  const timestamp = depths?.Timestamp ?? "";
+  const unassignedItems = depths?.UnassignedBottom ?? [];
+  const assignedItems = depths?.AssignedBottom ?? [];
+  const hasRecordedFrontiers =
+    depths?.UnassignedBottom !== undefined || depths?.AssignedBottom !== undefined;
+
+  const unassignedSummary = summarizeAssigneeFrontier(unassignedItems, timestamp);
+  const assignedSummary = summarizeAssigneeFrontier(assignedItems, timestamp);
+
+  const unassignedBody =
+    unassignedItems.length > 0
+      ? renderBottomRowTable(unassignedItems, timestamp, {
+          showAuthor: true,
+          showCommitCount: true,
+          highlightRepeaters: false,
+          highlightThirdPartyAssignees: false,
+          elapsedBasis: "created",
+        })
+      : `<p style="color: var(--text-muted); font-size: 0.875rem;">${
+          hasRecordedFrontiers
+            ? "現在、未アサインの健康な待機 PR はありません。"
+            : "未アサイン前線のデータはまだありません（次回の定期観測から記録されます）。"
+        }</p>`;
+
+  const assignedBody =
+    assignedItems.length > 0
+      ? renderBottomRowTable(assignedItems, timestamp, {
+          showAuthor: true,
+          showCommitCount: true,
+          highlightRepeaters: false,
+          highlightThirdPartyAssignees: true,
+          elapsedBasis: "created",
+        })
+      : `<p style="color: var(--text-muted); font-size: 0.875rem;">${
+          hasRecordedFrontiers
+            ? "現在、第三者アサイン済みの健康な待機 PR はありません。"
+            : "アサイン済み前線のデータはまだありません（次回の定期観測から記録されます）。"
+        }</p>`;
+
+  const unassignedMeta = unassignedSummary.head
+    ? `先頭: #${escapeHtml(unassignedSummary.head.Number)}（起票 ${escapeHtml(unassignedSummary.head.作成日時 || unassignedSummary.head.CreatedAt)}・経過 ${unassignedSummary.headElapsedDays ?? "-"} 日）`
+    : "";
+
+  const assigneeBreakdown =
+    assignedSummary.assigneeCounts.length > 0
+      ? ` / 内訳: ${assignedSummary.assigneeCounts.map((a) => `${a.login}(${a.count})`).join(", ")}`
+      : "";
+  const assignedMeta = assignedSummary.head
+    ? `先頭: #${escapeHtml(assignedSummary.head.Number)}（起票 ${escapeHtml(assignedSummary.head.作成日時 || assignedSummary.head.CreatedAt)}・経過 ${assignedSummary.headElapsedDays ?? "-"} 日）${assigneeBreakdown}`
+    : "";
+
+  return `<h2 class="section-title">👀 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）</h2>
+    <p class="section-note">
+      健康な待機 PR（New-Package・起票順）から、PR 作成者自身のセルフアサインを除外した第三者 Assignees の有無で分離しています。未アサイン前線は誰にも触れられていない純粋な未着手キュー、アサイン済み前線は自動警告放置や修正往復中の仕掛かり案件です。
+    </p>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #0ea5e9;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 600; color: #0284c7;">🟦 未アサイン前線（純粋未着手）</h3>
+          <span class="badge" style="background: #e0f2fe; color: #0369a1; font-weight: 600;">上位 ${unassignedSummary.count} 件</span>
+        </div>
+        <p class="section-note" style="margin-bottom: 0.5rem;">
+          第三者 Assignees なし（セルフアサイン含む）。起票日時の古い順です。
+        </p>
+        ${unassignedMeta ? `<p class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(unassignedMeta)}</p>` : ""}
+        ${unassignedBody}
+      </div>
+
+      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--warning);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 600; color: var(--warning);">🟧 アサイン済み前線（介入済み・仕掛かり）</h3>
+          <span class="badge" style="background: #fef3c7; color: #b45309; font-weight: 600;">上位 ${assignedSummary.count} 件</span>
+        </div>
+        <p class="section-note" style="margin-bottom: 0.5rem;">
+          第三者 Assignees ありの健康な待機 PR。起票日時の古い順です。
+        </p>
+        ${assignedMeta ? `<p class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(assignedMeta)}</p>` : ""}
+        ${assignedBody}
       </div>
     </div>`;
 }

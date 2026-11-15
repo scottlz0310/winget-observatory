@@ -59,6 +59,24 @@ describe("GraphQL Adapters", () => {
       expect(result.author).toBeUndefined();
       expect(result.author_association).toBeUndefined();
     });
+
+    test("assignees を含むノードでは作成者を除外した third_party_assignees を変換する", () => {
+      const node: GraphQLPullRequestNode = {
+        number: 12347,
+        title: "Assigned PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/12347",
+        createdAt: "2026-10-01T10:00:00Z",
+        updatedAt: "2026-10-02T12:00:00Z",
+        author: { login: "pr-author" },
+        authorAssociation: "NONE",
+        assignees: {
+          nodes: [{ login: "pr-author" }, { login: "stephengillie" }],
+        },
+      };
+
+      const result = adaptGraphQLToSearchItem(node);
+      expect(result.third_party_assignees).toEqual(["stephengillie"]);
+    });
   });
 
   describe("adaptGraphQLToDetailedSearchItem", () => {
@@ -170,6 +188,29 @@ describe("GraphQL Adapters", () => {
         url: "https://github.com/repo/pull/200",
         createdAt: "2026-10-01T00:00:00Z",
         updatedAt: "2026-10-02T00:00:00Z",
+      });
+    });
+
+    test("author と assignees を含む場合は thirdPartyAssignees を変換する", () => {
+      const node: GraphQLPullRequestNode = {
+        number: 201,
+        title: "View PR with Assignees",
+        url: "https://github.com/repo/pull/201",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-02T00:00:00Z",
+        author: { login: "pr-author" },
+        assignees: { nodes: [{ login: "pr-author" }, { login: "stephengillie" }] },
+      };
+
+      const result = adaptGraphQLToPrView(node);
+      expect(result).toEqual({
+        number: 201,
+        title: "View PR with Assignees",
+        url: "https://github.com/repo/pull/201",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-02T00:00:00Z",
+        author: "pr-author",
+        thirdPartyAssignees: ["stephengillie"],
       });
     });
   });

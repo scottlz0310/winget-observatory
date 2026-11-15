@@ -9,9 +9,11 @@ import {
 import {
   calculateDashboardMetrics,
   formatDeltaBadge,
+  parseTimestampToMs,
   selectComparableHistory,
 } from "../../src/domain/dashboard";
 import { calculateExitBreakdown } from "../../src/domain/exit-breakdown";
+import { calculateFirstReviewForecast } from "../../src/domain/forecast";
 import {
   buildForecastSource,
   calculateForecastComparison,
@@ -20,6 +22,7 @@ import { scoreForecasts } from "../../src/domain/forecast-history";
 import { DAY_MS, formatHumanDays } from "../../src/domain/formatters";
 import { escapeHtml } from "./formatters";
 import {
+  renderAssigneeFrontierComparisonSection,
   renderBottomComparisonSection,
   renderBoundaryTableSection,
   renderExitBreakdownSection,
@@ -29,6 +32,7 @@ import {
 } from "./sections/depths-and-history";
 import {
   buildForecastTimelineMarkers,
+  renderFirstReviewForecastPanel,
   renderFirstTimerHeroSummary,
   renderForecastPanel,
   renderKpiGridSection,
@@ -62,6 +66,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     frontierSamples = [],
     forecastHistory = [],
     firstTimerFrontierSamples = [],
+    unassignedFrontierSamples = [],
   } = input;
 
   const updatedJst = progress?.TimestampJst || depths?.TimestampJst || "未観測";
@@ -131,6 +136,18 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     });
   }
 
+  if (unassignedFrontierSamples.length > 0) {
+    dualSeries.push({
+      label: "👀 未アサイン前線 起票経過",
+      axis: "right",
+      color: "#0ea5e9",
+      strokeWidth: 2.5,
+      points: unassignedFrontierSamples
+        .slice(-CHART_MAX_POINTS)
+        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
+    });
+  }
+
   const queueChart = renderDualAxisLineChartSvg({
     title: "待ち件数と底の遅れの推移（統合時系列チャート）",
     leftAxisLabel: "待ち件数",
@@ -141,6 +158,16 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
 
   const comparison = calculateForecastComparison(
     buildForecastSource({ progress, depths, history: historyRecords, frontierSamples }),
+  );
+  const parsedTargetCreatedMs = depths?.TargetPr?.CreatedAt
+    ? Date.parse(depths.TargetPr.CreatedAt)
+    : depths?.TargetPr?.CreatedAtJst
+      ? parseTimestampToMs(depths.TargetPr.CreatedAtJst)
+      : Number.NaN;
+  const firstReviewForecast = calculateFirstReviewForecast(
+    unassignedFrontierSamples,
+    Number.isNaN(parsedTargetCreatedMs) ? null : parsedTargetCreatedMs,
+    { targetThirdPartyAssignees: depths?.TargetPr?.ThirdPartyAssignees },
   );
   const timelineSvg = renderTimelineSvg({
     title: "3 つの仮説による予想マージ日",
@@ -183,6 +210,8 @@ ${DASHBOARD_CSS}
 
     ${renderForecastPanel(comparison, timelineSvg)}
 
+    ${renderFirstReviewForecastPanel(firstReviewForecast, repo)}
+
     ${renderKpiGridSection({
       progress,
       repo,
@@ -194,7 +223,7 @@ ${DASHBOARD_CSS}
 
     <h2 class="section-title">📉 待ち件数の推移（キュー推移と底の進行の統合時系列）</h2>
     <p class="section-note">
-      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭経過日数（優等生の底＝更新からの遅れ、🌱 初回提出者の底＝起票からの経過）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
+      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭経過日数（優等生の底＝更新からの遅れ、🌱 初回提出者の底＝起票からの経過、👀 未アサイン前線＝起票からの経過）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
     </p>
     ${renderChartCard(queueChart)}
 
@@ -215,6 +244,8 @@ ${DASHBOARD_CSS}
     ${renderRivalsSection(progress)}
 
     ${renderBoundaryTableSection(depths)}
+
+    ${renderAssigneeFrontierComparisonSection(depths)}
 
     ${renderBottomComparisonSection(depths)}
 

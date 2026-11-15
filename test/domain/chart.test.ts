@@ -166,4 +166,36 @@ describe("Domain: renderDualAxisLineChartSvg", () => {
     expect(svg).toContain("Left &amp; Right");
     expect(svg).toContain("A &lt; B");
   });
+
+  test("右軸系列が 3 本以上でもコンパクト配置で凡例を描画できる", () => {
+    const svg = renderDualAxisLineChartSvg({
+      title: "3系列チャート",
+      series: [
+        { label: "実質待ち", axis: "left", color: "blue", points: [point(0, 10), point(1, 9)] },
+        {
+          label: "優等生の底 更新からの遅れ",
+          axis: "right",
+          color: "orange",
+          points: [point(0, 20), point(1, 21)],
+        },
+        {
+          label: "🌱 初回提出者の底 起票からの経過",
+          axis: "right",
+          color: "green",
+          points: [point(0, 25), point(1, 26)],
+        },
+        {
+          label: "👀 未アサイン前線 起票経過",
+          axis: "right",
+          color: "#0ea5e9",
+          points: [point(0, 18), point(1, 19)],
+        },
+      ],
+    }) as string;
+
+    expect(svg).toContain("優等生の底 更新からの遅れ");
+    expect(svg).toContain("🌱 初回提出者の底 起票からの経過");
+    expect(svg).toContain("👀 未アサイン前線 起票経過");
+    expect(svg.match(/<polyline /g)?.length).toBe(4);
+  });
 });

@@ -193,10 +193,13 @@ export function renderDualAxisLineChartSvg(options: DualAxisLineChartOptions): s
   const leftS = series.filter((s) => s.axis === "left");
   const rightS = series.filter((s) => s.axis === "right");
 
-  const renderLegendRow = (items: typeof series, rowY: number, startX: number) =>
-    items
+  const renderLegendRow = (items: typeof series, rowY: number, startX: number) => {
+    const useCompact = items.length >= 3;
+    const rowStartX = useCompact ? 24 : startX;
+    const stepX = useCompact ? Math.floor((DUAL_WIDTH - rowStartX * 2) / items.length) : 180;
+    return items
       .map((s, i) => {
-        const x = startX + i * 180;
+        const x = rowStartX + i * stepX;
         const strokeW = s.strokeWidth ?? 2;
         const dash = s.strokeDasharray ? ` stroke-dasharray="${xmlEscape(s.strokeDasharray)}"` : "";
         return (
@@ -205,6 +208,7 @@ export function renderDualAxisLineChartSvg(options: DualAxisLineChartOptions): s
         );
       })
       .join("");
+  };
 
   const legend =
     renderLegendRow(leftS, 14, DUAL_MARGIN.left) + renderLegendRow(rightS, 32, DUAL_MARGIN.left);

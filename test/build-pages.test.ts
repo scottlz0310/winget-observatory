@@ -1283,4 +1283,187 @@ describe("buildDashboard: 過去実績との比較", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("Issue #96: 初回レビュー到達予想・未アサイン前線 vs アサイン済み前線・既存底の第三者アサインバッジ・時系列チャートを描画する", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-issue-96-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-15T00:00:00Z",
+        TimestampJst: "2026-11-15 09:00:00",
+        Repository: "microsoft/winget-pkgs",
+        TargetPr: 464302,
+        PrTitle: "Target Package",
+        ActiveAhead: 100,
+        TotalAhead: 150,
+        Behind: 50,
+      }),
+      "utf-8",
+    );
+
+    const makeRow = (
+      num: number,
+      createdAt: string,
+      updatedAt: string,
+      thirdPartyAssignees: string[],
+    ) => ({
+      PR: `#${num}`,
+      Number: num,
+      作成日時: createdAt.slice(0, 16).replace("T", " "),
+      更新日時: updatedAt.slice(0, 16).replace("T", " "),
+      CreatedAt: createdAt,
+      UpdatedAt: updatedAt,
+      タイトル: `PR ${num}`,
+      Title: `PR ${num}`,
+      Url: `https://github.com/microsoft/winget-pkgs/pull/${num}`,
+      Author: `author-${num}`,
+      AuthorAssociation: "NONE",
+      CommitCount: 1,
+      ThirdPartyAssignees: thirdPartyAssignees,
+    });
+
+    const latestDepths = {
+      DepthsVersion: CURRENT_DEPTHS_VERSION,
+      Timestamp: "2026-11-15T00:00:00Z",
+      TimestampJst: "2026-11-15 09:00:00",
+      Repository: "microsoft/winget-pkgs",
+      TargetPr: {
+        Number: 464302,
+        Title: "Target Package",
+        Url: "https://github.com/microsoft/winget-pkgs/pull/464302",
+        CreatedAt: "2026-11-05T00:00:00Z",
+        CreatedAtJst: "2026-11-05 09:00",
+        UpdatedAt: "2026-11-05T00:00:00Z",
+        Author: "scottlz0310",
+        ThirdPartyAssignees: [],
+      },
+      HealthyBottom: [],
+      AbsoluteBottom: [],
+      StaleBottom: [
+        makeRow(440001, "2026-10-20T00:00:00Z", "2026-10-21T00:00:00Z", []),
+        makeRow(440002, "2026-10-22T00:00:00Z", "2026-10-22T00:00:00Z", ["stephengillie"]),
+      ],
+      FirstTimerBottom: [
+        makeRow(440003, "2026-10-23T00:00:00Z", "2026-10-24T00:00:00Z", []),
+        makeRow(440004, "2026-10-24T00:00:00Z", "2026-10-25T00:00:00Z", ["stephengillie"]),
+      ],
+      UnassignedBottom: [makeRow(441002, "2026-10-27T00:00:00Z", "2026-10-27T00:00:00Z", [])],
+      AssignedBottom: [
+        makeRow(441001, "2026-10-21T00:00:00Z", "2026-10-22T00:00:00Z", ["stephengillie"]),
+      ],
+      ExpressLane: [],
+    };
+    writeFileSync(join(dataDir, "latest-depths.json"), JSON.stringify(latestDepths), "utf-8");
+
+    // 24 時間で未アサイン前線が 2 日分進行 (2026-10-25 -> 2026-10-27) => 速度 2 日/日、残り 9 日 / 2 = 4.5 日後
+    const historyLines = [
+      {
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
+        Timestamp: "2026-11-14T00:00:00Z",
+        TimestampJst: "2026-11-14 09:00:00",
+        Repository: "microsoft/winget-pkgs",
+        TargetPr: latestDepths.TargetPr,
+        HealthyBottom: [],
+        AbsoluteBottom: [],
+        StaleBottom: latestDepths.StaleBottom,
+        UnassignedBottom: [makeRow(441000, "2026-10-25T00:00:00Z", "2026-10-25T00:00:00Z", [])],
+        AssignedBottom: latestDepths.AssignedBottom,
+        ExpressLane: [],
+      },
+      latestDepths,
+    ];
+    writeFileSync(
+      join(dataDir, "depths-history.jsonl"),
+      `${historyLines.map((l) => JSON.stringify(l)).join("\n")}\n`,
+      "utf-8",
+    );
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+
+      // 初回レビュー到達予想パネル
+      expect(html).toContain("👀 初回レビュー到達予想（未アサイン前線・起票順）");
+      expect(html).toContain("実測速度ベース");
+      expect(html).toContain("約 4.5 日後");
+      expect(html).toContain("2 日/日");
+      expect(html).toContain("#441002");
+
+      // 統合時系列チャートに未アサイン前線系列
+      expect(html).toContain("👀 未アサイン前線 起票経過");
+
+      // 既存底テーブル（StaleBottom / FirstTimerBottom）で第三者アサイン済みバッジ
+      const staleSection = html
+        .split("🧗 優等生の底（順番待ちの先頭）")[1]
+        .split("🌱 初回提出者の底（真の FIFO 前線）")[0];
+      expect(staleSection).toContain("アサイン済: stephengillie");
+
+      const firstTimerSection = html
+        .split("🌱 初回提出者の底（真の FIFO 前線）")[1]
+        .split("🔮 仮説② の根拠")[0];
+      expect(firstTimerSection).toContain("アサイン済: stephengillie");
+
+      // 未アサイン前線 vs アサイン済み前線比較セクション
+      expect(html).toContain("👀 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）");
+      expect(html).toContain("🟦 未アサイン前線（純粋未着手）");
+      expect(html).toContain("🟧 アサイン済み前線（介入済み・仕掛かり）");
+      expect(html).toContain("stephengillie(1)");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Issue #96: 基準 PR 自身が第三者アサイン済みの場合は初回レビュー到達済みとして表示し、旧 Depthsv2 データとも後方互換を保つ", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-issue-96-assigned-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-depths.json"),
+      JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
+        Timestamp: "2026-11-15T00:00:00Z",
+        TimestampJst: "2026-11-15 09:00:00",
+        TargetPr: {
+          Number: 464302,
+          Title: "Target Package",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/464302",
+          CreatedAt: "2026-11-05T00:00:00Z",
+          CreatedAtJst: "2026-11-05 09:00",
+          UpdatedAt: "2026-11-05T00:00:00Z",
+          ThirdPartyAssignees: ["stephengillie"],
+        },
+        StaleBottom: [
+          {
+            Number: 440001,
+            Title: "Legacy Row Without ThirdPartyAssignees",
+            Url: "https://github.com/microsoft/winget-pkgs/pull/440001",
+            CreatedAt: "2026-10-20T00:00:00Z",
+            UpdatedAt: "2026-10-21T00:00:00Z",
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+
+      expect(html).toContain("基準PRアサイン済み");
+      expect(html).toContain("（第三者アサイン済み: stephengillie）");
+      expect(html).toContain(
+        "未アサイン前線のデータはまだありません（次回の定期観測から記録されます）。",
+      );
+      expect(html).toContain(
+        "アサイン済み前線のデータはまだありません（次回の定期観測から記録されます）。",
+      );
+      expect(html).not.toContain("アサイン済: undefined");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

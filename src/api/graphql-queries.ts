@@ -31,6 +31,11 @@ query SearchIssues($query: String!, $first: Int!, $after: String) {
         commits(first: 1) {
           totalCount
         }
+        assignees(first: 10) {
+          nodes {
+            login
+          }
+        }
       }
     }
   }
@@ -57,6 +62,14 @@ query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
       url
       createdAt
       updatedAt
+      author {
+        login
+      }
+      assignees(first: 10) {
+        nodes {
+          login
+        }
+      }
     }
   }
 }
@@ -167,6 +180,11 @@ export const FIRST_TIMER_GRAPHQL_QUERY = `query($query: String!, $first: Int!, $
         labels(first: 30) {
           nodes {
             name
+          }
+        }
+        assignees(first: 10) {
+          nodes {
+            login
           }
         }
       }
