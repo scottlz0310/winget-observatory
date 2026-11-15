@@ -115,6 +115,10 @@ export interface DepthsSnapshot {
   UnassignedBottom?: DepthsRow[];
   /** アサイン済み前線（健康な待機 PR のうち第三者 Assignees あり・起票日時順） */
   AssignedBottom?: DepthsRow[];
+  /** 未アサイン前線の探索が走査上限到達により途中で打ち切られた場合 true */
+  UnassignedTruncated?: boolean;
+  /** アサイン済み前線の探索が走査上限到達により途中で打ち切られた場合 true */
+  AssignedTruncated?: boolean;
   ExpressLane: DepthsRow[];
 }
 

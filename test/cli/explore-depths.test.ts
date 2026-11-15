@@ -863,6 +863,7 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
     createdAt: string,
     author: string | null,
     assignees: string[],
+    options?: { labels?: string[]; commits?: number; authorAssociation?: string },
   ): GraphQLPrNode => ({
     number,
     title: `PR #${number}`,
@@ -870,9 +871,9 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
     createdAt,
     updatedAt: createdAt,
     author: author ? { login: author } : null,
-    authorAssociation: "NONE",
-    commits: { totalCount: 1 },
-    labels: { nodes: [{ name: "New-Package" }] },
+    authorAssociation: options?.authorAssociation ?? "NONE",
+    commits: { totalCount: options?.commits ?? 1 },
+    labels: { nodes: (options?.labels ?? ["New-Package"]).map((name) => ({ name })) },
     assignees: { nodes: assignees.map((login) => ({ login })) },
   });
 
@@ -907,14 +908,12 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
       },
     } as unknown as GitHubApiClient;
 
-    const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
-      mockClient,
-      "repo:microsoft/winget-pkgs",
-      2,
-      1000,
-    );
+    const { unassignedBottom, assignedBottom, unassignedTruncated, assignedTruncated } =
+      await fetchAssigneeFrontiers(mockClient, "repo:microsoft/winget-pkgs", 2, 1000);
 
     expect(queryCalls).toBe(2);
+    expect(unassignedTruncated).toBe(false);
+    expect(assignedTruncated).toBe(false);
     expect(unassignedBottom.map((r) => r.Number)).toEqual([501, 502]);
     expect(unassignedBottom[0].ThirdPartyAssignees).toEqual([]);
     expect(unassignedBottom[1].ThirdPartyAssignees).toEqual([]);
@@ -952,19 +951,17 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
         }) as unknown as T,
     } as unknown as GitHubApiClient;
 
-    const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
-      mockClient,
-      "repo:microsoft/winget-pkgs",
-      10,
-      1000,
-    );
+    const { unassignedBottom, assignedBottom, unassignedTruncated, assignedTruncated } =
+      await fetchAssigneeFrontiers(mockClient, "repo:microsoft/winget-pkgs", 10, 1000);
 
     expect(unassignedBottom.map((r) => r.Number)).toEqual([601, 602, 604]);
     expect(assignedBottom.map((r) => r.Number)).toEqual([603]);
     expect(assignedBottom[0].ThirdPartyAssignees).toEqual(["stephengillie"]);
+    expect(unassignedTruncated).toBe(false);
+    expect(assignedTruncated).toBe(false);
   });
 
-  test("片側が上限件数未満のまま maxTraverseNodes 上限に達しても異常終了せず収集済みの結果を返す", async () => {
+  test("片側が上限件数未満のまま maxTraverseNodes 上限に達した場合、収集済み結果を返しつつ未完了フラグを立てる", async () => {
     const nodes = [
       createAssigneeNode(701, "2026-10-01T00:00:00Z", "u1", []),
       createAssigneeNode(702, "2026-10-02T00:00:00Z", "u2", []),
@@ -978,15 +975,87 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
         }) as unknown as T,
     } as unknown as GitHubApiClient;
 
-    const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
-      mockClient,
-      "repo:microsoft/winget-pkgs",
-      10,
-      3,
-    );
+    const { unassignedBottom, assignedBottom, unassignedTruncated, assignedTruncated } =
+      await fetchAssigneeFrontiers(mockClient, "repo:microsoft/winget-pkgs", 10, 3);
 
     expect(unassignedBottom.map((r) => r.Number)).toEqual([701, 702]);
     expect(assignedBottom.map((r) => r.Number)).toEqual([703]);
+    expect(unassignedTruncated).toBe(true);
+    expect(assignedTruncated).toBe(true);
+  });
+
+  test("パターン型阻害ラベル（Error-* / *-Error / Policy-Test-*）を両アサイン区分から除外し、複数コミット・常連著者は除外しない", async () => {
+    const nodes = [
+      createAssigneeNode(751, "2026-10-01T00:00:00Z", "u1", [], {
+        labels: ["New-Package", "Error-Hash"],
+      }),
+      createAssigneeNode(752, "2026-10-02T00:00:00Z", "u2", ["stephengillie"], {
+        labels: ["New-Package", "Validation-Error"],
+      }),
+      createAssigneeNode(753, "2026-10-03T00:00:00Z", "u3", [], {
+        labels: ["New-Package", "Policy-Test-Sandbox"],
+      }),
+      createAssigneeNode(754, "2026-10-04T00:00:00Z", "regular", [], {
+        commits: 4,
+        authorAssociation: "MEMBER",
+      }),
+      createAssigneeNode(755, "2026-10-05T00:00:00Z", "u5", ["trenly"], {
+        commits: 3,
+        authorAssociation: "CONTRIBUTOR",
+      }),
+    ];
+
+    const mockClient = {
+      graphql: async <T>(): Promise<T> =>
+        ({
+          search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+        }) as unknown as T,
+    } as unknown as GitHubApiClient;
+
+    const result = await fetchAssigneeFrontiers(mockClient, "repo:microsoft/winget-pkgs", 10, 100);
+    expect(result.unassignedBottom.map((r) => r.Number)).toEqual([754]);
+    expect(result.assignedBottom.map((r) => r.Number)).toEqual([755]);
+    expect(result.unassignedTruncated).toBe(false);
+    expect(result.assignedTruncated).toBe(false);
+  });
+
+  test("maxTraverseNodes 上限で未アサインが 0 件のまま打ち切られた場合は unassignedTruncated=true（逆区分も同様）", async () => {
+    const assignedOnlyClient = {
+      graphql: async <T>(): Promise<T> =>
+        ({
+          search: {
+            pageInfo: { hasNextPage: true, endCursor: "c1" },
+            nodes: [createAssigneeNode(761, "2026-10-01T00:00:00Z", "u1", ["stephengillie"])],
+          },
+        }) as unknown as T,
+    } as unknown as GitHubApiClient;
+
+    const r1 = await fetchAssigneeFrontiers(assignedOnlyClient, "repo:microsoft/winget-pkgs", 1, 1);
+    expect(r1.unassignedBottom).toEqual([]);
+    expect(r1.assignedBottom.map((r) => r.Number)).toEqual([761]);
+    expect(r1.unassignedTruncated).toBe(true);
+    expect(r1.assignedTruncated).toBe(false);
+
+    const unassignedOnlyClient = {
+      graphql: async <T>(): Promise<T> =>
+        ({
+          search: {
+            pageInfo: { hasNextPage: true, endCursor: "c1" },
+            nodes: [createAssigneeNode(762, "2026-10-01T00:00:00Z", "u2", [])],
+          },
+        }) as unknown as T,
+    } as unknown as GitHubApiClient;
+
+    const r2 = await fetchAssigneeFrontiers(
+      unassignedOnlyClient,
+      "repo:microsoft/winget-pkgs",
+      1,
+      1,
+    );
+    expect(r2.unassignedBottom.map((r) => r.Number)).toEqual([762]);
+    expect(r2.assignedBottom).toEqual([]);
+    expect(r2.unassignedTruncated).toBe(false);
+    expect(r2.assignedTruncated).toBe(true);
   });
 
   test("runExploreDepths は DepthsVersion=2 を維持したまま UnassignedBottom / AssignedBottom / TargetPr.ThirdPartyAssignees を保存する", async () => {

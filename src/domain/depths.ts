@@ -160,7 +160,7 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
   };
 }
 
-function hasBlockedLabel(node: GraphQLPrNode): boolean {
+export function hasBlockedLabel(node: GraphQLPrNode): boolean {
   const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
   return labelNames.some((name) => BLOCKED_PATTERNS.some((pattern) => pattern.test(name)));
 }
@@ -251,6 +251,8 @@ export function createDepthsSnapshot(params: {
   firstTimerBottom?: DepthsRow[];
   unassignedBottom?: DepthsRow[];
   assignedBottom?: DepthsRow[];
+  unassignedTruncated?: boolean;
+  assignedTruncated?: boolean;
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
@@ -265,6 +267,8 @@ export function createDepthsSnapshot(params: {
     ...(params.firstTimerBottom ? { FirstTimerBottom: params.firstTimerBottom } : {}),
     ...(params.unassignedBottom ? { UnassignedBottom: params.unassignedBottom } : {}),
     ...(params.assignedBottom ? { AssignedBottom: params.assignedBottom } : {}),
+    ...(params.unassignedTruncated ? { UnassignedTruncated: true } : {}),
+    ...(params.assignedTruncated ? { AssignedTruncated: true } : {}),
     ExpressLane: params.expressLane,
   };
 }

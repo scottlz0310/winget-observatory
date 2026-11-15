@@ -11,6 +11,7 @@ import {
   formatGraphQLDepthsRow,
   formatTargetPrInfo,
   getThirdPartyAssignees,
+  hasBlockedLabel,
   isFirstTimerCandidate,
   isStaleCandidate,
   summarizeAssigneeFrontier,
@@ -244,12 +245,15 @@ export async function fetchFirstTimerBottom(
 export interface AssigneeFrontiersResult {
   unassignedBottom: DepthsRow[];
   assignedBottom: DepthsRow[];
+  unassignedTruncated: boolean;
+  assignedTruncated: boolean;
 }
 
 /**
  * 健康な待機 PR（sort:created-asc）を 1 回のページング走査で走査し、
  * 第三者 Assignees の有無によって「未アサイン前線」と「アサイン済み前線」に分離して各上位 limit 件を抽出する。
- * 片側または両側が limit 未満で走査終端・走査上限に達しても異常終了せず収集済み結果を返す。
+ * クエリで表現できないパターン型阻害ラベル（Error-* / Policy-Test-* 等）は採用前に除外する。
+ * 走査上限到達により未走査 PR を残したまま打ち切られた区分は *Truncated=true として記録し、全件走査の自然終端と区別する。
  */
 export async function fetchAssigneeFrontiers(
   client: GitHubApiClient,
@@ -260,6 +264,7 @@ export async function fetchAssigneeFrontiers(
   let cursor: string | null = null;
   let hasNext = true;
   let traversedCount = 0;
+  let reachedNaturalEnd = false;
   const unassignedBottom: DepthsRow[] = [];
   const assignedBottom: DepthsRow[] = [];
   const query = `${baseQuery} sort:created-asc`;
@@ -282,7 +287,7 @@ export async function fetchAssigneeFrontiers(
       traversedCount += nodes.length;
 
       for (const node of nodes) {
-        if (!node?.number) continue;
+        if (!node?.number || hasBlockedLabel(node)) continue;
         const thirdParty = getThirdPartyAssignees(node);
         const row = formatGraphQLDepthsRow(node);
         if (thirdParty.length === 0) {
@@ -300,7 +305,8 @@ export async function fetchAssigneeFrontiers(
       hasNext = Boolean(gqlRes.search?.pageInfo?.hasNextPage);
       cursor = gqlRes.search?.pageInfo?.endCursor ?? null;
 
-      if (!cursor || nodes.length === 0) {
+      if (!hasNext || !cursor || nodes.length === 0) {
+        reachedNaturalEnd = true;
         break;
       }
     } catch (err: unknown) {
@@ -317,6 +323,8 @@ export async function fetchAssigneeFrontiers(
   return {
     unassignedBottom: unassignedBottom.sort(byCreatedAsc).slice(0, limit),
     assignedBottom: assignedBottom.sort(byCreatedAsc).slice(0, limit),
+    unassignedTruncated: !reachedNaturalEnd && unassignedBottom.length < limit,
+    assignedTruncated: !reachedNaturalEnd && assignedBottom.length < limit,
   };
 }
 
@@ -448,12 +456,8 @@ export async function runExploreDepths(
   );
 
   // 5. 未アサイン前線／アサイン済み前線（健康な待機 PR を第三者 Assignees 有無で分離・起票日時順）
-  const { unassignedBottom, assignedBottom } = await fetchAssigneeFrontiers(
-    client,
-    healthyBase,
-    STALE_BOTTOM_LIMIT,
-    FIRST_TIMER_MAX_NODES,
-  );
+  const { unassignedBottom, assignedBottom, unassignedTruncated, assignedTruncated } =
+    await fetchAssigneeFrontiers(client, healthyBase, STALE_BOTTOM_LIMIT, FIRST_TIMER_MAX_NODES);
 
   // 6. 特急レーン（Express Lane）
   let expressBottom: DepthsRow[] = [];
@@ -493,21 +497,31 @@ export async function runExploreDepths(
     log("");
 
     log("【5A. 未アサイン前線 (Unassigned Frontier / 純粋未着手)】");
+    const unassignedTruncatedNote = unassignedTruncated ? " [※走査上限到達のため一部未完了]" : "";
     log(
-      `説明: 第三者 Assignees が付いていない健康なPR（セルフアサイン含む）の起票順先頭 (上位 ${unassignedSummary.count} 件 / 先頭: ${unassignedSummary.head ? `${unassignedSummary.head.PR} 起票 ${unassignedSummary.head.作成日時}・経過 ${unassignedSummary.headElapsedDays ?? "-"} 日` : "該当なし"})`,
+      `説明: 第三者 Assignees が付いていない健康なPR（セルフアサイン含む）の起票順先頭 (上位 ${unassignedSummary.count} 件 / 先頭: ${unassignedSummary.head ? `${unassignedSummary.head.PR} 起票 ${unassignedSummary.head.作成日時}・経過 ${unassignedSummary.headElapsedDays ?? "-"} 日` : unassignedTruncated ? "走査上限到達・未確定" : "該当なし"})${unassignedTruncatedNote}`,
     );
-    printRowTable(unassignedBottom, log, { showCommitCount: true });
+    if (unassignedBottom.length === 0 && unassignedTruncated) {
+      log("  走査上限に到達し、未走査の PR が残っているため有無は未確定です");
+    } else {
+      printRowTable(unassignedBottom, log, { showCommitCount: true });
+    }
     log("");
 
     log("【5B. アサイン済み前線 (Assigned Frontier / 介入済み・仕掛かり)】");
+    const assignedTruncatedNote = assignedTruncated ? " [※走査上限到達のため一部未完了]" : "";
     const assigneeBreakdown =
       assignedSummary.assigneeCounts.length > 0
         ? ` / 内訳: ${assignedSummary.assigneeCounts.map((a) => `${a.login}(${a.count})`).join(", ")}`
         : "";
     log(
-      `説明: 第三者 Assignees が付いている健康なPRの起票順先頭 (上位 ${assignedSummary.count} 件 / 先頭: ${assignedSummary.head ? `${assignedSummary.head.PR} 起票 ${assignedSummary.head.作成日時}・経過 ${assignedSummary.headElapsedDays ?? "-"} 日` : "該当なし"}${assigneeBreakdown})`,
+      `説明: 第三者 Assignees が付いている健康なPRの起票順先頭 (上位 ${assignedSummary.count} 件 / 先頭: ${assignedSummary.head ? `${assignedSummary.head.PR} 起票 ${assignedSummary.head.作成日時}・経過 ${assignedSummary.headElapsedDays ?? "-"} 日` : assignedTruncated ? "走査上限到達・未確定" : "該当なし"}${assigneeBreakdown})${assignedTruncatedNote}`,
     );
-    printRowTable(assignedBottom, log, { showCommitCount: true, showThirdPartyAssignees: true });
+    if (assignedBottom.length === 0 && assignedTruncated) {
+      log("  走査上限に到達し、未走査の PR が残っているため有無は未確定です");
+    } else {
+      printRowTable(assignedBottom, log, { showCommitCount: true, showThirdPartyAssignees: true });
+    }
     log("");
 
     if (hasTarget && targetInfo) {
@@ -532,6 +546,8 @@ export async function runExploreDepths(
     firstTimerBottom,
     unassignedBottom,
     assignedBottom,
+    unassignedTruncated,
+    assignedTruncated,
     expressLane: expressBottom,
   });
 

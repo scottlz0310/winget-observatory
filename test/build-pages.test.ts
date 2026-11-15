@@ -1466,4 +1466,57 @@ describe("buildDashboard: 過去実績との比較", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("Issue #96: 走査上限到達（UnassignedTruncated / AssignedTruncated）時は未確定として表示し該当なしと断定しない", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-issue-96-truncated-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-depths.json"),
+      JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
+        Timestamp: "2026-11-15T00:00:00Z",
+        TimestampJst: "2026-11-15 09:00:00",
+        TargetPr: null,
+        HealthyBottom: [],
+        AbsoluteBottom: [],
+        StaleBottom: [],
+        UnassignedBottom: [],
+        AssignedBottom: [
+          {
+            Number: 442001,
+            Title: "Assigned PR",
+            Url: "https://github.com/microsoft/winget-pkgs/pull/442001",
+            CreatedAt: "2026-10-20T00:00:00Z",
+            UpdatedAt: "2026-10-21T00:00:00Z",
+            Author: "user1",
+            CommitCount: 1,
+            ThirdPartyAssignees: ["stephengillie"],
+          },
+        ],
+        UnassignedTruncated: true,
+        AssignedTruncated: true,
+        ExpressLane: [],
+      }),
+      "utf-8",
+    );
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+
+      expect(html).toContain("探索上限到達・未確定");
+      expect(html).toContain(
+        "走査上限に到達したため探索を打ち切りました（未走査の PR が残っており、対象 PR の有無は未確定です）。",
+      );
+      expect(html).not.toContain("現在、未アサインの健康な待機 PR はありません。");
+      expect(html).toContain("上位 1 件（上限到達・一部未完）");
+      expect(html).toContain(
+        "※ 走査上限に到達したため途中で打ち切りました（未走査の PR が残っています）。",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
