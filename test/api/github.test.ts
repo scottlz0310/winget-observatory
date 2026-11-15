@@ -146,6 +146,34 @@ describe("API: GitHubApiClient", () => {
     expect(capturedBody).toContain('"number":464302');
   });
 
+  test("getPullRequest は author と assignees から thirdPartyAssignees を返す", async () => {
+    const mockFetch = async (): Promise<Response> => {
+      return new Response(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                number: 464302,
+                title: "New package: sample",
+                url: "https://github.com/microsoft/winget-pkgs/pull/464302",
+                createdAt: "2026-10-28T21:47:38Z",
+                updatedAt: "2026-11-02T03:00:00Z",
+                author: { login: "scottlz0310" },
+                assignees: { nodes: [{ login: "scottlz0310" }, { login: "stephengillie" }] },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "sample-token", fetch: mockFetch });
+    const pr = await client.getPullRequest("microsoft/winget-pkgs", 464302);
+    expect(pr.author).toBe("scottlz0310");
+    expect(pr.thirdPartyAssignees).toEqual(["stephengillie"]);
+  });
+
   test("getPullRequest は PR が存在しない場合（実 API の NOT_FOUND errors 応答）404 GitHubApiError をスローする", async () => {
     const mockFetch = async (): Promise<Response> => {
       return new Response(

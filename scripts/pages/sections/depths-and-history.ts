@@ -1,6 +1,7 @@
 // キュー境界探索テーブル・待機列の底の比較・仮説②根拠・予想答え合わせ・離脱内訳・直近10回履歴テーブルの描画セクション
 
 import { formatDeltaBadge } from "../../../src/domain/dashboard";
+import { summarizeAssigneeFrontier } from "../../../src/domain/depths";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
 import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
 import type { HistoryRowWithDelta } from "../../../src/models/dashboard";
@@ -18,6 +19,7 @@ interface BottomTableRenderOptions {
   showAuthor?: boolean;
   showCommitCount?: boolean;
   highlightRepeaters?: boolean;
+  highlightThirdPartyAssignees?: boolean;
   elapsedBasis?: "updated" | "created";
 }
 
@@ -31,6 +33,7 @@ function renderBottomRowTable(
     showAuthor = false,
     showCommitCount = false,
     highlightRepeaters = false,
+    highlightThirdPartyAssignees = true,
     elapsedBasis = "updated",
   } = options;
   const observedMs = Date.parse(timestampIso);
@@ -49,13 +52,18 @@ function renderBottomRowTable(
         highlightRepeaters && isRepeater
           ? `<span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者ではないため、初回提出者の底では除外">常連除外</span>`
           : "";
+      const thirdPartyAssignees = item.ThirdPartyAssignees ?? [];
+      const assigneeBadge =
+        highlightThirdPartyAssignees && thirdPartyAssignees.length > 0
+          ? `<span class="badge" style="background: #fef3c7; color: #b45309; font-size: 0.7rem; margin-left: 0.35rem;" title="作成者以外の第三者 Assignees（${escapeHtml(thirdPartyAssignees.join(", "))}）が付与済み">アサイン済: ${escapeHtml(thirdPartyAssignees.join(", "))}</span>`
+          : "";
       const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
       const commitCountText = item.CommitCount !== undefined ? `${item.CommitCount}` : "-";
       const commitCountCell = showCommitCount ? `<td>${commitCountText}</td>` : "";
       return `
         <tr>
           <td>${index + 1}</td>
-          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}</td>
+          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}${assigneeBadge}</td>
           ${authorCell}
           ${commitCountCell}
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
@@ -166,7 +174,7 @@ export function renderBoundaryTableSection(depths: LatestDepths | null): string 
 export function renderBottomComparisonSection(depths: LatestDepths | null): string {
   return `<h2 class="section-title">🧗 待機列の底の比較（優等生 vs 初回提出者）</h2>
     <p class="section-note">
-      左は「1コミット完全放置」の待機前線（常連含む）、右はコミット数制限を外した「初回提出者全体（手直し込み）」の待機前線です。
+      左は「1コミット完全放置」の待機前線（常連含む）、右はコミット数制限を外した「初回提出者全体（手直し込み）」の待機前線です。第三者 Assignees が付いている PR は「アサイン済」バッジで識別できます。
     </p>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
       <div class="card" style="padding: 1.25rem; overflow-x: auto;">
@@ -190,6 +198,125 @@ export function renderBottomComparisonSection(depths: LatestDepths | null): stri
         </p>
         ${renderFirstTimerBottomTable(depths)}
       </div>
+    </div>`;
+}
+
+function renderAssigneeFrontierCard(params: {
+  title: string;
+  description: string;
+  items: NonNullable<LatestDepths["UnassignedBottom"]>;
+  timestamp: string;
+  truncated: boolean;
+  hasRecorded: boolean;
+  emptyConfirmedText: string;
+  emptyLegacyText: string;
+  highlightThirdPartyAssignees: boolean;
+  borderColor: string;
+  titleColor: string;
+  badgeStyle: string;
+  extraMeta?: string;
+}): string {
+  const summary = summarizeAssigneeFrontier(params.items, params.timestamp);
+  const badgeText = params.truncated
+    ? params.items.length === 0
+      ? "探索上限到達・未確定"
+      : `上位 ${summary.count} 件（上限到達・一部未完）`
+    : `上位 ${summary.count} 件`;
+
+  const body =
+    params.items.length > 0
+      ? `${renderBottomRowTable(params.items, params.timestamp, {
+          showAuthor: true,
+          showCommitCount: true,
+          highlightRepeaters: false,
+          highlightThirdPartyAssignees: params.highlightThirdPartyAssignees,
+          elapsedBasis: "created",
+        })}${
+          params.truncated
+            ? `<p class="card-subtext" style="margin-top: 0.5rem;">※ 走査上限に到達したため途中で打ち切りました（未走査の PR が残っています）。</p>`
+            : ""
+        }`
+      : `<p style="color: var(--text-muted); font-size: 0.875rem;">${escapeHtml(
+          params.truncated
+            ? "走査上限に到達したため探索を打ち切りました（未走査の PR が残っており、対象 PR の有無は未確定です）。"
+            : params.hasRecorded
+              ? params.emptyConfirmedText
+              : params.emptyLegacyText,
+        )}</p>`;
+
+  const meta = summary.head
+    ? `先頭: #${escapeHtml(summary.head.Number)}（起票 ${escapeHtml(summary.head.作成日時 || summary.head.CreatedAt)}・経過 ${summary.headElapsedDays ?? "-"} 日）${params.extraMeta ?? ""}`
+    : "";
+
+  return `<div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid ${params.borderColor};">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 600; color: ${params.titleColor};">${params.title}</h3>
+          <span class="badge" style="${params.badgeStyle}">${escapeHtml(badgeText)}</span>
+        </div>
+        <p class="section-note" style="margin-bottom: 0.5rem;">
+          ${params.description}
+        </p>
+        ${meta ? `<p class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(meta)}</p>` : ""}
+        ${body}
+      </div>`;
+}
+
+/** 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）比較セクションを描画する */
+export function renderAssigneeFrontierComparisonSection(depths: LatestDepths | null): string {
+  const timestamp = depths?.Timestamp ?? "";
+  const unassignedItems = depths?.UnassignedBottom ?? [];
+  const assignedItems = depths?.AssignedBottom ?? [];
+  const unassignedTruncated = Boolean(depths?.UnassignedTruncated);
+  const assignedTruncated = Boolean(depths?.AssignedTruncated);
+  const hasRecordedUnassigned =
+    depths?.UnassignedBottom !== undefined ||
+    depths?.AssignedBottom !== undefined ||
+    unassignedTruncated ||
+    assignedTruncated;
+
+  const assignedSummary = summarizeAssigneeFrontier(assignedItems, timestamp);
+  const assigneeBreakdown =
+    assignedSummary.assigneeCounts.length > 0
+      ? ` / 内訳: ${assignedSummary.assigneeCounts.map((a) => `${a.login}(${a.count})`).join(", ")}`
+      : "";
+
+  return `<h2 class="section-title">👀 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）</h2>
+    <p class="section-note">
+      健康な待機 PR（New-Package・起票順）から、PR 作成者自身のセルフアサインを除外した第三者 Assignees の有無で分離しています。未アサイン前線は誰にも触れられていない純粋な未着手キュー、アサイン済み前線は自動警告放置や修正往復中の仕掛かり案件です。
+    </p>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+      ${renderAssigneeFrontierCard({
+        title: "🟦 未アサイン前線（純粋未着手）",
+        description: "第三者 Assignees なし（セルフアサイン含む）。起票日時の古い順です。",
+        items: unassignedItems,
+        timestamp,
+        truncated: unassignedTruncated,
+        hasRecorded: hasRecordedUnassigned,
+        emptyConfirmedText: "現在、未アサインの健康な待機 PR はありません。",
+        emptyLegacyText:
+          "未アサイン前線のデータはまだありません（次回の定期観測から記録されます）。",
+        highlightThirdPartyAssignees: false,
+        borderColor: "#0ea5e9",
+        titleColor: "#0284c7",
+        badgeStyle: "background: #e0f2fe; color: #0369a1; font-weight: 600;",
+      })}
+
+      ${renderAssigneeFrontierCard({
+        title: "🟧 アサイン済み前線（介入済み・仕掛かり）",
+        description: "第三者 Assignees ありの健康な待機 PR。起票日時の古い順です。",
+        items: assignedItems,
+        timestamp,
+        truncated: assignedTruncated,
+        hasRecorded: hasRecordedUnassigned,
+        emptyConfirmedText: "現在、第三者アサイン済みの健康な待機 PR はありません。",
+        emptyLegacyText:
+          "アサイン済み前線のデータはまだありません（次回の定期観測から記録されます）。",
+        highlightThirdPartyAssignees: true,
+        borderColor: "var(--warning)",
+        titleColor: "var(--warning)",
+        badgeStyle: "background: #fef3c7; color: #b45309; font-weight: 600;",
+        extraMeta: assigneeBreakdown,
+      })}
     </div>`;
 }
 

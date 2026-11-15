@@ -7,10 +7,59 @@ import type {
   TargetPrInfo,
 } from "../models/depths";
 
-import { formatJstDateTime } from "./formatters";
+import { DAY_MS, formatJstDateTime, round1 } from "./formatters";
 import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./labels";
 
 export { formatJstDateTime };
+
+/**
+ * PR 作成者（authorLogin）を除外した第三者 Assignees のログイン名一覧を抽出する。
+ * - 大文字・小文字を区別せずに作成者本人を除外する（セルフアサインを第三者扱いしない）
+ * - authorLogin が null / undefined / 空文字の場合は、有効な全 assignees を第三者として扱う
+ * - 重複（大小文字違い含む）を排除して出現順を保つ
+ */
+export function extractThirdPartyAssignees(
+  assignees:
+    | ReadonlyArray<string | { login?: string | null } | null | undefined>
+    | null
+    | undefined,
+  authorLogin?: string | null,
+): string[] {
+  if (!Array.isArray(assignees)) {
+    return [];
+  }
+
+  const normalizedAuthor = authorLogin?.trim().toLowerCase() || null;
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const entry of assignees) {
+    const rawLogin = typeof entry === "string" ? entry : entry?.login;
+    const login = rawLogin?.trim();
+    if (!login) continue;
+
+    const normalized = login.toLowerCase();
+    if (normalizedAuthor !== null && normalized === normalizedAuthor) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(login);
+  }
+
+  return result;
+}
+
+/**
+ * GraphQL PullRequest ノードから第三者 Assignees 一覧を取得する。
+ */
+export function getThirdPartyAssignees(
+  node: Pick<GraphQLPrNode, "author" | "assignees">,
+): string[] {
+  return extractThirdPartyAssignees(node.assignees?.nodes, node.author?.login);
+}
 
 /**
  * 現行の底スナップショット定義バージョン。
@@ -45,6 +94,9 @@ export function formatDepthsRow(item: GitHubSearchItem): DepthsRow {
     Url: item.html_url,
     Author: item.author,
     AuthorAssociation: item.author_association,
+    ...(item.third_party_assignees !== undefined
+      ? { ThirdPartyAssignees: item.third_party_assignees }
+      : {}),
   };
 }
 
@@ -59,6 +111,10 @@ export function formatTargetPrInfo(view: GitHubPrView): TargetPrInfo {
     CreatedAt: view.createdAt,
     CreatedAtJst: formatJstDateTime(view.createdAt, false),
     UpdatedAt: view.updatedAt,
+    ...(view.author !== undefined ? { Author: view.author } : {}),
+    ...(view.thirdPartyAssignees !== undefined
+      ? { ThirdPartyAssignees: view.thirdPartyAssignees }
+      : {}),
   };
 }
 
@@ -100,10 +156,11 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
     Author: node.author?.login,
     AuthorAssociation: node.authorAssociation,
     CommitCount: node.commits?.totalCount,
+    ...(node.assignees !== undefined ? { ThirdPartyAssignees: getThirdPartyAssignees(node) } : {}),
   };
 }
 
-function hasBlockedLabel(node: GraphQLPrNode): boolean {
+export function hasBlockedLabel(node: GraphQLPrNode): boolean {
   const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
   return labelNames.some((name) => BLOCKED_PATTERNS.some((pattern) => pattern.test(name)));
 }
@@ -132,6 +189,55 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
   return !hasBlockedLabel(node);
 }
 
+export interface AssigneeFrontierSummary {
+  /** 抽出された上位件数 */
+  count: number;
+  /** 先頭 PR（起票日時が最古の行）。該当なしなら null */
+  head: DepthsRow | null;
+  /** 先頭 PR の起票日時からの経過日数（日）。算出不能なら null */
+  headElapsedDays: number | null;
+  /** 第三者 Assignees 別の件数内訳（件数降順） */
+  assigneeCounts: Array<{ login: string; count: number }>;
+}
+
+/**
+ * 未アサイン前線／アサイン済み前線の行リストから、先頭位置・経過日数・アサイン内訳を算出する。
+ */
+export function summarizeAssigneeFrontier(
+  rows: DepthsRow[],
+  observedAt: Date | string | number,
+): AssigneeFrontierSummary {
+  const head = rows[0] ?? null;
+  const observedMs =
+    observedAt instanceof Date
+      ? observedAt.getTime()
+      : typeof observedAt === "number"
+        ? observedAt
+        : Date.parse(observedAt);
+  const headCreatedMs = head ? Date.parse(head.CreatedAt) : Number.NaN;
+  const headElapsedDays =
+    Number.isFinite(observedMs) && Number.isFinite(headCreatedMs)
+      ? round1((observedMs - headCreatedMs) / DAY_MS)
+      : null;
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    for (const login of row.ThirdPartyAssignees ?? []) {
+      counts.set(login, (counts.get(login) ?? 0) + 1);
+    }
+  }
+  const assigneeCounts = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([login, count]) => ({ login, count }));
+
+  return {
+    count: rows.length,
+    head,
+    headElapsedDays,
+    assigneeCounts,
+  };
+}
+
 /**
  * 各底の行リストとメタデータから DepthsSnapshot を組み立てる。
  */
@@ -143,6 +249,10 @@ export function createDepthsSnapshot(params: {
   absoluteBottom: DepthsRow[];
   staleBottom: DepthsRow[];
   firstTimerBottom?: DepthsRow[];
+  unassignedBottom?: DepthsRow[];
+  assignedBottom?: DepthsRow[];
+  unassignedTruncated?: boolean;
+  assignedTruncated?: boolean;
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
@@ -155,6 +265,10 @@ export function createDepthsSnapshot(params: {
     AbsoluteBottom: params.absoluteBottom,
     StaleBottom: params.staleBottom,
     ...(params.firstTimerBottom ? { FirstTimerBottom: params.firstTimerBottom } : {}),
+    ...(params.unassignedBottom ? { UnassignedBottom: params.unassignedBottom } : {}),
+    ...(params.assignedBottom ? { AssignedBottom: params.assignedBottom } : {}),
+    ...(params.unassignedTruncated ? { UnassignedTruncated: true } : {}),
+    ...(params.assignedTruncated ? { AssignedTruncated: true } : {}),
     ExpressLane: params.expressLane,
   };
 }

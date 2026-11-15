@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
 import {
+  calculateFirstReviewForecast,
   calculateLifetimeForecast,
   calculateStaleFrontierForecast,
   extractFirstTimerFrontierSamples,
   extractStaleFrontierSamples,
+  extractUnassignedFrontierSamples,
   parseDepthsHistory,
 } from "../../src/domain/forecast";
 import type { DepthsRow, DepthsSnapshot } from "../../src/models/depths";
-import type { StaleFrontierSample } from "../../src/models/forecast";
+import type { StaleFrontierSample, UnassignedFrontierSample } from "../../src/models/forecast";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -242,5 +244,113 @@ describe("Domain: calculateLifetimeForecast", () => {
     ["観測時刻が不正", created, 44.5, Number.NaN],
   ])("算出できない入力は null を返す: %s", (_name, createdMs, median, nowMs) => {
     expect(calculateLifetimeForecast(createdMs, median, 45, nowMs)).toBeNull();
+  });
+});
+
+describe("Domain: extractUnassignedFrontierSamples", () => {
+  test("DepthsVersion=2 かつ UnassignedBottom を持つスナップショットから CreatedAt 基準の観測列を時刻昇順で抽出する", () => {
+    const legacyV2WithoutUnassigned = snapshot("2026-11-01T00:00:00Z", []);
+    const oldV1 = snapshot("2026-11-01T02:00:00Z", [], 1);
+    oldV1.UnassignedBottom = [row(100, "2026-10-15T00:00:00Z", "2026-10-01T00:00:00Z")];
+
+    const s2 = snapshot("2026-11-02T08:00:00Z", []);
+    s2.UnassignedBottom = [row(200, "2026-10-25T00:00:00Z", "2026-10-10T00:00:00Z")];
+    const s1 = snapshot("2026-11-01T08:00:00Z", []);
+    s1.UnassignedBottom = [row(150, "2026-10-20T00:00:00Z", "2026-10-09T00:00:00Z")];
+
+    const samples = extractUnassignedFrontierSamples([legacyV2WithoutUnassigned, oldV1, s2, s1]);
+    expect(samples.map((s) => s.pr)).toEqual([150, 200]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-10-09T00:00:00Z"));
+    expect(samples[1].createdMs).toBe(Date.parse("2026-10-10T00:00:00Z"));
+  });
+});
+
+describe("Domain: calculateFirstReviewForecast", () => {
+  const unassignedSample = (
+    hoursFromT0: number,
+    frontierDaysBeforeT0: number,
+    pr = 1,
+  ): UnassignedFrontierSample => ({
+    timestampMs: T0 + hoursFromT0 * HOUR,
+    pr,
+    createdMs: T0 - frontierDaysBeforeT0 * DAY,
+  });
+  const targetCreated = T0 - 10 * DAY;
+
+  test("観測が無い場合は no-samples を返す", () => {
+    const result = calculateFirstReviewForecast([], targetCreated);
+    expect(result.status).toBe("no-samples");
+    expect(result.frontier).toBeNull();
+    expect(result.observedEtaDays).toBeNull();
+  });
+
+  test("基準 PR の起票時刻が不明なら no-target と現在位置を返す", () => {
+    const result = calculateFirstReviewForecast([unassignedSample(0, 20)], null);
+    expect(result.status).toBe("no-target");
+    expect(result.lagDays).toBe(20);
+    expect(result.observedEtaDays).toBeNull();
+  });
+
+  test("最小間隔（6 時間）未満の観測だけでは insufficient-window となり定常目安を返す", () => {
+    const result = calculateFirstReviewForecast(
+      [unassignedSample(0, 20.1), unassignedSample(5, 20)],
+      targetCreated,
+    );
+    expect(result.status).toBe("insufficient-window");
+    expect(result.steadyEtaDays).toBe(10);
+    expect(result.observedEtaDays).toBeNull();
+    expect(result.observedUnavailable).toBe("insufficient-window");
+  });
+
+  test.each([
+    ["実時間と同じ速度（1 日/日）", [unassignedSample(0, 21), unassignedSample(24, 20)], 1, 10],
+    ["実時間の半分の速度", [unassignedSample(0, 20.5), unassignedSample(24, 20)], 0.5, 20],
+    ["実時間の 2 倍の速度", [unassignedSample(0, 22), unassignedSample(24, 20)], 2, 5],
+  ])("実測進行速度に基づく到達予想: %s", (_name, samples, speed, eta) => {
+    const result = calculateFirstReviewForecast(samples, targetCreated);
+    expect(result.status).toBe("forecasted");
+    expect(result.observedSpeed).toBe(speed);
+    expect(result.observedEtaDays).toBe(eta);
+    expect(result.observedDateMs).toBe(samples[samples.length - 1].timestampMs + eta * DAY);
+    expect(result.observedUnavailable).toBeNull();
+  });
+
+  test.each([
+    ["停滞（進みなし）", [unassignedSample(0, 20, 5), unassignedSample(24, 20, 5)]],
+    ["後退", [unassignedSample(0, 20), unassignedSample(24, 21)]],
+  ])("観測期間内に進みが無ければ no-progress を返す: %s", (_name, samples) => {
+    const result = calculateFirstReviewForecast(samples, targetCreated);
+    expect(result.status).toBe("no-progress");
+    expect(result.observedEtaDays).toBeNull();
+    expect(result.steadyEtaDays).toBeGreaterThan(0);
+  });
+
+  test("未アサイン前線が基準 PR の起票日時に到達済みなら reached（残り 0 日）を返す", () => {
+    const result = calculateFirstReviewForecast(
+      [unassignedSample(0, 11), unassignedSample(24, 9)],
+      targetCreated,
+    );
+    expect(result.status).toBe("reached");
+    expect(result.gapDays).toBe(-1);
+    expect(result.steadyEtaDays).toBe(0);
+    expect(result.observedEtaDays).toBe(0);
+  });
+
+  test("基準 PR 自身に第三者 Assignees が付与済みの場合は target-assigned を返す", () => {
+    const result = calculateFirstReviewForecast(
+      [unassignedSample(0, 21), unassignedSample(24, 20)],
+      targetCreated,
+      { targetThirdPartyAssignees: ["stephengillie"] },
+    );
+    expect(result.status).toBe("target-assigned");
+    expect(result.targetAssignees).toEqual(["stephengillie"]);
+    expect(result.steadyEtaDays).toBe(0);
+    expect(result.observedEtaDays).toBe(0);
+
+    const noSamplesAssigned = calculateFirstReviewForecast([], targetCreated, {
+      targetThirdPartyAssignees: ["stephengillie"],
+    });
+    expect(noSamplesAssigned.status).toBe("target-assigned");
+    expect(noSamplesAssigned.observedEtaDays).toBe(0);
   });
 });

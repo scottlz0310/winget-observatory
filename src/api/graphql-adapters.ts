@@ -1,3 +1,4 @@
+import { extractThirdPartyAssignees } from "../domain/depths";
 import type { GitHubPrView, GitHubSearchItem } from "../models/depths";
 import type {
   GitHubDetailedSearchItem,
@@ -26,6 +27,14 @@ export function adaptGraphQLToSearchItem(node: GraphQLPullRequestNode): GitHubSe
     updated_at: String(node.updatedAt),
     author: node.author?.login ?? undefined,
     author_association: node.authorAssociation ?? undefined,
+    ...(node.assignees !== undefined
+      ? {
+          third_party_assignees: extractThirdPartyAssignees(
+            node.assignees?.nodes,
+            node.author?.login,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -82,6 +91,15 @@ export function adaptGraphQLToPrView(node: GraphQLPullRequestNode): GitHubPrView
     url: String(node.url),
     createdAt: String(node.createdAt),
     updatedAt: String(node.updatedAt),
+    ...(node.author?.login ? { author: node.author.login } : {}),
+    ...(node.assignees !== undefined
+      ? {
+          thirdPartyAssignees: extractThirdPartyAssignees(
+            node.assignees?.nodes,
+            node.author?.login,
+          ),
+        }
+      : {}),
   };
 }
 

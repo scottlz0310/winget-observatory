@@ -5,12 +5,15 @@ import {
   buildHealthyBaseQuery,
   CURRENT_DEPTHS_VERSION,
   createDepthsSnapshot,
+  extractThirdPartyAssignees,
   formatDepthsRow,
   formatGraphQLDepthsRow,
   formatJstDateTime,
   formatTargetPrInfo,
+  getThirdPartyAssignees,
   isFirstTimerCandidate,
   isStaleCandidate,
+  summarizeAssigneeFrontier,
   truncateTitle,
 } from "../../src/domain/depths";
 import type { GitHubPrView, GitHubSearchItem, GraphQLPrNode } from "../../src/models/depths";
@@ -242,6 +245,137 @@ describe("Domain: depths logic", () => {
       expect(isStaleCandidate(sampleNodes[3])).toBe(false); // blocked label
       expect(isStaleCandidate(sampleNodes[4])).toBe(true); // 1 commit, author null でも優等生としては許容
       expect(isStaleCandidate(sampleNodes[5])).toBe(true);
+    });
+  });
+
+  describe("第三者 Assignees 判定と前線サマリー", () => {
+    test.each<{
+      label: string;
+      assignees: Array<string | { login?: string | null } | null>;
+      author: string | null;
+      expected: string[];
+    }>([
+      {
+        label: "未アサイン（空配列）",
+        assignees: [],
+        author: "alice",
+        expected: [],
+      },
+      {
+        label: "セルフアサインのみ（大小文字違い含む）",
+        assignees: ["Alice"],
+        author: "alice",
+        expected: [],
+      },
+      {
+        label: "第三者アサインのみ",
+        assignees: ["stephengillie"],
+        author: "alice",
+        expected: ["stephengillie"],
+      },
+      {
+        label: "セルフアサイン＋第三者アサイン併用",
+        assignees: ["alice", "stephengillie", "trenly"],
+        author: "ALICE",
+        expected: ["stephengillie", "trenly"],
+      },
+      {
+        label: "author が null の場合、assignees が空でなければ第三者ありとみなす",
+        assignees: ["stephengillie"],
+        author: null,
+        expected: ["stephengillie"],
+      },
+      {
+        label: "author が null で assignees も空なら空配列",
+        assignees: [],
+        author: null,
+        expected: [],
+      },
+      {
+        label: "重複・null・空白を含むノード配列を正規化する",
+        assignees: [
+          { login: "alice" },
+          { login: "stephengillie" },
+          { login: "StephenGillie" },
+          { login: null },
+          null,
+        ],
+        author: "alice",
+        expected: ["stephengillie"],
+      },
+    ])("extractThirdPartyAssignees: $label", ({ assignees, author, expected }) => {
+      expect(extractThirdPartyAssignees(assignees, author)).toEqual(expected);
+    });
+
+    test("getThirdPartyAssignees と formatGraphQLDepthsRow は GraphQL ノードから第三者 Assignees を記録する", () => {
+      const selfAssignedNode: GraphQLPrNode = {
+        number: 460001,
+        title: "Self assigned PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/460001",
+        createdAt: "2026-10-10T00:00:00Z",
+        updatedAt: "2026-10-11T00:00:00Z",
+        author: { login: "alice" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 1 },
+        assignees: { nodes: [{ login: "alice" }] },
+      };
+      expect(getThirdPartyAssignees(selfAssignedNode)).toEqual([]);
+      expect(formatGraphQLDepthsRow(selfAssignedNode).ThirdPartyAssignees).toEqual([]);
+
+      const thirdPartyNode: GraphQLPrNode = {
+        ...selfAssignedNode,
+        number: 460002,
+        assignees: { nodes: [{ login: "alice" }, { login: "stephengillie" }] },
+      };
+      expect(getThirdPartyAssignees(thirdPartyNode)).toEqual(["stephengillie"]);
+      expect(formatGraphQLDepthsRow(thirdPartyNode).ThirdPartyAssignees).toEqual(["stephengillie"]);
+    });
+
+    test("summarizeAssigneeFrontier は先頭位置・経過日数・アサイン内訳を算出する", () => {
+      const now = new Date("2026-11-15T00:00:00Z");
+      const rows = [
+        {
+          PR: "#100",
+          Number: 100,
+          作成日時: "2026-11-05 09:00",
+          更新日時: "2026-11-06 09:00",
+          CreatedAt: "2026-11-05T00:00:00Z",
+          UpdatedAt: "2026-11-06T00:00:00Z",
+          タイトル: "First",
+          Title: "First",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/100",
+          ThirdPartyAssignees: ["stephengillie"],
+        },
+        {
+          PR: "#101",
+          Number: 101,
+          作成日時: "2026-11-07 09:00",
+          更新日時: "2026-11-08 09:00",
+          CreatedAt: "2026-11-07T00:00:00Z",
+          UpdatedAt: "2026-11-08T00:00:00Z",
+          タイトル: "Second",
+          Title: "Second",
+          Url: "https://github.com/microsoft/winget-pkgs/pull/101",
+          ThirdPartyAssignees: ["stephengillie", "trenly"],
+        },
+      ];
+
+      const summary = summarizeAssigneeFrontier(rows, now);
+      expect(summary.count).toBe(2);
+      expect(summary.head?.Number).toBe(100);
+      expect(summary.headElapsedDays).toBe(10);
+      expect(summary.assigneeCounts).toEqual([
+        { login: "stephengillie", count: 2 },
+        { login: "trenly", count: 1 },
+      ]);
+
+      const emptySummary = summarizeAssigneeFrontier([], now);
+      expect(emptySummary).toEqual({
+        count: 0,
+        head: null,
+        headElapsedDays: null,
+        assigneeCounts: [],
+      });
     });
   });
 });

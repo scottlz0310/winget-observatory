@@ -25,6 +25,16 @@ export interface FirstTimerFrontierSample {
   createdMs: number;
 }
 
+/** 未アサイン前線の先頭（第三者アサインなし・起票が最古の健康な PR）の 1 回分の観測 */
+export interface UnassignedFrontierSample {
+  /** 観測時刻（UTC ミリ秒） */
+  timestampMs: number;
+  /** 先頭 PR の番号 */
+  pr: number;
+  /** 先頭 PR の起票時刻（UTC ミリ秒） */
+  createdMs: number;
+}
+
 export type ForecastUnavailableReason =
   /** 先頭の観測が無い */
   | "no-samples"
@@ -34,6 +44,42 @@ export type ForecastUnavailableReason =
   | "insufficient-window"
   /** 観測期間内に先頭が進んでいない（または後退した） */
   | "no-progress";
+
+export type FirstReviewForecastStatus =
+  | ForecastUnavailableReason
+  /** 基準 PR 自身に第三者 Assignees が付与済み（初回レビュー・介入到達済み） */
+  | "target-assigned"
+  /** 未アサイン前線が基準 PR の起票時刻に到達済み */
+  | "reached"
+  /** 実測速度に基づく初回レビュー到達予想日を算出済み */
+  | "forecasted";
+
+export interface FirstReviewForecast {
+  /** 到達予想の状態 */
+  status: FirstReviewForecastStatus;
+  /** 最新の未アサイン前線先頭 PR */
+  frontier: { pr: number; createdMs: number; observedMs: number } | null;
+  /** 先頭の経過日数: 観測時刻 − 先頭の起票時刻（日） */
+  lagDays: number | null;
+  /** 基準 PR の起票時刻 − 先頭の起票時刻（日）。0 以下なら前線が基準 PR に到達済み */
+  gapDays: number | null;
+  /** 基準 PR 自身の第三者 Assignees 一覧 */
+  targetAssignees: string[];
+  /** 定常ペース（速度 1 日/日）仮定での目安日数 */
+  steadyEtaDays: number | null;
+  /** 定常ペース（速度 1 日/日）仮定での到達目安日（UTC ミリ秒） */
+  steadyDateMs: number | null;
+  /** 観測速度モデル: 未アサイン前線の起票時刻の進み（日/日）。測れない場合は null */
+  observedSpeed: number | null;
+  /** 観測速度モデルに基づく初回レビュー到達予想日数 */
+  observedEtaDays: number | null;
+  /** 観測速度モデルに基づく初回レビュー到達予想日（UTC ミリ秒） */
+  observedDateMs: number | null;
+  /** 観測速度の算出に使った期間（時間） */
+  windowHours: number;
+  /** 観測速度が算出できない理由（算出できた場合は null） */
+  observedUnavailable: ForecastUnavailableReason | null;
+}
 
 export interface StaleFrontierForecast {
   /** 最新の先頭 PR */

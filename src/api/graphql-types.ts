@@ -8,6 +8,14 @@ export interface GraphQLAuthor {
   login: string;
 }
 
+export interface GraphQLAssigneeNode {
+  login?: string | null;
+}
+
+export interface GraphQLAssigneeConnection {
+  nodes?: Array<GraphQLAssigneeNode | null> | null;
+}
+
 export interface GraphQLLabelNode {
   name: string;
 }
@@ -45,6 +53,7 @@ export interface GraphQLPullRequestNode {
   authorAssociation?: string | null;
   labels?: GraphQLLabelConnection | null;
   commits?: GraphQLCommitConnection | null;
+  assignees?: GraphQLAssigneeConnection | null;
 }
 
 export interface GraphQLPageInfo {
