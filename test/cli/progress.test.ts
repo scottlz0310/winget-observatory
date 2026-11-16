@@ -247,7 +247,6 @@ describe("CLI: runProgressCli with mock client", () => {
               html_url: "https://github.com/test/repo/pull/100",
               created_at: "2026-10-01T00:00:00Z",
               updated_at: "2026-10-02T00:00:00Z",
-              labels: [],
             },
           ],
         }),
@@ -337,6 +336,28 @@ describe("CLI: runProgressCli with mock client", () => {
           label: { name: "Validation-Completed" },
         },
       ],
+      getPullRequestSampleData: async () => ({
+        createdAt: "2026-11-01T00:00:00Z",
+        commitCount: 1,
+        latestCommittedDate: "2026-11-01T00:00:00Z",
+        timeline: [
+          {
+            event: "labeled",
+            created_at: "2026-11-01T01:00:00Z",
+            label: { name: "New-Package" },
+          },
+          {
+            event: "labeled",
+            created_at: "2026-11-01T01:00:00Z",
+            label: { name: "Azure-Pipeline-Passed" },
+          },
+          {
+            event: "labeled",
+            created_at: "2026-11-01T01:00:00Z",
+            label: { name: "Validation-Completed" },
+          },
+        ],
+      }),
       searchIssuesDetailed: async (
         query: string,
         _sort?: string,
@@ -347,15 +368,12 @@ describe("CLI: runProgressCli with mock client", () => {
         if (query.includes("is:merged")) {
           searchPageCalls.push(page);
           if (page === 1) {
-            // 1ページ目: 100件の候補（すべて条件不成立の無効アイテム）
             const items = Array.from({ length: 100 }, (_, i) => ({
               number: 1000 + i,
-              title: `Invalid Candidate ${i}`,
+              title: `Candidate ${i}`,
               html_url: `https://github.com/test/repo/pull/${1000 + i}`,
               created_at: "2026-11-01T00:00:00Z",
               updated_at: "2026-11-02T00:00:00Z",
-              labels: [], // 必須ラベルなし
-              is_draft: false,
               pull_request: { merged_at: "2026-11-02T10:00:00Z" },
             }));
             return { totalCount: 150, items };
@@ -371,12 +389,6 @@ describe("CLI: runProgressCli with mock client", () => {
                   html_url: "https://github.com/test/repo/pull/2000",
                   created_at: "2026-11-01T00:00:00Z",
                   updated_at: "2026-11-03T00:00:00Z",
-                  labels: [
-                    { name: "New-Package" },
-                    { name: "Azure-Pipeline-Passed" },
-                    { name: "Validation-Completed" },
-                  ],
-                  is_draft: false,
                   pull_request: { merged_at: "2026-11-03T12:00:00Z" },
                 },
               ],
@@ -393,7 +405,6 @@ describe("CLI: runProgressCli with mock client", () => {
               html_url: "https://github.com/test/repo/pull/100",
               created_at: "2026-10-01T00:00:00Z",
               updated_at: "2026-10-02T00:00:00Z",
-              labels: [],
             },
           ],
         };
@@ -432,7 +443,6 @@ describe("CLI: 前線・実質待ち（更新順）の算出", () => {
     html_url: "https://github.com/test/repo/pull/100",
     created_at: "2026-09-01T00:00:00Z",
     updated_at: "2026-09-02T00:00:00Z",
-    labels: [],
   };
 
   const createMockClient = (queries: string[]) =>
@@ -608,7 +618,6 @@ describe("CLI: progress のコミット表示", () => {
             html_url: "https://github.com/test/repo/pull/100",
             created_at: "2026-09-01T00:00:00Z",
             updated_at: "2026-09-02T00:00:00Z",
-            labels: [],
           },
         ],
       }),
@@ -638,7 +647,6 @@ describe("CLI: progress のコミット表示", () => {
 describe("CLI: runProgressCli のエラー伝播", () => {
   test("マージ済みサンプルの計測に失敗した場合は握りつぶさず PR 番号付きで中断する", async () => {
     const readyLabels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
-    let timelineCalls = 0;
     const mockClient = {
       getPullRequestDetails: async () => ({
         number: 200,
@@ -653,16 +661,14 @@ describe("CLI: runProgressCli のエラー伝播", () => {
         labels: readyLabels,
         commits: [{ oid: "abc", messageHeadline: "fix", committedDate: "2026-11-01T00:00:00Z" }],
       }),
-      getIssueTimeline: async () => {
-        timelineCalls++;
-        if (timelineCalls > 1) {
-          throw new Error("rate limited");
-        }
-        return readyLabels.map((name) => ({
+      getIssueTimeline: async () =>
+        readyLabels.map((name) => ({
           event: "labeled",
           created_at: "2026-11-01T01:00:00Z",
           label: { name },
-        }));
+        })),
+      getPullRequestSampleData: async () => {
+        throw new Error("rate limited");
       },
       searchIssuesDetailed: async () => ({
         totalCount: 1,
@@ -673,7 +679,6 @@ describe("CLI: runProgressCli のエラー伝播", () => {
             html_url: "https://github.com/test/repo/pull/100",
             created_at: "2026-10-01T00:00:00Z",
             updated_at: "2026-11-02T00:00:00Z",
-            labels: readyLabels.map((name) => ({ name })),
             pull_request: { merged_at: "2026-11-02T00:00:00Z" },
           },
         ],
@@ -808,6 +813,16 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           created_at: new Date(Date.parse(created[num]) + 3_600_000).toISOString(),
           label: { name: l.name },
         })),
+      getPullRequestSampleData: async (_repo: string, num: number) => ({
+        createdAt: created[num],
+        commitCount: 1,
+        latestCommittedDate: created[num],
+        timeline: labels.map((l) => ({
+          event: "labeled",
+          created_at: new Date(Date.parse(created[num]) + 3_600_000).toISOString(),
+          label: { name: l.name },
+        })),
+      }),
       searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
         if (query.includes("is:merged")) {
           return {
@@ -818,8 +833,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               html_url: `https://github.com/test/repo/pull/${n}`,
               created_at: created[n],
               updated_at: merged[n],
-              labels,
-              is_draft: false,
               pull_request: { merged_at: merged[n] },
             })),
           };
@@ -827,22 +840,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         return {
           totalCount: 4,
           items: [
-            // 基準 PR より新しい番号・阻害ラベル付きはライバルから除く
+            // 基準 PR より新しい番号はライバルから除く（阻害ラベルは Search クエリ側で除外済み）
             {
               number: 700,
               title: "Newer",
               html_url: "u",
               created_at: "2026-11-03T00:00:00Z",
               updated_at: "2026-11-03T00:00:00Z",
-              labels: [],
-            },
-            {
-              number: 480,
-              title: "Blocked rival",
-              html_url: "u",
-              created_at: "2026-10-30T00:00:00Z",
-              updated_at: "2026-10-30T00:00:00Z",
-              labels: [{ name: "Needs-Author-Feedback" }],
             },
             {
               number: 470,
@@ -850,7 +854,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               html_url: "https://github.com/test/repo/pull/470",
               created_at: "2026-10-28T00:00:00Z",
               updated_at: "2026-10-29T00:00:00Z",
-              labels: [],
             },
           ],
         };
@@ -923,6 +926,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -932,73 +936,69 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               ],
             };
           }
+          throw new Error(`Unexpected PR #${num}`);
+        },
+        getPullRequestSampleData: async (_repo: string, num: number) => {
+          const baseTimeline = [
+            {
+              event: "labeled",
+              created_at:
+                num === 400
+                  ? "2026-10-21T00:00:00Z"
+                  : num === 450
+                    ? "2026-10-25T12:00:00Z"
+                    : "2026-11-02T12:00:00Z",
+              label: { name: "New-Package" },
+            },
+            {
+              event: "labeled",
+              created_at:
+                num === 400
+                  ? "2026-10-21T00:00:00Z"
+                  : num === 450
+                    ? "2026-10-25T12:00:00Z"
+                    : "2026-11-02T12:00:00Z",
+              label: { name: "Azure-Pipeline-Passed" },
+            },
+            {
+              event: "labeled",
+              created_at:
+                num === 400
+                  ? "2026-10-21T00:00:00Z"
+                  : num === 450
+                    ? "2026-10-25T12:00:00Z"
+                    : "2026-11-02T12:00:00Z",
+              label: { name: "Validation-Completed" },
+            },
+          ];
           if (num === 400) {
             return {
-              number: 400,
-              title: "Merged PR 400",
-              url: "https://github.com/test/repo/pull/400",
-              state: "MERGED" as const,
-              isDraft: false,
               createdAt: "2026-10-20T00:00:00Z",
-              updatedAt: "2026-10-24T00:00:00Z",
-              mergedAt: "2026-10-24T00:00:00Z",
-              closedAt: null,
-              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
-              commits: [
-                {
-                  oid: "oid400",
-                  messageHeadline: "feat",
-                  committedDate: "2026-10-20T00:00:00Z",
-                },
-              ],
+              commitCount: 1,
+              latestCommittedDate: "2026-10-20T00:00:00Z",
               author: "repeatUser",
+              timeline: baseTimeline,
             };
           }
           if (num === 450) {
             return {
-              number: 450,
-              title: "Merged PR 450",
-              url: "https://github.com/test/repo/pull/450",
-              state: "MERGED" as const,
-              isDraft: false,
               createdAt: "2026-10-25T00:00:00Z",
-              updatedAt: "2026-10-26T00:00:00Z",
-              mergedAt: "2026-10-26T00:00:00Z",
-              closedAt: null,
-              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
-              commits: [
-                {
-                  oid: "oid450",
-                  messageHeadline: "feat",
-                  committedDate: "2026-10-25T00:00:00Z",
-                },
-              ],
+              commitCount: 1,
+              latestCommittedDate: "2026-10-25T00:00:00Z",
               author: "repeatUser", // 同一バッチ内で2回登場
+              timeline: baseTimeline,
             };
           }
           if (num === 600) {
             return {
-              number: 600,
-              title: "Merged PR 600",
-              url: "https://github.com/test/repo/pull/600",
-              state: "MERGED" as const,
-              isDraft: false,
               createdAt: "2026-11-02T00:00:00Z",
-              updatedAt: "2026-11-03T00:00:00Z",
-              mergedAt: "2026-11-03T00:00:00Z",
-              closedAt: null,
-              labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
-              commits: [
-                {
-                  oid: "oid600",
-                  messageHeadline: "feat",
-                  committedDate: "2026-11-02T00:00:00Z",
-                },
-              ],
+              commitCount: 1,
+              latestCommittedDate: "2026-11-02T00:00:00Z",
               author: "firstTimerUser", // 単発
+              timeline: baseTimeline,
             };
           }
-          throw new Error(`Unexpected PR #${num}`);
+          throw new Error(`Unexpected sample PR #${num}`);
         },
         graphql: async (query: string) => {
           graphqlCalled = true;
@@ -1081,34 +1081,43 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               },
             ];
           }
+          return [];
+        },
+        getPullRequestSampleData: async (_repo: string, _num: number) => {
           // PR 600: 途中で Error-TestFailure が付与され、その後解除された
-          return [
-            {
-              event: "labeled",
-              created_at: "2026-10-01T01:00:00Z",
-              label: { name: "New-Package" },
-            },
-            {
-              event: "labeled",
-              created_at: "2026-10-01T01:00:00Z",
-              label: { name: "Azure-Pipeline-Passed" },
-            },
-            {
-              event: "labeled",
-              created_at: "2026-10-01T01:00:00Z",
-              label: { name: "Validation-Completed" },
-            },
-            {
-              event: "labeled",
-              created_at: "2026-10-02T01:00:00Z",
-              label: { name: "Error-TestFailure" },
-            },
-            {
-              event: "unlabeled",
-              created_at: "2026-10-30T01:00:00Z",
-              label: { name: "Error-TestFailure" },
-            },
-          ];
+          return {
+            createdAt: "2026-10-01T00:00:00Z",
+            commitCount: 1,
+            latestCommittedDate: "2026-10-01T00:00:00Z",
+            author: "userWithBlockedHistory",
+            timeline: [
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "New-Package" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "Azure-Pipeline-Passed" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-10-01T01:00:00Z",
+                label: { name: "Validation-Completed" },
+              },
+              {
+                event: "labeled",
+                created_at: "2026-10-02T01:00:00Z",
+                label: { name: "Error-TestFailure" },
+              },
+              {
+                event: "unlabeled",
+                created_at: "2026-10-30T01:00:00Z",
+                label: { name: "Error-TestFailure" },
+              },
+            ],
+          };
         },
         getPullRequestDetails: async (_repo: string, num: number) => {
           if (num === 500) {
@@ -1123,6 +1132,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -1132,22 +1142,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               ],
             };
           }
-          return {
-            number: num,
-            title: `Merged PR ${num}`,
-            url: `https://github.com/test/repo/pull/${num}`,
-            state: "MERGED" as const,
-            isDraft: false,
-            createdAt: "2026-10-01T00:00:00Z",
-            updatedAt: "2026-11-01T00:00:00Z",
-            mergedAt: "2026-11-01T00:00:00Z",
-            closedAt: null,
-            labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
-            commits: [
-              { oid: `oid${num}`, messageHeadline: "feat", committedDate: "2026-10-01T00:00:00Z" },
-            ],
-            author: "userWithBlockedHistory",
-          };
+          throw new Error(`Unexpected PR #${num}`);
         },
         graphql: async () => {
           graphqlCalled = true;
@@ -1188,8 +1183,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                 html_url: `https://github.com/test/repo/pull/${n}`,
                 created_at: "2026-10-01T00:00:00Z",
                 updated_at: "2026-11-01T00:00:00Z",
-                labels,
-                is_draft: false,
                 pull_request: { merged_at: "2026-11-01T00:00:00Z" },
               })),
             };
@@ -1218,56 +1211,64 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               },
             ];
           }
-          if (num === 600) {
-            // 途中で converted_to_draft → ready_for_review
-            return [
-              {
-                event: "labeled",
-                created_at: "2026-10-01T01:00:00Z",
-                label: { name: "New-Package" },
-              },
-              {
-                event: "labeled",
-                created_at: "2026-10-01T01:00:00Z",
-                label: { name: "Azure-Pipeline-Passed" },
-              },
-              {
-                event: "labeled",
-                created_at: "2026-10-01T01:00:00Z",
-                label: { name: "Validation-Completed" },
-              },
-              {
-                event: "converted_to_draft",
-                created_at: "2026-10-02T01:00:00Z",
-              },
-              {
-                event: "ready_for_review",
-                created_at: "2026-10-15T01:00:00Z",
-              },
-            ];
-          }
-          // PR 601: 最初から Draft で起票され、後に ready_for_review のみ発生
-          return [
-            {
-              event: "labeled",
-              created_at: "2026-10-01T01:00:00Z",
-              label: { name: "New-Package" },
-            },
-            {
-              event: "labeled",
-              created_at: "2026-10-01T01:00:00Z",
-              label: { name: "Azure-Pipeline-Passed" },
-            },
-            {
-              event: "labeled",
-              created_at: "2026-10-01T01:00:00Z",
-              label: { name: "Validation-Completed" },
-            },
-            {
-              event: "ready_for_review",
-              created_at: "2026-10-10T01:00:00Z",
-            },
-          ];
+          return [];
+        },
+        getPullRequestSampleData: async (_repo: string, num: number) => {
+          const timeline =
+            num === 600
+              ? [
+                  {
+                    event: "labeled",
+                    created_at: "2026-10-01T01:00:00Z",
+                    label: { name: "New-Package" },
+                  },
+                  {
+                    event: "labeled",
+                    created_at: "2026-10-01T01:00:00Z",
+                    label: { name: "Azure-Pipeline-Passed" },
+                  },
+                  {
+                    event: "labeled",
+                    created_at: "2026-10-01T01:00:00Z",
+                    label: { name: "Validation-Completed" },
+                  },
+                  {
+                    event: "converted_to_draft",
+                    created_at: "2026-10-02T01:00:00Z",
+                  },
+                  {
+                    event: "ready_for_review",
+                    created_at: "2026-10-15T01:00:00Z",
+                  },
+                ]
+              : [
+                  {
+                    event: "labeled",
+                    created_at: "2026-10-01T01:00:00Z",
+                    label: { name: "New-Package" },
+                  },
+                  {
+                    event: "labeled",
+                    created_at: "2026-10-01T01:00:00Z",
+                    label: { name: "Azure-Pipeline-Passed" },
+                  },
+                  {
+                    event: "labeled",
+                    created_at: "2026-10-01T01:00:00Z",
+                    label: { name: "Validation-Completed" },
+                  },
+                  {
+                    event: "ready_for_review",
+                    created_at: "2026-10-10T01:00:00Z",
+                  },
+                ];
+          return {
+            createdAt: "2026-10-01T00:00:00Z",
+            commitCount: 1,
+            latestCommittedDate: "2026-10-01T00:00:00Z",
+            author: `draftUser${num}`,
+            timeline,
+          };
         },
         getPullRequestDetails: async (_repo: string, num: number) => {
           if (num === 500) {
@@ -1282,6 +1283,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -1291,22 +1293,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               ],
             };
           }
-          return {
-            number: num,
-            title: `Merged PR ${num}`,
-            url: `https://github.com/test/repo/pull/${num}`,
-            state: "MERGED" as const,
-            isDraft: false,
-            createdAt: "2026-10-01T00:00:00Z",
-            updatedAt: "2026-11-01T00:00:00Z",
-            mergedAt: "2026-11-01T00:00:00Z",
-            closedAt: null,
-            labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
-            commits: [
-              { oid: `oid${num}`, messageHeadline: "feat", committedDate: "2026-10-01T00:00:00Z" },
-            ],
-            author: `draftUser${num}`,
-          };
+          throw new Error(`Unexpected PR #${num}`);
         },
         graphql: async () => {
           graphqlCalled = true;
@@ -1406,12 +1393,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                 html_url: `https://github.com/test/repo/pull/${n}`,
                 created_at: n === 450 ? "2026-10-25T00:00:00Z" : "2026-11-02T00:00:00Z",
                 updated_at: "2026-11-03T00:00:00Z",
-                labels: [
-                  { name: "New-Package" },
-                  { name: "Azure-Pipeline-Passed" },
-                  { name: "Validation-Completed" },
-                ],
-                is_draft: false,
                 pull_request: { merged_at: "2026-11-03T00:00:00Z" },
               })),
             };
@@ -1433,6 +1414,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"],
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -1569,8 +1551,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u103",
                   created_at: new Date(now.getTime() - 6 * dayMs).toISOString(),
                   updated_at: merged5d,
-                  labels,
-                  is_draft: false,
                   pull_request: { merged_at: merged5d },
                 },
                 {
@@ -1579,8 +1559,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u101",
                   created_at: new Date(now.getTime() - 17 * dayMs).toISOString(),
                   updated_at: merged15d,
-                  labels,
-                  is_draft: false,
                   pull_request: { merged_at: merged15d },
                 },
                 {
@@ -1589,8 +1567,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u102",
                   created_at: new Date(now.getTime() - 55 * dayMs).toISOString(),
                   updated_at: merged50d,
-                  labels,
-                  is_draft: false,
                   pull_request: { merged_at: merged50d },
                 },
               ],
@@ -1656,8 +1632,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                 html_url: "u201",
                 created_at: new Date(now.getTime() - 7 * dayMs).toISOString(),
                 updated_at: merged5d,
-                labels,
-                is_draft: false,
                 pull_request: { merged_at: merged5d },
               },
               {
@@ -1666,8 +1640,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                 html_url: "u202",
                 created_at: new Date(now.getTime() - 12 * dayMs).toISOString(),
                 updated_at: merged10d,
-                labels,
-                is_draft: false,
                 pull_request: { merged_at: merged10d },
               },
             ],
@@ -1688,8 +1660,19 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         mergedAt: null,
         closedAt: null,
         labels: labels.map((l) => l.name),
+        commitCount: 1,
         commits: [{ oid: "abc", messageHeadline: "fix", committedDate: merged5d }],
+      }),
+      getPullRequestSampleData: async () => ({
+        createdAt: new Date(now.getTime() - 7 * dayMs).toISOString(),
+        commitCount: 1,
+        latestCommittedDate: merged5d,
         author: "author-test",
+        timeline: labels.map((l) => ({
+          event: "labeled",
+          created_at: new Date(now.getTime() - 6 * dayMs).toISOString(),
+          label: { name: l.name },
+        })),
       }),
       getIssueTimeline: async () =>
         labels.map((l) => ({
@@ -1771,8 +1754,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u301",
                   created_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
                   updated_at: merged3d,
-                  labels,
-                  is_draft: false,
                   pull_request: { merged_at: merged3d },
                 },
                 {
@@ -1781,8 +1762,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u302",
                   created_at: new Date(now.getTime() - 8 * dayMs).toISOString(),
                   updated_at: merged6d,
-                  labels,
-                  is_draft: false,
                   pull_request: { merged_at: merged6d },
                 },
                 {
@@ -1791,8 +1770,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u303",
                   created_at: new Date(now.getTime() - 12 * dayMs).toISOString(),
                   updated_at: merged10d,
-                  labels,
-                  is_draft: false,
                   pull_request: { merged_at: merged10d },
                 },
               ],
@@ -1836,17 +1813,16 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     try {
       const now = new Date();
       const dayMs = 24 * 60 * 60 * 1000;
-      const labels = REQUIRED_LABELS.map((name) => ({ name }));
 
       const searchQueries: string[] = [];
       const detailFetchedPrs: number[] = [];
       const timelineFetchedPrs: number[] = [];
 
       // 45日前（30日超）の PR:
-      // #501: 2コミット（非初回候補 -> スキップされるべき）
-      // #502: 1コミット・クリーン（初回候補 -> 詳細取得されるべき）
-      // #503: 1コミット・常連author（author: frequent, 同一期間に2件 -> スキップされるべき）
-      // #504: 1コミット・常連author（author: frequent, 同一期間に2件 -> スキップされるべき）
+      // #501: 常連author（author: frequent-user, 同一期間に3件 -> スキップされるべき）
+      // #502: 単発author（初回候補 -> サンプル詳細取得されるべき）
+      // #503: 常連author（author: frequent-user, 同一期間に3件 -> スキップされるべき）
+      // #504: 常連author（author: frequent-user, 同一期間に3件 -> スキップされるべき）
       const merged45d = new Date(now.getTime() - 45 * dayMs).toISOString();
 
       const client = {
@@ -1862,26 +1838,20 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               items: [
                 {
                   number: 501,
-                  title: "PR 501 (draft, not first timer)",
+                  title: "PR 501 (frequent author)",
                   html_url: "u501",
                   created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
                   updated_at: merged45d,
-                  labels,
-                  is_draft: true, // Draft -> 非初回
-                  author: "user-501",
-                  commitCount: 1,
+                  author: "frequent-user",
                   pull_request: { merged_at: merged45d },
                 },
                 {
                   number: 502,
-                  title: "PR 502 (1 commit, first timer)",
+                  title: "PR 502 (first timer)",
                   html_url: "u502",
                   created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
                   updated_at: merged45d,
-                  labels,
-                  is_draft: false,
                   author: "first-timer-user",
-                  commitCount: 1, // 1コミット -> 初回候補！
                   pull_request: { merged_at: merged45d },
                 },
                 {
@@ -1890,10 +1860,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u503",
                   created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
                   updated_at: merged45d,
-                  labels,
-                  is_draft: false,
                   author: "frequent-user",
-                  commitCount: 1,
                   pull_request: { merged_at: merged45d },
                 },
                 {
@@ -1902,10 +1869,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u504",
                   created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
                   updated_at: merged45d,
-                  labels,
-                  is_draft: false,
                   author: "frequent-user",
-                  commitCount: 1,
                   pull_request: { merged_at: merged45d },
                 },
               ],
@@ -1928,7 +1892,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
             updatedAt: merged45d,
             mergedAt: isTarget ? null : merged45d,
             closedAt: null,
-            author: "first-timer-user",
+            commitCount: 1,
             commits: [
               {
                 committedDate: new Date(now.getTime() - 50 * dayMs).toISOString(),
@@ -1936,6 +1900,21 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               },
             ],
             labels: REQUIRED_LABELS,
+          };
+        },
+        getPullRequestSampleData: async (_repo: string, prNumber: number) => {
+          detailFetchedPrs.push(prNumber);
+          timelineFetchedPrs.push(prNumber);
+          return {
+            createdAt: new Date(now.getTime() - 50 * dayMs).toISOString(),
+            commitCount: 1,
+            latestCommittedDate: new Date(now.getTime() - 50 * dayMs).toISOString(),
+            author: "first-timer-user",
+            timeline: REQUIRED_LABELS.map((name) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 48 * dayMs).toISOString(),
+              label: { name },
+            })),
           };
         },
         getIssueTimeline: async (_repo: string, prNumber: number) => {
@@ -1997,7 +1976,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     try {
       const now = new Date();
       const dayMs = 24 * 60 * 60 * 1000;
-      const labels = REQUIRED_LABELS.map((name) => ({ name }));
 
       // クエリごとの呼び出し回数と走査された PR 番号を記録
       const queriedFilters: string[] = [];
@@ -2039,10 +2017,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: `u${num}`,
                   created_at: new Date(start.getTime()).toISOString(),
                   updated_at: new Date(start.getTime() + dayMs).toISOString(),
-                  labels,
-                  is_draft: false,
                   author: `user-${num}`,
-                  commitCount: 1,
                   pull_request: {
                     merged_at: new Date(start.getTime() + dayMs).toISOString(),
                   },
@@ -2096,7 +2071,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
 
     try {
       const now = new Date();
-      const labels = REQUIRED_LABELS.map((name) => ({ name }));
       const collectedNumbers: number[] = [];
       const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
 
@@ -2136,10 +2110,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                       html_url: `u${num}`,
                       created_at: start.toISOString(),
                       updated_at: end.toISOString(),
-                      labels,
-                      is_draft: false,
                       author: `user-${num}`,
-                      commitCount: 1,
                       pull_request: { merged_at: end.toISOString() },
                     },
                   ],
@@ -2221,7 +2192,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     try {
       const now = new Date();
       const dayMs = 24 * 60 * 60 * 1000;
-      const labels = REQUIRED_LABELS.map((name) => ({ name }));
 
       // 60日前の PR #601: 以前の観測で IsFirstTimer: true としてキャッシュ保存されている
       const merged60d = new Date(now.getTime() - 60 * dayMs).toISOString();
@@ -2258,10 +2228,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u601",
                   created_at: new Date(now.getTime() - 65 * dayMs).toISOString(),
                   updated_at: merged60d,
-                  labels,
-                  is_draft: false,
                   author: "repeat-author",
-                  commitCount: 1,
                   pull_request: { merged_at: merged60d },
                 },
                 {
@@ -2270,10 +2237,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u602",
                   created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
                   updated_at: merged45d,
-                  labels,
-                  is_draft: false,
                   author: "repeat-author", // 同一作者！
-                  commitCount: 1,
                   pull_request: { merged_at: merged45d },
                 },
               ],
@@ -2319,7 +2283,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     try {
       const now = new Date();
       const dayMs = 24 * 60 * 60 * 1000;
-      const labels = REQUIRED_LABELS.map((name) => ({ name }));
 
       // 45日前の 2コミット PR #701: 以前の lookbackDays=30 の実行で
       // 30日超の窓で 2 コミットだったため not-first-timer-candidate として除外キャッシュ保存されている
@@ -2346,10 +2309,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u701",
                   created_at: new Date(now.getTime() - 50 * dayMs).toISOString(),
                   updated_at: merged45d,
-                  labels,
-                  is_draft: false,
                   author: "user-701",
-                  commitCount: 2,
                   pull_request: { merged_at: merged45d },
                 },
               ],
@@ -2360,7 +2320,6 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           )(query);
         },
         getPullRequestDetails: async (_repo: string, prNumber: number) => {
-          if (prNumber === 701) detailsFetched = true;
           const isTarget = prNumber === options.targetPr;
           return {
             number: prNumber,
@@ -2372,18 +2331,28 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
             updatedAt: merged45d,
             mergedAt: isTarget ? null : merged45d,
             closedAt: null,
-            author: "user-701",
+            commitCount: 2,
             commits: [
-              {
-                committedDate: new Date(now.getTime() - 50 * dayMs).toISOString(),
-                oid: "c1",
-              },
               {
                 committedDate: new Date(now.getTime() - 48 * dayMs).toISOString(),
                 oid: "c2",
               },
             ],
             labels: REQUIRED_LABELS,
+          };
+        },
+        getPullRequestSampleData: async (_repo: string, prNumber: number) => {
+          if (prNumber === 701) detailsFetched = true;
+          return {
+            createdAt: new Date(now.getTime() - 50 * dayMs).toISOString(),
+            commitCount: 2,
+            latestCommittedDate: new Date(now.getTime() - 48 * dayMs).toISOString(),
+            author: "user-701",
+            timeline: REQUIRED_LABELS.map((name) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 48 * dayMs).toISOString(),
+              label: { name },
+            })),
           };
         },
         getIssueTimeline: async () => {
@@ -2451,10 +2420,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "u801",
                   created_at: new Date(now.getTime() - 35 * dayMs).toISOString(),
                   updated_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
-                  labels,
-                  is_draft: false,
                   author: "newbie-dev",
-                  commitCount: 3, // 複数コミット！
                   pull_request: { merged_at: new Date(now.getTime() - 20 * dayMs).toISOString() },
                 },
               ],
@@ -2477,6 +2443,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: labels.map((l) => l.name),
+              commitCount: 1,
               commits: [
                 {
                   oid: "c0",
@@ -2486,37 +2453,19 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               ],
             };
           }
-          return {
-            number: num,
-            title: `PR ${num}`,
-            url: `u${num}`,
-            state: "MERGED" as const,
-            isDraft: false,
-            createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
-            updatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
-            mergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
-            closedAt: null,
-            labels: labels.map((l) => l.name),
-            commits: [
-              {
-                oid: "c1",
-                messageHeadline: "init",
-                committedDate: new Date(now.getTime() - 35 * dayMs).toISOString(),
-              },
-              {
-                oid: "c2",
-                messageHeadline: "fix 1",
-                committedDate: new Date(now.getTime() - 30 * dayMs).toISOString(),
-              },
-              {
-                oid: "c3",
-                messageHeadline: "fix 2",
-                committedDate: new Date(now.getTime() - 25 * dayMs).toISOString(),
-              },
-            ],
-            author: "newbie-dev",
-          };
+          throw new Error(`Unexpected PR #${num}`);
         },
+        getPullRequestSampleData: async () => ({
+          createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
+          commitCount: 3,
+          latestCommittedDate: new Date(now.getTime() - 25 * dayMs).toISOString(),
+          author: "newbie-dev",
+          timeline: labels.map((l) => ({
+            event: "labeled",
+            created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+            label: { name: l.name },
+          })),
+        }),
         getIssueTimeline: async () => {
           return labels.map((l) => ({
             event: "labeled",
@@ -2611,10 +2560,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "https://github.com/test/repo/pull/801",
                   created_at: new Date(now.getTime() - 35 * dayMs).toISOString(),
                   updated_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
-                  labels,
-                  is_draft: false,
                   author: "newbie-dev",
-                  commitCount: 3,
                   pull_request: {
                     merged_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
                   },
@@ -2639,6 +2585,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: labels.map((l) => l.name),
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -2648,23 +2595,20 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               ],
             };
           }
+          throw new Error(`Unexpected PR #${num}`);
+        },
+        getPullRequestSampleData: async () => {
+          timelineFetched = true;
           return {
-            number: num,
-            title: `PR ${num}`,
-            url: `u${num}`,
-            state: "MERGED" as const,
-            isDraft: false,
             createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
-            updatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
-            mergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
-            closedAt: null,
-            labels: labels.map((l) => l.name),
-            commits: [
-              { oid: "c1", committedDate: new Date(now.getTime() - 35 * dayMs).toISOString() },
-              { oid: "c2", committedDate: new Date(now.getTime() - 30 * dayMs).toISOString() },
-              { oid: "c3", committedDate: new Date(now.getTime() - 25 * dayMs).toISOString() },
-            ],
+            commitCount: 3,
+            latestCommittedDate: new Date(now.getTime() - 25 * dayMs).toISOString(),
             author: "newbie-dev",
+            timeline: labels.map((l) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+              label: { name: l.name },
+            })),
           };
         },
         getIssueTimeline: async () => {
@@ -2757,10 +2701,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "https://github.com/test/repo/pull/802",
                   created_at: new Date(now.getTime() - 35 * dayMs).toISOString(),
                   updated_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
-                  labels,
-                  is_draft: false,
                   author: "blocked-dev",
-                  commitCount: 3,
                   pull_request: {
                     merged_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
                   },
@@ -2785,6 +2726,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: labels.map((l) => l.name),
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -2794,35 +2736,14 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               ],
             };
           }
-          return {
-            number: num,
-            title: `PR ${num}`,
-            url: `u${num}`,
-            state: "MERGED" as const,
-            isDraft: false,
-            createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
-            updatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
-            mergedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
-            closedAt: null,
-            labels: labels.map((l) => l.name),
-            commits: [
-              { oid: "c1", committedDate: new Date(now.getTime() - 35 * dayMs).toISOString() },
-              { oid: "c2", committedDate: new Date(now.getTime() - 30 * dayMs).toISOString() },
-              { oid: "c3", committedDate: new Date(now.getTime() - 25 * dayMs).toISOString() },
-            ],
-            author: "blocked-dev",
-          };
+          throw new Error(`Unexpected PR #${num}`);
         },
-        getIssueTimeline: async (_repo: string, num: number) => {
-          if (num === 500) {
-            return labels.map((l) => ({
-              event: "labeled",
-              created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
-              label: { name: l.name },
-            }));
-          }
-          // PR 802 のタイムラインに阻害ラベル履歴が存在する（付与後に解除されてマージ）
-          return [
+        getPullRequestSampleData: async () => ({
+          createdAt: new Date(now.getTime() - 35 * dayMs).toISOString(),
+          commitCount: 3,
+          latestCommittedDate: new Date(now.getTime() - 25 * dayMs).toISOString(),
+          author: "blocked-dev",
+          timeline: [
             {
               event: "labeled",
               created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
@@ -2832,6 +2753,32 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               event: "unlabeled",
               created_at: new Date(now.getTime() - 33 * dayMs).toISOString(),
               label: { name: "Needs-Author-Feedback" }, // 解除
+            },
+            ...labels.map((l) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 32 * dayMs).toISOString(),
+              label: { name: l.name },
+            })),
+          ],
+        }),
+        getIssueTimeline: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return labels.map((l) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+              label: { name: l.name },
+            }));
+          }
+          return [
+            {
+              event: "labeled",
+              created_at: new Date(now.getTime() - 34 * dayMs).toISOString(),
+              label: { name: "Needs-Author-Feedback" },
+            },
+            {
+              event: "unlabeled",
+              created_at: new Date(now.getTime() - 33 * dayMs).toISOString(),
+              label: { name: "Needs-Author-Feedback" },
             },
             ...labels.map((l) => ({
               event: "labeled",
@@ -2913,10 +2860,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "https://github.com/test/repo/pull/803",
                   created_at: new Date(now.getTime() - 55 * dayMs).toISOString(),
                   updated_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
-                  labels,
-                  is_draft: false,
                   author: "older-first-timer",
-                  commitCount: 3, // 複数コミット
                   pull_request: {
                     merged_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
                   },
@@ -2941,6 +2885,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: labels.map((l) => l.name),
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -2950,24 +2895,20 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               ],
             };
           }
+          throw new Error(`Unexpected PR #${num}`);
+        },
+        getPullRequestSampleData: async () => {
           detailsFetched = true;
           return {
-            number: num,
-            title: `PR ${num}`,
-            url: `u${num}`,
-            state: "MERGED" as const,
-            isDraft: false,
             createdAt: new Date(now.getTime() - 55 * dayMs).toISOString(),
-            updatedAt: new Date(now.getTime() - 45 * dayMs).toISOString(),
-            mergedAt: new Date(now.getTime() - 45 * dayMs).toISOString(),
-            closedAt: null,
-            labels: labels.map((l) => l.name),
-            commits: [
-              { oid: "c1", committedDate: new Date(now.getTime() - 55 * dayMs).toISOString() },
-              { oid: "c2", committedDate: new Date(now.getTime() - 50 * dayMs).toISOString() },
-              { oid: "c3", committedDate: new Date(now.getTime() - 48 * dayMs).toISOString() },
-            ],
+            commitCount: 3,
+            latestCommittedDate: new Date(now.getTime() - 48 * dayMs).toISOString(),
             author: "older-first-timer",
+            timeline: labels.map((l) => ({
+              event: "labeled",
+              created_at: new Date(now.getTime() - 54 * dayMs).toISOString(),
+              label: { name: l.name },
+            })),
           };
         },
         getIssueTimeline: async () => {
@@ -3014,8 +2955,8 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
-  test("旧版キャッシュの再評価: skipped/Reason:not-first-timer-candidate（31〜90日前・Draftあり）は依然として不適格のため再取得されずスキップが維持される", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-draft-skipped-"));
+  test("旧版キャッシュの再評価: skipped/Reason:not-first-timer-candidate（31〜90日前・常連author）は依然として不適格のため再取得されずスキップが維持される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-repeat-skipped-"));
     try {
       const cachePath = join(tmpDir, "merged-samples.jsonl");
       const dayMs = 24 * 60 * 60 * 1000;
@@ -3028,13 +2969,23 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       ];
 
       // 45日前（全体窓外、90日初回窓内）の PR が not-first-timer-candidate として除外されていた
-      const legacySkipped: SampleCacheEntry = {
+      const legacySkipped804: SampleCacheEntry = {
         Type: "skipped",
         Number: 804,
         MergedAt: new Date(now.getTime() - 45 * dayMs).toISOString(),
         Reason: "not-first-timer-candidate",
       };
-      writeFileSync(cachePath, `${JSON.stringify(legacySkipped)}\n`, "utf-8");
+      const legacySkipped805: SampleCacheEntry = {
+        Type: "skipped",
+        Number: 805,
+        MergedAt: new Date(now.getTime() - 44 * dayMs).toISOString(),
+        Reason: "not-first-timer-candidate",
+      };
+      writeFileSync(
+        cachePath,
+        `${JSON.stringify(legacySkipped804)}\n${JSON.stringify(legacySkipped805)}\n`,
+        "utf-8",
+      );
 
       let detailsFetched = false;
       const client = {
@@ -3042,7 +2993,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
           if (query.includes("is:merged")) {
             return {
-              totalCount: 1,
+              totalCount: 2,
               items: [
                 {
                   number: 804,
@@ -3050,12 +3001,20 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
                   html_url: "https://github.com/test/repo/pull/804",
                   created_at: new Date(now.getTime() - 55 * dayMs).toISOString(),
                   updated_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
-                  labels,
-                  is_draft: true, // Draft のため依然として不適格
-                  author: "draft-dev",
-                  commitCount: 2,
+                  author: "frequent-dev", // 複数件提出の常連のため依然として不適格
                   pull_request: {
                     merged_at: new Date(now.getTime() - 45 * dayMs).toISOString(),
+                  },
+                },
+                {
+                  number: 805,
+                  title: "PR 805",
+                  html_url: "https://github.com/test/repo/pull/805",
+                  created_at: new Date(now.getTime() - 54 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 44 * dayMs).toISOString(),
+                  author: "frequent-dev",
+                  pull_request: {
+                    merged_at: new Date(now.getTime() - 44 * dayMs).toISOString(),
                   },
                 },
               ],
@@ -3078,6 +3037,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
               mergedAt: null,
               closedAt: null,
               labels: labels.map((l) => l.name),
+              commitCount: 1,
               commits: [
                 {
                   oid: "oid500",
@@ -3089,6 +3049,10 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           }
           detailsFetched = true;
           throw new Error("不適格なため詳細フェッチは呼ばれないはず");
+        },
+        getPullRequestSampleData: async () => {
+          detailsFetched = true;
+          throw new Error("不適格なためサンプルフェッチは呼ばれないはず");
         },
       } as unknown as GitHubApiClient;
 
@@ -3105,7 +3069,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         (m) => logs.push(m),
       );
 
-      // Draft のため再取得されず、スキップが維持されること
+      // 常連 author のため再取得されず、スキップが維持されること
       expect(detailsFetched).toBe(false);
       expect(snapshot?.FirstTimerSampleCount).toBe(0);
 

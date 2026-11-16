@@ -29,70 +29,21 @@ describe("Domain: countCandidateAuthors & isCandidateEligibleForFirstTimerDetail
     expect(counts.get("unknown")).toBeUndefined();
   });
 
-  test("1コミット・非Draft・阻害ラベルなし・単発authorなら eligible", () => {
+  test("単発 author なら eligible", () => {
     const authorCounts = new Map([["alice", 1]]);
-    const candidate = {
-      commitCount: 1,
-      isDraft: false,
-      labels: [{ name: "Area-Package" }, { name: "Validation-Passed" }],
-      author: "alice",
-    };
-    expect(isCandidateEligibleForFirstTimerDetail(candidate, authorCounts)).toBe(true);
-  });
-
-  test("コミット数が 2 以上（手直しあり）でも非Draft・阻害ラベルなし・単発authorなら eligible", () => {
-    const authorCounts = new Map([["alice", 1]]);
-    expect(
-      isCandidateEligibleForFirstTimerDetail(
-        { commitCount: 2, isDraft: false, author: "alice" },
-        authorCounts,
-      ),
-    ).toBe(true);
-  });
-
-  test("Draft の場合は ineligible", () => {
-    const authorCounts = new Map([["alice", 1]]);
-    expect(
-      isCandidateEligibleForFirstTimerDetail(
-        { commitCount: 1, isDraft: true, author: "alice" },
-        authorCounts,
-      ),
-    ).toBe(false);
-  });
-
-  test("阻害ラベルが付与されている場合は ineligible", () => {
-    const authorCounts = new Map([["alice", 1]]);
-    expect(
-      isCandidateEligibleForFirstTimerDetail(
-        {
-          commitCount: 1,
-          isDraft: false,
-          author: "alice",
-          labels: [{ name: "Needs-Author-Feedback" }],
-        },
-        authorCounts,
-      ),
-    ).toBe(false);
+    expect(isCandidateEligibleForFirstTimerDetail({ author: "alice" }, authorCounts)).toBe(true);
   });
 
   test("同一期間内に複数回出現している author（常連）は ineligible", () => {
     const authorCounts = new Map([["frequent-contributor", 5]]);
     expect(
-      isCandidateEligibleForFirstTimerDetail(
-        { commitCount: 1, isDraft: false, author: "frequent-contributor" },
-        authorCounts,
-      ),
+      isCandidateEligibleForFirstTimerDetail({ author: "frequent-contributor" }, authorCounts),
     ).toBe(false);
   });
 
-  test("commitCount が未定義（不明）の場合は除外せず後続の判定に委ねる", () => {
+  test("author が未定義（不明）の場合は除外せず後続の判定に委ねる", () => {
     const authorCounts = new Map([["alice", 1]]);
-    expect(
-      isCandidateEligibleForFirstTimerDetail(
-        { commitCount: undefined, isDraft: false, author: "alice" },
-        authorCounts,
-      ),
-    ).toBe(true);
+    expect(isCandidateEligibleForFirstTimerDetail({ author: undefined }, authorCounts)).toBe(true);
   });
 });
 

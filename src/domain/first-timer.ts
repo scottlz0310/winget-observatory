@@ -44,11 +44,9 @@ export function hasBlockingOrDraftHistory(
 
 /**
  * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定するための入力。
+ * Draft 除外（`draft:false`）および阻害ラベル除外（`-label:...`）は GitHub Search クエリ側で実施済み。
  */
 export interface CandidatePreFilterInput {
-  commitCount?: number;
-  isDraft?: boolean;
-  labels?: Array<{ name: string }>;
   author?: string;
 }
 
@@ -68,11 +66,8 @@ export function countCandidateAuthors(candidates: Array<{ author?: string }>): M
 /**
  * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定する。
  *
- * 以下のいずれかに該当する場合は初回提出者になり得ないため false を返す：
- * 1. Draft である
- * 2. 阻害ラベルが付与されている
- * 3. 作者が判明しており、同期間の全候補内で複数回出現している（常連）
- *
+ * Draft 除外・阻害ラベル除外は検索クエリ側で絞り込み済みのため、
+ * 作者が判明しており同期間の全候補内で複数回出現している（常連）場合のみ false を返す。
  * コミット数は手直し（2〜7コミット）を含む初回提出者全体を対象とするため制限しない。
  *
  * @param candidate 検査対象の候補メタデータ
@@ -82,12 +77,6 @@ export function isCandidateEligibleForFirstTimerDetail(
   candidate: CandidatePreFilterInput,
   authorCounts: Map<string, number>,
 ): boolean {
-  if (candidate.isDraft) {
-    return false;
-  }
-  if (candidate.labels?.some((l) => isBlockedLabel(l.name))) {
-    return false;
-  }
   if (candidate.author && (authorCounts.get(candidate.author) ?? 0) > 1) {
     return false;
   }

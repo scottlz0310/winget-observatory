@@ -11,7 +11,6 @@ import {
   formatGraphQLDepthsRow,
   formatTargetPrInfo,
   getThirdPartyAssignees,
-  hasBlockedLabel,
   isFirstTimerCandidate,
   isStaleCandidate,
   summarizeAssigneeFrontier,
@@ -152,9 +151,7 @@ export async function fetchStaleBottom(
     label: "優等生の底",
     filterNodes: (nodes) => nodes.filter(isStaleCandidate),
   });
-  const sorted = rows
-    .sort((a, b) => Date.parse(a.UpdatedAt) - Date.parse(b.UpdatedAt))
-    .slice(0, limit);
+  const sorted = rows.slice(0, limit);
 
   const noneAuthors = sorted
     .filter((row) => row.AuthorAssociation === "NONE" && Boolean(row.Author))
@@ -239,7 +236,7 @@ export async function fetchFirstTimerBottom(
     },
   });
 
-  return rows.sort((a, b) => Date.parse(a.CreatedAt) - Date.parse(b.CreatedAt)).slice(0, limit);
+  return rows.slice(0, limit);
 }
 
 export interface AssigneeFrontiersResult {
@@ -252,7 +249,7 @@ export interface AssigneeFrontiersResult {
 /**
  * 健康な待機 PR（sort:created-asc）を 1 回のページング走査で走査し、
  * 第三者 Assignees の有無によって「未アサイン前線」と「アサイン済み前線」に分離して各上位 limit 件を抽出する。
- * クエリで表現できないパターン型阻害ラベル（Error-* / Policy-Test-* 等）は採用前に除外する。
+ * 阻害ラベルはすべて baseQuery（`-label:...`）でサーバー側除外済み。
  * 走査上限到達により未走査 PR を残したまま打ち切られた区分は *Truncated=true として記録し、全件走査の自然終端と区別する。
  */
 export async function fetchAssigneeFrontiers(
@@ -287,7 +284,7 @@ export async function fetchAssigneeFrontiers(
       traversedCount += nodes.length;
 
       for (const node of nodes) {
-        if (!node?.number || hasBlockedLabel(node)) continue;
+        if (!node?.number) continue;
         const thirdParty = getThirdPartyAssignees(node);
         const row = formatGraphQLDepthsRow(node);
         if (thirdParty.length === 0) {
@@ -317,12 +314,9 @@ export async function fetchAssigneeFrontiers(
     }
   }
 
-  const byCreatedAsc = (a: DepthsRow, b: DepthsRow) =>
-    Date.parse(a.CreatedAt) - Date.parse(b.CreatedAt);
-
   return {
-    unassignedBottom: unassignedBottom.sort(byCreatedAsc).slice(0, limit),
-    assignedBottom: assignedBottom.sort(byCreatedAsc).slice(0, limit),
+    unassignedBottom: unassignedBottom.slice(0, limit),
+    assignedBottom: assignedBottom.slice(0, limit),
     unassignedTruncated: !reachedNaturalEnd && unassignedBottom.length < limit,
     assignedTruncated: !reachedNaturalEnd && assignedBottom.length < limit,
   };

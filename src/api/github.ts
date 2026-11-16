@@ -3,6 +3,8 @@ import type {
   GitHubDetailedSearchItem,
   GitHubDetailedSearchResult,
   ProgressPrDetail,
+  ProgressPrSampleData,
+  ProgressPrState,
   ProgressTimelineEvent,
   SearchPageInfo,
 } from "../models/progress";
@@ -11,15 +13,21 @@ import {
   adaptGraphQLTimelineItems,
   adaptGraphQLToDetailedSearchResult,
   adaptGraphQLToPrDetail,
+  adaptGraphQLToPrSampleData,
+  adaptGraphQLToPrState,
   adaptGraphQLToPrView,
   adaptGraphQLToSearchItem,
   buildGraphQLSearchQuery,
 } from "./graphql-adapters";
 import {
   GET_PULL_REQUEST_DETAILS_QUERY,
+  GET_PULL_REQUEST_SAMPLE_QUERY,
+  GET_PULL_REQUEST_STATE_QUERY,
   GET_PULL_REQUEST_TIMELINE_QUERY,
   GET_PULL_REQUEST_VIEW_QUERY,
   GET_RATE_LIMIT_QUERY,
+  SEARCH_COUNT_QUERY,
+  SEARCH_ISSUES_DETAILED_QUERY,
   SEARCH_ISSUES_QUERY,
 } from "./graphql-queries";
 import type {
@@ -51,11 +59,15 @@ export type {
   GraphQLErrorDetail,
   GraphQLRateLimitBucket,
   GraphQLRetryOptions,
+  ProgressPrSampleData,
+  ProgressPrState,
   SearchPageInfo,
 };
 export {
   calculateBackoffDelay,
   GET_PULL_REQUEST_DETAILS_QUERY,
+  GET_PULL_REQUEST_SAMPLE_QUERY,
+  GET_PULL_REQUEST_STATE_QUERY,
   GET_PULL_REQUEST_TIMELINE_QUERY,
   GET_PULL_REQUEST_VIEW_QUERY,
   GET_RATE_LIMIT_QUERY,
@@ -65,6 +77,8 @@ export {
   isRetryableStatusCode,
   parseRetryAfterMs,
   RETRYABLE_STATUS_CODES,
+  SEARCH_COUNT_QUERY,
+  SEARCH_ISSUES_DETAILED_QUERY,
   SEARCH_ISSUES_QUERY,
 };
 
@@ -94,6 +108,12 @@ interface GraphQLTimelineItemsResponse {
     pullRequest?: {
       timelineItems?: GraphQLTimelineConnection | null;
     } | null;
+  } | null;
+}
+
+interface GraphQLPullRequestSampleResponse {
+  repository?: {
+    pullRequest?: GraphQLPullRequestNode | null;
   } | null;
 }
 
@@ -158,7 +178,21 @@ export class GitHubApiClient {
   }
 
   /**
-   * GitHub GraphQL Search API を呼び出し、PR の検索結果アイテム一覧を取得する。
+   * GitHub GraphQL Search API を呼び出し、条件に一致する総件数（issueCount）のみを取得する。
+   * nodes や pageInfo を一切取得しない最小クエリ。
+   */
+  async searchIssueCount(query: string): Promise<number> {
+    const data = await this.graphql<{ search?: { issueCount?: number } | null }>(
+      SEARCH_COUNT_QUERY,
+      {
+        query: query.trim(),
+      },
+    );
+    return Number(data?.search?.issueCount ?? 0);
+  }
+
+  /**
+   * GitHub GraphQL Search API を呼び出し、PR の軽量検索結果アイテム一覧を取得する。
    *
    * @param query 検索クエリ文字列
    * @param sort ソート基準（例: "created", "updated"）
@@ -208,7 +242,7 @@ export class GitHubApiClient {
 
     const graphqlBucket: GraphQLRateLimitBucket = {
       ...adaptGraphQLRateLimitBucket(gqlData.rateLimit),
-      cost: gqlData.rateLimit.cost,
+      ...(gqlData.rateLimit.cost !== undefined ? { cost: gqlData.rateLimit.cost } : {}),
     };
 
     return {
@@ -259,12 +293,39 @@ export class GitHubApiClient {
   }
 
   /**
+   * Pull Request の状態（OPEN / CLOSED / MERGED）と mergedAt のみを軽量に取得する。
+   */
+  async getPullRequestState(repository: string, prNumber: number): Promise<ProgressPrState> {
+    const { owner, name } = parseRepository(repository);
+    try {
+      const data = await this.graphql<{
+        repository?: {
+          pullRequest?: GraphQLPullRequestNode | null;
+        } | null;
+      }>(GET_PULL_REQUEST_STATE_QUERY, { owner, name, number: prNumber });
+
+      const prNode = data?.repository?.pullRequest;
+      if (!prNode) {
+        throw this.createNotFoundError("Pull Request", prNumber);
+      }
+
+      return adaptGraphQLToPrState(prNode);
+    } catch (err: unknown) {
+      if (isPrNotFoundGraphQLError(err)) {
+        throw this.createNotFoundError("Pull Request", prNumber);
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Search Issues / PRs API を呼び出し、詳細情報と総件数を取得する（GraphQL search 経由）。
+   * perPage <= 0 が指定された場合は件数専用クエリ（SEARCH_COUNT_QUERY）を使用して nodes を取得しない。
    *
    * @param query 検索クエリ文字列
    * @param sort ソート基準（例: "created", "updated"）
    * @param order ソート順（"asc" または "desc"）
-   * @param perPage 1ページあたりの取得件数（最大100）
+   * @param perPage 1ページあたりの取得件数（0 の場合は件数のみ取得）
    * @param page 取得ページ番号（1始まり。cursor 未指定で page > 1 の場合は内部で cursor を走査）
    * @param cursor GraphQL ページネーションカーソル（省略可）
    * @returns 検索結果オブジェクト（totalCount と items を含む。pageInfo も付与）
@@ -277,6 +338,11 @@ export class GitHubApiClient {
     page = 1,
     cursor?: string | null,
   ): Promise<GitHubDetailedSearchResult> {
+    if (perPage <= 0) {
+      const totalCount = await this.searchIssueCount(query);
+      return { totalCount, items: [] };
+    }
+
     const fullQuery = buildGraphQLSearchQuery(query, sort, order);
 
     let after: string | null = cursor ?? null;
@@ -286,7 +352,7 @@ export class GitHubApiClient {
       let currentPage = 1;
       while (currentPage < page) {
         const stepData: GraphQLSearchResponse = await this.graphql<GraphQLSearchResponse>(
-          SEARCH_ISSUES_QUERY,
+          SEARCH_ISSUES_DETAILED_QUERY,
           {
             query: fullQuery,
             first: perPage,
@@ -307,7 +373,7 @@ export class GitHubApiClient {
     }
 
     const data: GraphQLSearchResponse = await this.graphql<GraphQLSearchResponse>(
-      SEARCH_ISSUES_QUERY,
+      SEARCH_ISSUES_DETAILED_QUERY,
       {
         query: fullQuery,
         first: perPage,
@@ -320,8 +386,8 @@ export class GitHubApiClient {
   }
 
   /**
-   * Pull Request の詳細情報（状態、コミット一覧、ラベルなど）を取得する（GraphQL repository.pullRequest 経由）。
-   * 1 リクエストで PR 基本情報・ラベル・コミット一覧（先頭 100 件）を一括取得する。
+   * Pull Request の詳細情報（状態、最新コミット・総コミット数、ラベルなど）を取得する（GraphQL repository.pullRequest 経由）。
+   * 1 リクエストで PR 基本情報・ラベル・最新コミット（commits(last: 1)）と総コミット数を一括取得する。
    */
   async getPullRequestDetails(repository: string, prNumber: number): Promise<ProgressPrDetail> {
     const { owner, name } = parseRepository(repository);
@@ -341,6 +407,79 @@ export class GitHubApiClient {
     } catch (err: unknown) {
       if (isPrNotFoundGraphQLError(err)) {
         throw this.createNotFoundError("Pull Request", prNumber);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * マージ済み候補サンプル計測に必要なメタデータ（createdAt, author, commitCount, latestCommittedDate）と
+   * タイムラインイベント一覧を 1 クエリ（GET_PULL_REQUEST_SAMPLE_QUERY）で統合取得する。
+   * タイムラインが 2 ページ以上にわたる場合のみ、2 ページ目以降を GET_PULL_REQUEST_TIMELINE_QUERY で追加走査する。
+   */
+  async getPullRequestSampleData(
+    repository: string,
+    prNumber: number,
+    maxPages = 10,
+  ): Promise<ProgressPrSampleData> {
+    const { owner, name } = parseRepository(repository);
+
+    try {
+      const firstPageData = await this.graphql<GraphQLPullRequestSampleResponse>(
+        GET_PULL_REQUEST_SAMPLE_QUERY,
+        {
+          owner,
+          name,
+          number: prNumber,
+          after: null,
+        },
+      );
+
+      const prNode = firstPageData.repository?.pullRequest;
+      if (!prNode) {
+        throw this.createNotFoundError("Sample", prNumber);
+      }
+
+      const allEvents: ProgressTimelineEvent[] = [];
+      let connection = prNode.timelineItems;
+      if (Array.isArray(connection?.nodes)) {
+        allEvents.push(...adaptGraphQLTimelineItems(connection.nodes));
+      }
+
+      let pageCount = 1;
+      let after = connection?.pageInfo?.endCursor ?? null;
+      let hasNext = Boolean(connection?.pageInfo?.hasNextPage && after);
+
+      while (hasNext && pageCount < maxPages) {
+        pageCount++;
+        const nextData = await this.graphql<GraphQLTimelineItemsResponse>(
+          GET_PULL_REQUEST_TIMELINE_QUERY,
+          {
+            owner,
+            name,
+            number: prNumber,
+            after,
+          },
+        );
+
+        const nextPrNode = nextData.repository?.pullRequest;
+        if (!nextPrNode) {
+          throw this.createNotFoundError("Timeline", prNumber);
+        }
+
+        connection = nextPrNode.timelineItems;
+        if (Array.isArray(connection?.nodes)) {
+          allEvents.push(...adaptGraphQLTimelineItems(connection.nodes));
+        }
+
+        after = connection?.pageInfo?.endCursor ?? null;
+        hasNext = Boolean(connection?.pageInfo?.hasNextPage && after);
+      }
+
+      return adaptGraphQLToPrSampleData(prNode, allEvents);
+    } catch (err: unknown) {
+      if (isPrNotFoundGraphQLError(err)) {
+        throw this.createNotFoundError("Sample", prNumber);
       }
       throw err;
     }

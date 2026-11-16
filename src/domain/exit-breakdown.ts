@@ -19,7 +19,13 @@ export function buildExitCountQueries(
   requiredLabels: readonly string[],
 ): { merged: string; closed: string } {
   const labels = requiredLabels.map((l) => `label:"${l}"`);
-  const common = [`repo:${repository}`, "is:pr", `created:<${targetCreatedIso}`, ...labels];
+  const common = [
+    `repo:${repository}`,
+    "is:pr",
+    "draft:false",
+    `created:<${targetCreatedIso}`,
+    ...labels,
+  ];
   return {
     merged: [...common, "is:merged", `merged:>=${targetCreatedIso}`].join(" "),
     closed: [...common, "is:closed", "is:unmerged", `closed:>=${targetCreatedIso}`].join(" "),

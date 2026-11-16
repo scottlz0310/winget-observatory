@@ -1,7 +1,6 @@
 /**
  * GitHub GraphQL API のレスポンス型定義。
- * REST から GraphQL への段階移行において、GraphQL クエリの戻り値の型付けと
- * ドメイン層・既存 API 層へのマッピングに使用する。
+ * GraphQL クエリの戻り値の型付けとドメイン層・API 層へのマッピングに使用する。
  */
 
 export interface GraphQLAuthor {
@@ -39,32 +38,9 @@ export interface GraphQLCommitConnection {
   nodes?: GraphQLCommitNode[] | null;
 }
 
-export interface GraphQLPullRequestNode {
-  number: number;
-  title: string;
-  url: string;
-  state?: "OPEN" | "CLOSED" | "MERGED" | string;
-  isDraft?: boolean | null;
-  createdAt: string;
-  updatedAt: string;
-  mergedAt?: string | null;
-  closedAt?: string | null;
-  author?: GraphQLAuthor | null;
-  authorAssociation?: string | null;
-  labels?: GraphQLLabelConnection | null;
-  commits?: GraphQLCommitConnection | null;
-  assignees?: GraphQLAssigneeConnection | null;
-}
-
 export interface GraphQLPageInfo {
   hasNextPage: boolean;
   endCursor: string | null;
-}
-
-export interface GraphQLSearchConnection<T = GraphQLPullRequestNode> {
-  issueCount: number;
-  pageInfo?: GraphQLPageInfo;
-  nodes?: Array<T | Record<string, unknown>> | null;
 }
 
 export type GraphQLTimelineItemNode =
@@ -97,9 +73,33 @@ export interface GraphQLTimelineConnection {
   nodes?: GraphQLTimelineItemNode[] | null;
 }
 
+export interface GraphQLPullRequestNode {
+  number?: number;
+  title?: string;
+  url?: string;
+  state?: "OPEN" | "CLOSED" | "MERGED" | string;
+  isDraft?: boolean | null;
+  createdAt?: string;
+  updatedAt?: string;
+  mergedAt?: string | null;
+  closedAt?: string | null;
+  author?: GraphQLAuthor | null;
+  authorAssociation?: string | null;
+  labels?: GraphQLLabelConnection | null;
+  commits?: GraphQLCommitConnection | null;
+  assignees?: GraphQLAssigneeConnection | null;
+  timelineItems?: GraphQLTimelineConnection | null;
+}
+
+export interface GraphQLSearchConnection<T = GraphQLPullRequestNode> {
+  issueCount: number;
+  pageInfo?: GraphQLPageInfo;
+  nodes?: Array<T | Record<string, unknown>> | null;
+}
+
 export interface GraphQLRateLimitData {
   limit: number;
-  cost: number;
+  cost?: number;
   remaining: number;
   resetAt: string;
 }

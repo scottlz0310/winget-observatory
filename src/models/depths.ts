@@ -7,10 +7,6 @@ export interface GitHubSearchItem {
   html_url: string;
   created_at: string;
   updated_at: string;
-  author?: string;
-  author_association?: string;
-  /** PR 作成者を除いた第三者 Assignees（GraphQL で assignees 取得時のみ設定） */
-  third_party_assignees?: string[];
 }
 
 /**
@@ -60,11 +56,6 @@ export interface GraphQLPrNode {
   commits: {
     totalCount: number;
   };
-  labels?: {
-    nodes?: Array<{
-      name: string;
-    }>;
-  } | null;
   assignees?: {
     nodes?: Array<{
       login?: string | null;

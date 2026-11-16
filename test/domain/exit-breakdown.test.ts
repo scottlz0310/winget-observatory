@@ -35,13 +35,13 @@ describe("Domain: buildExitCountQueries", () => {
 
   test("マージ: 起票が基準 PR より前で、基準 PR の起票以降にマージされた、必須ラベル付きの PR", () => {
     expect(queries.merged).toBe(
-      'repo:o/r is:pr created:<2026-10-29T06:47:00Z label:"A-1" label:"B-2" is:merged merged:>=2026-10-29T06:47:00Z',
+      'repo:o/r is:pr draft:false created:<2026-10-29T06:47:00Z label:"A-1" label:"B-2" is:merged merged:>=2026-10-29T06:47:00Z',
     );
   });
 
   test("クローズ: 同じ条件で、未マージのままクローズされた PR", () => {
     expect(queries.closed).toBe(
-      'repo:o/r is:pr created:<2026-10-29T06:47:00Z label:"A-1" label:"B-2" is:closed is:unmerged closed:>=2026-10-29T06:47:00Z',
+      'repo:o/r is:pr draft:false created:<2026-10-29T06:47:00Z label:"A-1" label:"B-2" is:closed is:unmerged closed:>=2026-10-29T06:47:00Z',
     );
   });
 });

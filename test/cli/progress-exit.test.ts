@@ -56,7 +56,6 @@ function createClient(options: {
             html_url: "https://github.com/test/repo/pull/100",
             created_at: "2026-10-01T00:00:00Z",
             updated_at: "2026-10-02T00:00:00Z",
-            labels: [],
           },
         ],
       };
@@ -112,10 +111,10 @@ describe("CLI: 待ち行列からの離脱の累積件数の記録", () => {
 
     const labels = LABELS.map((l) => `label:"${l}"`).join(" ");
     expect(queries).toContain(
-      `repo:test/repo is:pr created:<${TARGET_CREATED} ${labels} is:merged merged:>=${TARGET_CREATED}`,
+      `repo:test/repo is:pr draft:false created:<${TARGET_CREATED} ${labels} is:merged merged:>=${TARGET_CREATED}`,
     );
     expect(queries).toContain(
-      `repo:test/repo is:pr created:<${TARGET_CREATED} ${labels} is:closed is:unmerged closed:>=${TARGET_CREATED}`,
+      `repo:test/repo is:pr draft:false created:<${TARGET_CREATED} ${labels} is:closed is:unmerged closed:>=${TARGET_CREATED}`,
     );
   });
 

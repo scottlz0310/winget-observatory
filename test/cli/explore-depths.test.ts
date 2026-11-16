@@ -281,7 +281,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
                   author: { login: "user-a" },
                   authorAssociation: "NONE",
                   commits: { totalCount: 2 },
-                  labels: { nodes: [{ name: "New-Package" }] },
                 },
                 {
                   number: 1002,
@@ -292,7 +291,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
                   author: { login: "contributor-b" },
                   authorAssociation: "CONTRIBUTOR",
                   commits: { totalCount: 1 },
-                  labels: { nodes: [{ name: "New-Package" }] },
                 },
               ],
             },
@@ -341,7 +339,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
       author: { login: `multi-${i}` },
       authorAssociation: "CONTRIBUTOR",
       commits: { totalCount: 3 },
-      labels: { nodes: [{ name: "New-Package" }] },
     }));
     const page2Nodes: GraphQLPrNode[] = Array.from({ length: 3 }, (_, i) => ({
       number: 2100 + i,
@@ -352,7 +349,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
       author: { login: `single-${i}` },
       authorAssociation: "NONE",
       commits: { totalCount: 1 },
-      labels: { nodes: [{ name: "New-Package" }] },
     }));
 
     const mockClient = {
@@ -385,7 +381,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
         author: { login: "hidden-repeater" },
         authorAssociation: "NONE",
         commits: { totalCount: 1 },
-        labels: { nodes: [{ name: "New-Package" }] },
       },
       {
         number: 2202,
@@ -396,7 +391,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
         author: { login: "true-first-timer" },
         authorAssociation: "NONE",
         commits: { totalCount: 1 },
-        labels: { nodes: [{ name: "New-Package" }] },
       },
       {
         number: 2203,
@@ -407,7 +401,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
         author: { login: "known-contributor" },
         authorAssociation: "CONTRIBUTOR",
         commits: { totalCount: 1 },
-        labels: { nodes: [{ name: "New-Package" }] },
       },
     ];
 
@@ -448,7 +441,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
       author: { login: "shared-repeater" },
       authorAssociation: "NONE",
       commits: { totalCount: 1 },
-      labels: { nodes: [{ name: "New-Package" }] },
     };
 
     const mockClient = {
@@ -492,7 +484,6 @@ describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
       author: { login: "some-user" },
       authorAssociation: "NONE",
       commits: { totalCount: 1 },
-      labels: { nodes: [{ name: "New-Package" }] },
     };
 
     const mockClient = {
@@ -527,7 +518,6 @@ describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）�
     author: { login: author },
     authorAssociation: association,
     commits: { totalCount: commits },
-    labels: { nodes: [{ name: "New-Package" }] },
   });
 
   test("先頭50件が常連（CONTRIBUTOR）の場合に2ページ目を走査して候補を取得する", async () => {
@@ -745,14 +735,14 @@ describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）�
         createdAt: "2026-10-01T00:00:00Z",
       },
       {
-        ...createMockNode(400602, "true-first-timer-b", "NONE", 4),
-        createdAt: "2026-10-03T00:00:00Z",
+        ...createMockNode(400602, "true-first-timer-a", "NONE", 1),
+        createdAt: "2026-10-02T00:00:00Z",
       },
     ];
     const page2Nodes: GraphQLPrNode[] = [
       {
-        ...createMockNode(400603, "true-first-timer-a", "NONE", 1),
-        createdAt: "2026-10-02T00:00:00Z",
+        ...createMockNode(400603, "true-first-timer-b", "NONE", 4),
+        createdAt: "2026-10-03T00:00:00Z",
       },
     ];
 
@@ -785,7 +775,7 @@ describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）�
 
     const results = await fetchFirstTimerBottom(mockClient, "repo:microsoft/winget-pkgs", 2);
     expect(calls[0]).toContain("sort:created-asc");
-    expect(results.map((r) => r.Number)).toEqual([400603, 400602]);
+    expect(results.map((r) => r.Number)).toEqual([400602, 400603]);
     expect(results.map((r) => r.Author)).toEqual(["true-first-timer-a", "true-first-timer-b"]);
     expect(results.map((r) => r.CommitCount)).toEqual([1, 4]);
   });
@@ -863,7 +853,7 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
     createdAt: string,
     author: string | null,
     assignees: string[],
-    options?: { labels?: string[]; commits?: number; authorAssociation?: string },
+    options?: { commits?: number; authorAssociation?: string },
   ): GraphQLPrNode => ({
     number,
     title: `PR #${number}`,
@@ -873,7 +863,6 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
     author: author ? { login: author } : null,
     authorAssociation: options?.authorAssociation ?? "NONE",
     commits: { totalCount: options?.commits ?? 1 },
-    labels: { nodes: (options?.labels ?? ["New-Package"]).map((name) => ({ name })) },
     assignees: { nodes: assignees.map((login) => ({ login })) },
   });
 
@@ -984,17 +973,8 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
     expect(assignedTruncated).toBe(true);
   });
 
-  test("パターン型阻害ラベル（Error-* / *-Error / Policy-Test-*）を両アサイン区分から除外し、複数コミット・常連著者は除外しない", async () => {
+  test("複数コミット・常連著者は除外せず、健全クエリ（buildHealthyBaseQuery）でパターン阻害ラベルが除外されている", async () => {
     const nodes = [
-      createAssigneeNode(751, "2026-10-01T00:00:00Z", "u1", [], {
-        labels: ["New-Package", "Error-Hash"],
-      }),
-      createAssigneeNode(752, "2026-10-02T00:00:00Z", "u2", ["stephengillie"], {
-        labels: ["New-Package", "Validation-Error"],
-      }),
-      createAssigneeNode(753, "2026-10-03T00:00:00Z", "u3", [], {
-        labels: ["New-Package", "Policy-Test-Sandbox"],
-      }),
       createAssigneeNode(754, "2026-10-04T00:00:00Z", "regular", [], {
         commits: 4,
         authorAssociation: "MEMBER",
@@ -1005,14 +985,21 @@ describe("CLI: explore-depths の未アサイン前線・アサイン済み前�
       }),
     ];
 
+    let capturedQuery = "";
     const mockClient = {
-      graphql: async <T>(): Promise<T> =>
-        ({
+      graphql: async <T>(_q: string, variables: Record<string, unknown>): Promise<T> => {
+        capturedQuery = String(variables.query ?? "");
+        return {
           search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
-        }) as unknown as T,
+        } as unknown as T;
+      },
     } as unknown as GitHubApiClient;
 
-    const result = await fetchAssigneeFrontiers(mockClient, "repo:microsoft/winget-pkgs", 10, 100);
+    const healthyBase = buildHealthyBaseQuery("microsoft/winget-pkgs");
+    const result = await fetchAssigneeFrontiers(mockClient, healthyBase, 10, 100);
+    expect(capturedQuery).toContain('-label:"Policy-Test-1.5"');
+    expect(capturedQuery).toContain('-label:"Validation-Error"');
+    expect(capturedQuery).not.toContain('-label:"Waived-Validation-Defender-Error"');
     expect(result.unassignedBottom.map((r) => r.Number)).toEqual([754]);
     expect(result.assignedBottom.map((r) => r.Number)).toEqual([755]);
     expect(result.unassignedTruncated).toBe(false);

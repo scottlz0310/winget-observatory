@@ -8,7 +8,7 @@ import type {
 } from "../models/depths";
 
 import { DAY_MS, formatJstDateTime, round1 } from "./formatters";
-import { BLOCKED_PATTERNS, buildHealthyQueryParts } from "./labels";
+import { buildHealthyQueryParts } from "./labels";
 
 export { formatJstDateTime };
 
@@ -92,11 +92,6 @@ export function formatDepthsRow(item: GitHubSearchItem): DepthsRow {
     タイトル: truncateTitle(item.title, 45),
     Title: item.title,
     Url: item.html_url,
-    Author: item.author,
-    AuthorAssociation: item.author_association,
-    ...(item.third_party_assignees !== undefined
-      ? { ThirdPartyAssignees: item.third_party_assignees }
-      : {}),
   };
 }
 
@@ -160,33 +155,24 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
   };
 }
 
-export function hasBlockedLabel(node: GraphQLPrNode): boolean {
-  const labelNames = node.labels?.nodes?.map((l) => l.name) ?? [];
-  return labelNames.some((name) => BLOCKED_PATTERNS.some((pattern) => pattern.test(name)));
-}
-
 /**
- * GraphQL 検索ノードが「優等生の底（1コミット限定・除外ラベルなし）」の条件を満たすか判定する。
+ * GraphQL 検索ノードが「優等生の底（1コミット限定）」の条件を満たすか判定する。
+ * 阻害ラベルの除外は Search クエリ（`-label:...`）側で実施済み。
  */
 export function isStaleCandidate(node: GraphQLPrNode): boolean {
-  if (node.commits?.totalCount !== 1) {
-    return false;
-  }
-  return !hasBlockedLabel(node);
+  return node.commits?.totalCount === 1;
 }
 
 /**
- * GraphQL 検索ノードが「初回提出者（authorAssociation = NONE・除外ラベルなし）」の条件を満たすか判定する。
+ * GraphQL 検索ノードが「初回提出者（authorAssociation = NONE）」の条件を満たすか判定する。
+ * 阻害ラベルの除外は Search クエリ（`-label:...`）側で実施済み。
  * PR #65（初回提出者コホートのコミット数制限撤廃）に準拠し、手直しコミットが入った健康な初回提出者も許容する。
  */
 export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
   if (!node.author?.login) {
     return false;
   }
-  if (node.authorAssociation !== "NONE") {
-    return false;
-  }
-  return !hasBlockedLabel(node);
+  return node.authorAssociation === "NONE";
 }
 
 export interface AssigneeFrontierSummary {

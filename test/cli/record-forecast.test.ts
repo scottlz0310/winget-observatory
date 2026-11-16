@@ -10,32 +10,25 @@ import {
   runRecordForecast,
 } from "../../src/cli/record-forecast";
 import { CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
-import type { ProgressPrDetail } from "../../src/models/progress";
+import type { ProgressPrState } from "../../src/models/progress";
 
 const CSV_HEADER =
   '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"';
 const csvRow = (jst: string, activeAhead: number) =>
   `"${jst}","123","1","2026-10-01 10:00","${activeAhead}","${activeAhead}","0","1","1","1","1","updated"`;
 
-const pr = (overrides: Partial<ProgressPrDetail>): ProgressPrDetail => ({
-  number: 123,
-  title: "t",
-  url: "u",
+const pr = (
+  overrides: Partial<ProgressPrState> & { closedAt?: string | null },
+): ProgressPrState => ({
   state: "OPEN",
-  isDraft: false,
-  createdAt: "2026-10-29T00:00:00Z",
-  updatedAt: "2026-11-05T00:00:00Z",
   mergedAt: null,
-  closedAt: null,
-  labels: [],
-  commits: [],
   ...overrides,
 });
 
-const clientOf = (detail: ProgressPrDetail) =>
+const clientOf = (detail: ProgressPrState) =>
   ({
-    getPullRequestDetails: async () => detail,
-  }) as Pick<GitHubApiClient, "getPullRequestDetails">;
+    getPullRequestState: async () => detail,
+  }) as Pick<GitHubApiClient, "getPullRequestState">;
 
 describe("CLI: record-forecast parseArgs", () => {
   test("既定値: 基準 PR とリポジトリは共通の既定、保存先はリポジトリルートの data/", () => {
@@ -273,11 +266,11 @@ describe("CLI: runRecordForecast", () => {
     writeFileSync(historyPath(), "{ broken\n", "utf-8");
     let called = false;
     const client = {
-      getPullRequestDetails: async () => {
+      getPullRequestState: async () => {
         called = true;
         return pr({});
       },
-    } as Pick<GitHubApiClient, "getPullRequestDetails">;
+    } as Pick<GitHubApiClient, "getPullRequestState">;
 
     await expect(runRecordForecast(options, client, () => {})).rejects.toThrow(
       /予想履歴の読み込みに失敗しました \(.*forecast-history\.jsonl\)/,

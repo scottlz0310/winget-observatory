@@ -51,6 +51,18 @@ function createClient(options: {
       if (noReady.includes(num)) return [];
       return labeledAt(num === TARGET ? "2026-11-01T01:00:00Z" : "2026-10-20T01:00:00Z");
     },
+    getPullRequestSampleData: async (_repo: string, num: number) => {
+      calls.timeline.push(num);
+      if (failTimeline.includes(num)) throw new Error("timeline boom");
+      const timeline = noReady.includes(num) ? [] : labeledAt("2026-10-20T01:00:00Z");
+      calls.detail.push(num);
+      return {
+        createdAt: "2026-10-20T00:00:00Z",
+        commitCount: 1,
+        latestCommittedDate: "2026-10-21T00:00:00Z",
+        timeline,
+      };
+    },
     searchIssuesDetailed: async (
       query: string,
       _sort?: string,
@@ -69,8 +81,6 @@ function createClient(options: {
             html_url: `https://github.com/test/repo/pull/${n}`,
             created_at: "2026-10-20T00:00:00Z",
             updated_at: mergedAtOf(n),
-            labels: LABELS.map((name) => ({ name })),
-            is_draft: false,
             pull_request: { merged_at: mergedAtOf(n) },
           })),
         };
@@ -84,7 +94,6 @@ function createClient(options: {
             html_url: "https://github.com/test/repo/pull/100",
             created_at: "2026-10-01T00:00:00Z",
             updated_at: "2026-10-02T00:00:00Z",
-            labels: [],
           },
         ],
       };

@@ -56,7 +56,67 @@ export const INVESTIGATION_LABELS: readonly string[] = [
 ] as const;
 
 /**
- * 名前パターンで判定する除外ラベル正規表現。
+ * 名前パターン（Error-*, *-Error, Policy-Test-*, Validation-Submission-*）に該当する
+ * 実在の阻害ラベル一覧（モデレーター免除の Waived-* ラベルは含まない）。
+ * GitHub Search クエリの `-label:"..."` でサーバー側除外するために明示列挙する。
+ */
+export const PATTERN_BLOCKED_LABELS: readonly string[] = [
+  "Binary-Validation-Error",
+  "Error-Analysis-Timeout",
+  "Error-Hash-Mismatch",
+  "Error-Installer-Availability",
+  "Installation-Validation-Error",
+  "Installation-Verification-Error",
+  "Installer-Error",
+  "Internal-Error",
+  "Manifest-AppsAndFeaturesVersion-Error",
+  "Manifest-Dependencies-Error",
+  "Manifest-Installer-Validation-Error",
+  "Manifest-Path-Error",
+  "Manifest-Validation-Error",
+  "Manifest-Version-Error",
+  "Policy-Test-1.1.A",
+  "Policy-Test-1.1.B",
+  "Policy-Test-1.2",
+  "Policy-Test-1.5",
+  "Policy-Test-1.8",
+  "Policy-Test-2.10",
+  "Policy-Test-2.2.A",
+  "Policy-Test-2.2.B",
+  "Policy-Test-2.3",
+  "Policy-Test-2.4",
+  "Policy-Test-2.5",
+  "Policy-Test-2.6",
+  "Policy-Test-2.7",
+  "Policy-Test-2.8",
+  "Policy-Test-2.9",
+  "URL-Validation-Error",
+  "Validation-404-Error",
+  "Validation-Defender-Error",
+  "Validation-Error",
+  "Validation-Executable-Error",
+  "Validation-Forbidden-URL-Error",
+  "Validation-HTTP-Error",
+  "Validation-Installation-Error",
+  "Validation-Line-Endings-Error",
+  "Validation-SmartScreen-Error",
+  "Validation-Submission-Expired",
+  "Validation-Submission-Failed",
+  "Validation-Submission-Mismatch",
+  "Validation-Submission-Missing",
+  "Validation-Submission-Unsupported",
+  "Validation-Uninstall-Error",
+  "Validation-Virus-Scan-Error",
+] as const;
+
+/**
+ * モデレーターが自動検証エラーを免除（Waive）した際に付与するラベルの接頭辞。
+ * Waived-Validation-*-Error 等も健康体として扱い、阻害対象から除外する。
+ */
+export const WAIVED_LABEL_PREFIX = "Waived-";
+
+/**
+ * 名前パターンで判定する除外ラベル正規表現（タイムライン履歴や未知の新規ラベル検証用）。
  */
 export const BLOCKED_PATTERNS: readonly RegExp[] = [
   /^Error-/,
@@ -66,9 +126,21 @@ export const BLOCKED_PATTERNS: readonly RegExp[] = [
 ] as const;
 
 /**
+ * すべての除外対象ラベル（BLOCKED_LABELS, INVESTIGATION_LABELS, PATTERN_BLOCKED_LABELS）を
+ * GitHub Search の `-label:"..."` トークン配列に変換する。
+ */
+export function buildExcludedLabelQueryParts(): string[] {
+  return [
+    ...BLOCKED_LABELS.map((b) => `-label:"${b}"`),
+    ...INVESTIGATION_LABELS.map((inv) => `-label:"${inv}"`),
+    ...PATTERN_BLOCKED_LABELS.map((pat) => `-label:"${pat}"`),
+  ];
+}
+
+/**
  * 「健康な未マージ PR」（比較条件を満たす PR）を検索する GitHub Search クエリの条件部分。
- * progress（前線・待ち件数）と explore-depths（各底）で同じ定義を使い、判定のずれを防ぐ。
- * 名前パターンで判定する阻害ラベル（BLOCKED_PATTERNS）は検索クエリで表現できないため含まない。
+ * progress（前線・待ち件数・ライバル）と explore-depths（各底）で同じ定義を使い、
+ * サーバー側で全阻害ラベルを除外して判定のずれを防ぐ。
  */
 export function buildHealthyQueryParts(repository: string): string[] {
   return [
@@ -77,19 +149,48 @@ export function buildHealthyQueryParts(repository: string): string[] {
     "is:open",
     "draft:false",
     ...REQUIRED_LABELS.map((l) => `label:"${l}"`),
-    ...BLOCKED_LABELS.map((b) => `-label:"${b}"`),
-    ...INVESTIGATION_LABELS.map((inv) => `-label:"${inv}"`),
+    ...buildExcludedLabelQueryParts(),
+  ];
+}
+
+/**
+ * 指定期間内にマージされた健康な候補 PR を検索する GitHub Search クエリの条件部分。
+ * サーバー側で `draft:false`・必須ラベル・全除外ラベルを絞り込む。
+ */
+export function buildMergedCandidateQueryParts(
+  repository: string,
+  sinceIso: string,
+  untilIso: string,
+  requiredLabels: readonly string[] = REQUIRED_LABELS,
+): string[] {
+  return [
+    `repo:${repository}`,
+    "is:pr",
+    "is:merged",
+    "draft:false",
+    `merged:${sinceIso}..${untilIso}`,
+    ...requiredLabels.map((l) => `label:"${l}"`),
+    ...buildExcludedLabelQueryParts(),
   ];
 }
 
 const BLOCKED_LABEL_SET = new Set<string>(BLOCKED_LABELS);
 const INVESTIGATION_LABEL_SET = new Set<string>(INVESTIGATION_LABELS);
+const PATTERN_BLOCKED_LABEL_SET = new Set<string>(PATTERN_BLOCKED_LABELS);
 
 /**
  * 指定されたラベル名が阻害要因・除外対象に該当するか判定する。
+ * `Waived-` で始まるモデレーター免除ラベルは阻害対象としない。
  */
 export function isBlockedLabel(name: string): boolean {
-  if (BLOCKED_LABEL_SET.has(name) || INVESTIGATION_LABEL_SET.has(name)) {
+  if (name.startsWith(WAIVED_LABEL_PREFIX)) {
+    return false;
+  }
+  if (
+    BLOCKED_LABEL_SET.has(name) ||
+    INVESTIGATION_LABEL_SET.has(name) ||
+    PATTERN_BLOCKED_LABEL_SET.has(name)
+  ) {
     return true;
   }
   for (const pattern of BLOCKED_PATTERNS) {

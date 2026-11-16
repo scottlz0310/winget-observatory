@@ -6,8 +6,7 @@
 import type {
   GitHubDetailedSearchItem,
   MergedCandidateSample,
-  ProgressPrDetail,
-  ProgressTimelineEvent,
+  ProgressPrSampleData,
 } from "../models/progress";
 import type { CachedSkippedEntry, SampleCacheEntry } from "../models/sample-cache";
 import {
@@ -25,8 +24,7 @@ import { fromCachedSample, indexSampleCache, toCachedSample } from "./sample-cac
 import { simulateReadySince } from "./timeline";
 
 export interface SampleCollectorClient {
-  getIssueTimeline(repo: string, prNumber: number): Promise<ProgressTimelineEvent[]>;
-  getPullRequestDetails(repo: string, prNumber: number): Promise<ProgressPrDetail>;
+  getPullRequestSampleData(repo: string, prNumber: number): Promise<ProgressPrSampleData>;
   graphql<T = unknown>(query: string): Promise<T>;
 }
 
@@ -76,15 +74,7 @@ function isCandidateEligible(
   cand: GitHubDetailedSearchItem,
   candidateAuthorCounts: Map<string, number>,
 ): boolean {
-  return isCandidateEligibleForFirstTimerDetail(
-    {
-      commitCount: cand.commitCount,
-      isDraft: cand.is_draft,
-      labels: cand.labels,
-      author: cand.author,
-    },
-    candidateAuthorCounts,
-  );
+  return isCandidateEligibleForFirstTimerDetail({ author: cand.author }, candidateAuthorCounts);
 }
 
 /**
@@ -162,7 +152,7 @@ function createOutsideWindowPreSkipEntry(
 }
 
 /**
- * 未キャッシュ候補 PR のタイムラインと詳細を取得し、待機指標を計測する。
+ * 未キャッシュ候補 PR のタイムラインとサンプル詳細を 1 クエリで取得し、待機指標を計測する。
  */
 async function fetchUncachedCandidateSample(
   client: SampleCollectorClient,
@@ -171,8 +161,9 @@ async function fetchUncachedCandidateSample(
   mergedAt: Date,
 ): Promise<FetchCandidateOutcome> {
   try {
-    const candTimeline = await client.getIssueTimeline(repository, cand.number);
-    const readyAt = simulateReadySince(candTimeline, Boolean(cand.is_draft), mergedAt);
+    const sampleData = await client.getPullRequestSampleData(repository, cand.number);
+    const candTimeline = sampleData.timeline;
+    const readyAt = simulateReadySince(candTimeline, false, mergedAt);
 
     if (!readyAt) {
       return {
@@ -189,35 +180,31 @@ async function fetchUncachedCandidateSample(
       };
     }
 
-    const candDetail = await client.getPullRequestDetails(repository, cand.number);
-    const candCreatedAt = new Date(candDetail.createdAt);
-    const candCommits = candDetail.commits;
-    const candLatestCommit = candCommits.length > 0 ? candCommits[candCommits.length - 1] : null;
-    const candLatestCommittedDate = candLatestCommit
-      ? new Date(candLatestCommit.committedDate)
-      : candCreatedAt;
+    const candCreatedAt = new Date(sampleData.createdAt);
+    const candLatestCommittedDate = new Date(sampleData.latestCommittedDate);
+    const commitCount = sampleData.commitCount;
 
     const totalDays = (mergedAt.getTime() - candCreatedAt.getTime()) / DAY_MS;
     const turnDays = (mergedAt.getTime() - candLatestCommittedDate.getTime()) / DAY_MS;
 
     const isCandidate = isFirstTimerSampleCandidate({
-      commitCount: candCommits.length,
+      commitCount,
       timeline: candTimeline,
-      isDraft: Boolean(cand.is_draft),
+      isDraft: false,
     });
 
     const sample: MergedCandidateSample = {
       number: cand.number,
       title: cand.title,
-      createdAt: candDetail.createdAt,
+      createdAt: sampleData.createdAt,
       latestCommittedDate: candLatestCommittedDate.toISOString(),
-      commitCount: candCommits.length,
+      commitCount,
       readyAt: readyAt.toISOString(),
       mergedAt: mergedAt.toISOString(),
       totalDays: round2(totalDays),
       turnDays: round2(turnDays),
       days: round2(readyDays),
-      author: candDetail.author,
+      author: sampleData.author ?? cand.author,
       firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
       ...(!isCandidate
         ? {
