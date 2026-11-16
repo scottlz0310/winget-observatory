@@ -1,4 +1,5 @@
 import type { GitHubDetailedSearchItem, GitHubDetailedSearchResult } from "../models/progress";
+import { buildMergedCandidateQueryParts } from "./labels";
 
 export interface CandidateSearchClient {
   searchIssuesDetailed(
@@ -73,13 +74,12 @@ export async function collectMergedCandidates(
       continue;
     }
 
-    const query = [
-      `repo:${repository}`,
-      "is:pr",
-      "is:merged",
-      `merged:${sliceSince.toISOString()}..${sliceUntil.toISOString()}`,
-      ...requiredLabels.map((l) => `label:"${l}"`),
-    ].join(" ");
+    const query = buildMergedCandidateQueryParts(
+      repository,
+      sliceSince.toISOString(),
+      sliceUntil.toISOString(),
+      requiredLabels,
+    ).join(" ");
 
     // 窓の 1 ページ目をまず取得
     const firstPage = await client.searchIssuesDetailed(
@@ -122,13 +122,10 @@ export async function collectMergedCandidates(
       for (const item of items) {
         if (candidates.length >= fetchLimit) return false;
         if (item.number !== targetPr && item.pull_request?.merged_at) {
-          const mergedDate = new Date(item.pull_request.merged_at);
-          if (mergedDate.getTime() >= since.getTime()) {
-            if (!seenPrNumbers.has(item.number)) {
-              seenPrNumbers.add(item.number);
-              candidates.push(item);
-              if (candidates.length >= fetchLimit) return false;
-            }
+          if (!seenPrNumbers.has(item.number)) {
+            seenPrNumbers.add(item.number);
+            candidates.push(item);
+            if (candidates.length >= fetchLimit) return false;
           }
         }
       }

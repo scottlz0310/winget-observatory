@@ -3,6 +3,7 @@ import { buildHealthyQueryParts as buildHealthyQueryPartsDirect } from "../../sr
 import {
   BLOCKED_LABELS,
   buildHealthyQueryParts,
+  buildMergedCandidateQueryParts,
   calculateProgressStats,
   createProgressSnapshot,
   extractRivalPrs,
@@ -13,6 +14,7 @@ import {
   INVESTIGATION_LABELS,
   isBlockedLabel,
   isEligibleLabels,
+  PATTERN_BLOCKED_LABELS,
   parseCsvRows,
   partitionSamplesByWindow,
   QUEUE_BASIS,
@@ -66,16 +68,41 @@ describe("Domain: progress label evaluation", () => {
     expect(isBlockedLabel(name)).toBeTrue();
   });
 
-  test.each(["Validation-Completed", "New-Package"])("正常ラベル %s は除外されない", (name) => {
+  test.each([
+    "Validation-Completed",
+    "New-Package",
+    "Waived-Validation-Defender-Error",
+    "Waived-Validation-Executable-Error",
+    "Waived-Validation-Forbidden-URL-Error",
+    "Waived-Validation-Installation-Error",
+    "Waived-Policy-Test-1.5",
+  ])("正常ラベルおよび Waived-* 免除ラベル %s は除外されない", (name) => {
     expect(isBlockedLabel(name)).toBeFalse();
+    expect(
+      isEligibleLabels(["New-Package", "Azure-Pipeline-Passed", "Validation-Completed", name]),
+    ).toBeTrue();
   });
 
-  test("buildHealthyQueryParts が labels モジュールと progress re-export で一致する", () => {
+  test("buildHealthyQueryParts と buildMergedCandidateQueryParts がパターン阻害ラベルを含み Waived-* を含まない", () => {
     const parts = buildHealthyQueryPartsDirect("microsoft/winget-pkgs");
     expect(parts).toEqual(buildHealthyQueryParts("microsoft/winget-pkgs"));
     expect(parts).toContain("repo:microsoft/winget-pkgs");
     expect(parts).toContain('label:"New-Package"');
     expect(parts).toContain('-label:"Needs-CLA"');
+    for (const pat of PATTERN_BLOCKED_LABELS) {
+      expect(parts).toContain(`-label:"${pat}"`);
+    }
+    expect(parts).not.toContain('-label:"Waived-Validation-Defender-Error"');
+
+    const mergedParts = buildMergedCandidateQueryParts(
+      "microsoft/winget-pkgs",
+      "2026-10-01T00:00:00Z",
+      "2026-11-01T00:00:00Z",
+    );
+    expect(mergedParts).toContain("is:merged");
+    expect(mergedParts).toContain("draft:false");
+    expect(mergedParts).toContain('-label:"Policy-Test-1.5"');
+    expect(mergedParts).not.toContain('-label:"Waived-Validation-Defender-Error"');
   });
 });
 
@@ -491,26 +518,23 @@ ${Object.values(oldRow).join(",")}
 });
 
 describe("Domain: extractRivalPrs", () => {
-  const makeItem = (number: number, labelNames?: string[]): GitHubDetailedSearchItem => ({
+  const makeItem = (number: number): GitHubDetailedSearchItem => ({
     number,
     title: `PR #${number}`,
     html_url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
     created_at: `2026-11-01T00:0${number % 10}:00Z`,
     updated_at: `2026-11-02T00:0${number % 10}:00Z`,
-    labels: labelNames?.map((name) => ({ name })),
   });
 
-  test("targetPr 以上および阻害ラベル付きを除外し、既定上限 5 件まで抽出する", () => {
+  test("targetPr 以上を除外し、既定上限 5 件まで抽出する", () => {
     const items: GitHubDetailedSearchItem[] = [
-      makeItem(500, ["New-Package"]), // targetPr 以上で除外
-      makeItem(499, ["New-Package", "Error-Build"]), // 阻害ラベルで除外
-      makeItem(498, ["New-Package", "Needs-Author-Feedback"]), // 阻害ラベルで除外
-      makeItem(497, ["New-Package"]),
-      makeItem(496), // labels 未指定でも許容
-      makeItem(495, ["New-Package"]),
-      makeItem(494, ["New-Package"]),
-      makeItem(493, ["New-Package"]),
-      makeItem(492, ["New-Package"]),
+      makeItem(500), // targetPr 以上で除外
+      makeItem(497),
+      makeItem(496),
+      makeItem(495),
+      makeItem(494),
+      makeItem(493),
+      makeItem(492),
     ];
 
     const rivals = extractRivalPrs(items, 500);

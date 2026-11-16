@@ -5,6 +5,8 @@ import type {
   GitHubDetailedSearchResult,
   ProgressCommitSummary,
   ProgressPrDetail,
+  ProgressPrSampleData,
+  ProgressPrState,
   ProgressTimelineEvent,
 } from "../models/progress";
 import type {
@@ -16,7 +18,7 @@ import type {
 } from "./graphql-types";
 
 /**
- * GraphQL の PullRequest ノードを既存の GitHubSearchItem（REST searchIssues 互換）に変換する。
+ * GraphQL の PullRequest ノードを GitHubSearchItem に変換する。
  */
 export function adaptGraphQLToSearchItem(node: GraphQLPullRequestNode): GitHubSearchItem {
   return {
@@ -25,21 +27,11 @@ export function adaptGraphQLToSearchItem(node: GraphQLPullRequestNode): GitHubSe
     html_url: String(node.url),
     created_at: String(node.createdAt),
     updated_at: String(node.updatedAt),
-    author: node.author?.login ?? undefined,
-    author_association: node.authorAssociation ?? undefined,
-    ...(node.assignees !== undefined
-      ? {
-          third_party_assignees: extractThirdPartyAssignees(
-            node.assignees?.nodes,
-            node.author?.login,
-          ),
-        }
-      : {}),
   };
 }
 
 /**
- * GraphQL の PullRequest ノードを既存の GitHubDetailedSearchItem（REST searchIssuesDetailed アイテム互換）に変換する。
+ * GraphQL の PullRequest ノードを GitHubDetailedSearchItem に変換する。
  */
 export function adaptGraphQLToDetailedSearchItem(
   node: GraphQLPullRequestNode,
@@ -47,22 +39,16 @@ export function adaptGraphQLToDetailedSearchItem(
   return {
     number: Number(node.number),
     title: String(node.title),
-    html_url: String(node.url),
-    created_at: String(node.createdAt),
-    updated_at: String(node.updatedAt),
+    html_url: String(node.url ?? ""),
+    created_at: String(node.createdAt ?? ""),
+    updated_at: String(node.updatedAt ?? ""),
     author: node.author?.login ?? undefined,
-    commitCount:
-      node.commits?.totalCount !== undefined ? Number(node.commits.totalCount) : undefined,
-    labels: Array.isArray(node.labels?.nodes)
-      ? node.labels.nodes.map((l) => ({ name: String(l.name) }))
-      : [],
-    is_draft: Boolean(node.isDraft),
     pull_request: node.mergedAt !== undefined ? { merged_at: node.mergedAt ?? null } : undefined,
   };
 }
 
 /**
- * GraphQL の Search コネクションを既存の GitHubDetailedSearchResult（REST searchIssuesDetailed 結果互換）に変換する。
+ * GraphQL の Search コネクションを GitHubDetailedSearchResult に変換する。
  */
 export function adaptGraphQLToDetailedSearchResult(
   connection: GraphQLSearchConnection,
@@ -82,7 +68,7 @@ export function adaptGraphQLToDetailedSearchResult(
 }
 
 /**
- * GraphQL の PullRequest ノードを既存の GitHubPrView（REST getPullRequest 互換）に変換する。
+ * GraphQL の PullRequest ノードを GitHubPrView に変換する。
  */
 export function adaptGraphQLToPrView(node: GraphQLPullRequestNode): GitHubPrView {
   return {
@@ -104,7 +90,25 @@ export function adaptGraphQLToPrView(node: GraphQLPullRequestNode): GitHubPrView
 }
 
 /**
- * GraphQL の PullRequest ノードを既存の ProgressPrDetail（REST getPullRequestDetails 互換）に変換する。
+ * GraphQL の PullRequest ノードから状態（OPEN / CLOSED / MERGED）と mergedAt を抽出する。
+ */
+export function adaptGraphQLToPrState(node: GraphQLPullRequestNode): ProgressPrState {
+  const rawState = String(node.state ?? "OPEN").toUpperCase();
+  const isMerged = Boolean(node.mergedAt);
+  const state: "OPEN" | "CLOSED" | "MERGED" = isMerged
+    ? "MERGED"
+    : rawState === "OPEN"
+      ? "OPEN"
+      : "CLOSED";
+
+  return {
+    state,
+    mergedAt: node.mergedAt ? String(node.mergedAt) : null,
+  };
+}
+
+/**
+ * GraphQL の PullRequest ノードを ProgressPrDetail に変換する。
  */
 export function adaptGraphQLToPrDetail(node: GraphQLPullRequestNode): ProgressPrDetail {
   const commits: ProgressCommitSummary[] = Array.isArray(node.commits?.nodes)
@@ -115,17 +119,14 @@ export function adaptGraphQLToPrDetail(node: GraphQLPullRequestNode): ProgressPr
       }))
     : [];
 
-  const rawState = String(node.state ?? "OPEN").toUpperCase();
-  const isMerged = Boolean(node.mergedAt);
-  const state: "OPEN" | "CLOSED" | "MERGED" = isMerged
-    ? "MERGED"
-    : rawState === "OPEN"
-      ? "OPEN"
-      : "CLOSED";
+  const { state, mergedAt } = adaptGraphQLToPrState(node);
 
   const labels = Array.isArray(node.labels?.nodes)
     ? node.labels.nodes.map((l) => String(l.name))
     : [];
+
+  const commitCount =
+    node.commits?.totalCount !== undefined ? Number(node.commits.totalCount) : commits.length;
 
   return {
     number: Number(node.number),
@@ -135,17 +136,41 @@ export function adaptGraphQLToPrDetail(node: GraphQLPullRequestNode): ProgressPr
     isDraft: Boolean(node.isDraft),
     createdAt: String(node.createdAt),
     updatedAt: String(node.updatedAt),
-    mergedAt: node.mergedAt ? String(node.mergedAt) : null,
+    mergedAt,
     closedAt: node.closedAt ? String(node.closedAt) : null,
     labels,
     commits,
-    author: node.author?.login ?? undefined,
-    authorAssociation: node.authorAssociation ?? undefined,
+    commitCount,
   };
 }
 
 /**
- * 単一の GraphQL TimelineItem ノードを既存の ProgressTimelineEvent（REST getIssueTimeline 互換）に変換する。
+ * GraphQL の PullRequest ノードとタイムラインイベント列を ProgressPrSampleData に変換する。
+ */
+export function adaptGraphQLToPrSampleData(
+  node: GraphQLPullRequestNode,
+  timeline: ProgressTimelineEvent[],
+): ProgressPrSampleData {
+  const createdAt = String(node.createdAt);
+  const commitNodes = Array.isArray(node.commits?.nodes) ? node.commits.nodes : [];
+  const latestNode = commitNodes.length > 0 ? commitNodes[commitNodes.length - 1] : null;
+  const latestCommittedDate = latestNode?.commit?.committedDate
+    ? String(latestNode.commit.committedDate)
+    : createdAt;
+  const commitCount =
+    node.commits?.totalCount !== undefined ? Number(node.commits.totalCount) : commitNodes.length;
+
+  return {
+    createdAt,
+    commitCount,
+    latestCommittedDate,
+    ...(node.author?.login ? { author: node.author.login } : {}),
+    timeline,
+  };
+}
+
+/**
+ * 単一の GraphQL TimelineItem ノードを ProgressTimelineEvent に変換する。
  * 対象外イベントや日時情報が欠落している場合は null を返す。
  */
 export function adaptGraphQLTimelineItem(
@@ -193,7 +218,7 @@ export function adaptGraphQLTimelineItem(
 }
 
 /**
- * GraphQL TimelineItem の配列を既存の ProgressTimelineEvent[] に変換する。
+ * GraphQL TimelineItem の配列を ProgressTimelineEvent[] に変換する。
  */
 export function adaptGraphQLTimelineItems(
   items: GraphQLTimelineItemNode[],
@@ -212,7 +237,7 @@ export function adaptGraphQLTimelineItems(
 }
 
 /**
- * GraphQL の rateLimit データを既存の GitHubRateLimitBucket 形式に変換する。
+ * GraphQL の rateLimit データを GitHubRateLimitBucket 形式に変換する。
  */
 export function adaptGraphQLRateLimitBucket(data: GraphQLRateLimitData): GitHubRateLimitBucket {
   return {
@@ -223,7 +248,7 @@ export function adaptGraphQLRateLimitBucket(data: GraphQLRateLimitData): GitHubR
 }
 
 /**
- * REST の sort / order 指定を GitHub 検索クエリ構文（GraphQL search 用）に付加する。
+ * sort / order 指定を GitHub 検索クエリ構文（GraphQL search 用）に付加する。
  */
 export function buildGraphQLSearchQuery(baseQuery: string, sort?: string, order?: string): string {
   const trimmed = baseQuery.trim();

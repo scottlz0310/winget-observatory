@@ -87,8 +87,6 @@ describe("API: GitHubApiClient", () => {
     expect(items[0].number).toBe(101);
     expect(items[0].title).toBe("Test PR 101");
     expect(items[0].html_url).toBe("https://github.com/test/repo/pull/101");
-    expect(items[0].author).toBe("tester");
-    expect(items[0].author_association).toBe("CONTRIBUTOR");
     expect(capturedUrl).toContain("/graphql");
     const parsedBody = JSON.parse(capturedBody) as {
       variables: { query: string; first: number };
@@ -321,9 +319,36 @@ describe("API: GitHubApiClient", () => {
     expect(res.totalCount).toBe(42);
     expect(res.items.length).toBe(1);
     expect(res.items[0].number).toBe(200);
-    expect(res.items[0].labels?.[0].name).toBe("New-Package");
     const parsedBody = JSON.parse(capturedBody) as { variables: { query: string } };
     expect(parsedBody.variables.query).toContain("sort:created-asc");
+  });
+
+  test("searchIssuesDetailed は perPage <= 0 のとき SEARCH_COUNT_QUERY を使い issueCount のみ取得する", async () => {
+    let capturedBody = "";
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return new Response(
+        JSON.stringify({
+          data: {
+            search: {
+              issueCount: 123,
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const res = await client.searchIssuesDetailed("repo:test/repo is:pr", "updated", "asc", 0);
+
+    expect(res.totalCount).toBe(123);
+    expect(res.items).toEqual([]);
+    expect(capturedBody).toContain("SearchIssueCount");
+    expect(capturedBody).not.toContain("nodes");
   });
 
   test("searchIssuesDetailed は cursor 引数を受け取って直接そのカーソルで検索する", async () => {
@@ -501,13 +526,130 @@ describe("API: GitHubApiClient", () => {
 
     expect(pr.number).toBe(300);
     expect(pr.state).toBe("OPEN");
-    expect(pr.author).toBe("test-author");
-    expect(pr.authorAssociation).toBe("CONTRIBUTOR");
+    expect(pr.commitCount).toBe(1);
     expect(pr.labels).toEqual(["New-Package", "Validation-Completed"]);
     expect(pr.commits.length).toBe(1);
     expect(pr.commits[0].oid).toBe("abcdef123456");
     expect(pr.commits[0].messageHeadline).toBe("Initial commit");
     expect(pr.commits[0].committedDate).toBe("2026-11-01T12:00:00Z");
+  });
+
+  test("getPullRequestState は state と mergedAt のみを軽量に取得し、NOT_FOUND 時は 404 を返す", async () => {
+    let capturedBody = "";
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      if (capturedBody.includes('"number":999')) {
+        return new Response(
+          JSON.stringify({
+            data: { repository: { pullRequest: null } },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                state: "CLOSED",
+                mergedAt: "2026-11-10T00:00:00Z",
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const state = await client.getPullRequestState("test/repo", 300);
+    expect(capturedBody).toContain("GetPullRequestState");
+    expect(state).toEqual({ state: "MERGED", mergedAt: "2026-11-10T00:00:00Z" });
+    await expect(client.getPullRequestState("test/repo", 999)).rejects.toThrow(GitHubApiError);
+  });
+
+  test("getPullRequestSampleData は 1 リクエストでメタデータとタイムラインを統合取得し、次ページがあればページングする", async () => {
+    const capturedBodies: string[] = [];
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      capturedBodies.push(body);
+      if (body.includes('"number":999')) {
+        return new Response(JSON.stringify({ data: { repository: { pullRequest: null } } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (capturedBodies.length === 1) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  createdAt: "2026-11-01T00:00:00Z",
+                  author: { login: "sample-user" },
+                  commits: {
+                    totalCount: 3,
+                    nodes: [{ commit: { committedDate: "2026-11-02T00:00:00Z" } }],
+                  },
+                  timelineItems: {
+                    pageInfo: { hasNextPage: true, endCursor: "tl-c1" },
+                    nodes: [
+                      {
+                        __typename: "LabeledEvent",
+                        createdAt: "2026-11-01T01:00:00Z",
+                        label: { name: "New-Package" },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                timelineItems: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      __typename: "LabeledEvent",
+                      createdAt: "2026-11-01T02:00:00Z",
+                      label: { name: "Validation-Completed" },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const client = new GitHubApiClient({ token: "test-token", fetch: mockFetch });
+    const sample = await client.getPullRequestSampleData("test/repo", 300);
+
+    expect(capturedBodies.length).toBe(2);
+    expect(capturedBodies[0]).toContain("GetPullRequestSample");
+    expect(capturedBodies[1]).toContain("GetPullRequestTimeline");
+    expect(sample.createdAt).toBe("2026-11-01T00:00:00Z");
+    expect(sample.commitCount).toBe(3);
+    expect(sample.latestCommittedDate).toBe("2026-11-02T00:00:00Z");
+    expect(sample.author).toBe("sample-user");
+    expect(sample.timeline.length).toBe(2);
+
+    await expect(client.getPullRequestSampleData("test/repo", 999)).rejects.toThrow(GitHubApiError);
   });
 
   test("getPullRequestDetails は PR が存在しない場合（実 API の NOT_FOUND errors 応答）404 GitHubApiError をスローする", async () => {

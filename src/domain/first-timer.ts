@@ -5,8 +5,8 @@
 
 import { isBlockedLabel } from "./labels";
 
-/** 現在の初回提出者判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃新版） */
-export const CURRENT_FIRST_TIMER_VERSION = 2;
+/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版） */
+export const CURRENT_FIRST_TIMER_VERSION = 3;
 
 export interface TimelineEventLike {
   event: string;
@@ -44,11 +44,9 @@ export function hasBlockingOrDraftHistory(
 
 /**
  * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定するための入力。
+ * Draft 除外（`draft:false`）および阻害ラベル除外（`-label:...`）は GitHub Search クエリ側で実施済み。
  */
 export interface CandidatePreFilterInput {
-  commitCount?: number;
-  isDraft?: boolean;
-  labels?: Array<{ name: string }>;
   author?: string;
 }
 
@@ -68,11 +66,8 @@ export function countCandidateAuthors(candidates: Array<{ author?: string }>): M
 /**
  * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定する。
  *
- * 以下のいずれかに該当する場合は初回提出者になり得ないため false を返す：
- * 1. Draft である
- * 2. 阻害ラベルが付与されている
- * 3. 作者が判明しており、同期間の全候補内で複数回出現している（常連）
- *
+ * Draft 除外・阻害ラベル除外は検索クエリ側で絞り込み済みのため、
+ * 作者が判明しており同期間の全候補内で複数回出現している（常連）場合のみ false を返す。
  * コミット数は手直し（2〜7コミット）を含む初回提出者全体を対象とするため制限しない。
  *
  * @param candidate 検査対象の候補メタデータ
@@ -82,12 +77,6 @@ export function isCandidateEligibleForFirstTimerDetail(
   candidate: CandidatePreFilterInput,
   authorCounts: Map<string, number>,
 ): boolean {
-  if (candidate.isDraft) {
-    return false;
-  }
-  if (candidate.labels?.some((l) => isBlockedLabel(l.name))) {
-    return false;
-  }
   if (candidate.author && (authorCounts.get(candidate.author) ?? 0) > 1) {
     return false;
   }
@@ -237,15 +226,17 @@ export async function resolveAuthorMergedCounts(
 }
 
 /**
- * キャッシュ済みのサンプルが、初回判定ロジックの改定（コミット数制限撤廃）に伴い
+ * キャッシュ済みのサンプルが、判定ロジックの改定（v2: コミット数制限撤廃 / v3: Waived-* 免除ラベルの健康体扱い）に伴い
  * 再評価（タイムライン・詳細の再取得）を必要とするか判定する純粋関数。
  *
- * 旧版で IsFirstTimer: false と判定された複数コミットの PR は、
- * 「コミット数 > 1」のみを理由に除外されていた可能性がある。
- * 一方、タイムラインに阻害履歴があることが確定している場合（FirstTimerReason: "timeline-blocking"）や、
- * 累計マージ数が2件以上と確定している場合（FirstTimerReason: "lifetime-merged"）、
- * あるいは走査期間内に別 PR が存在する常連（authorCountInCandidates > 1）は、
- * コミット数制限に関係なく除外が確定しているため再評価不要。
+ * - FirstTimerVersion >= CURRENT_FIRST_TIMER_VERSION (3) のエントリは最新ルールで計測済みのため再評価不要。
+ * - 旧版（FirstTimerVersion < 3 または未設定）で FirstTimerReason: "timeline-blocking" のエントリは、
+ *   `Waived-*-Error` 等の免除ラベルにより阻害扱いになっていた、または ReadyAt が後ろ倒しされていた可能性があるため再評価する。
+ * - 旧版で FirstTimerReason が未設定かつ IsFirstTimer: false の複数コミット（commitCount > 1）サンプルも、
+ *   単発 author（authorCountInCandidates <= 1）であれば再評価する。
+ * - 一方、累計マージ数が2件以上と確定している場合（FirstTimerReason: "lifetime-merged"）や
+ *   走査期間内に別 PR が存在する常連（FirstTimerReason: "recurring-author" または authorCountInCandidates > 1）で
+ *   阻害ラベル履歴（timeline-blocking）を伴わないものは再評価不要。
  */
 export function shouldReevaluateCachedSample(params: {
   isFirstTimer?: boolean;
@@ -260,8 +251,13 @@ export function shouldReevaluateCachedSample(params: {
   ) {
     return false;
   }
+
+  // 旧版の timeline-blocking は Waived-*-Error 等の免除ラベル由来で阻害判定・ReadyAt 変動していた可能性があるため再評価
+  if (params.firstTimerReason === "timeline-blocking") {
+    return true;
+  }
+
   if (
-    params.firstTimerReason === "timeline-blocking" ||
     params.firstTimerReason === "lifetime-merged" ||
     params.firstTimerReason === "recurring-author"
   ) {
@@ -277,12 +273,25 @@ export function shouldReevaluateCachedSample(params: {
 }
 
 /**
- * キャッシュ済みのスキップ済み PR（Reason: "not-first-timer-candidate"）が、
- * 再評価（詳細取得）を必要とするか判定する純粋関数。
+ * キャッシュ済みのスキップ済み PR が、再評価（詳細取得）を必要とするか判定する純粋関数。
+ * - Reason === "no-ready": 旧版（firstTimerVersion < 3 または未設定）では Waived-*-Error が残ったままマージされた PR が
+ *   no-ready として保存されていた可能性があるため、予算内で再評価する。
+ * - Reason === "not-first-timer-candidate": 全体集計窓内に入った場合、または初回詳細適格になった場合に再評価する。
  */
 export function shouldReevaluateSkippedCandidate(params: {
+  reason?: string;
+  firstTimerVersion?: number;
   isWithinOverallWindow: boolean;
   isEligibleForDetail: boolean;
 }): boolean {
+  if (params.reason === "no-ready") {
+    return (
+      params.firstTimerVersion === undefined ||
+      params.firstTimerVersion < CURRENT_FIRST_TIMER_VERSION
+    );
+  }
+  if (params.reason !== undefined && params.reason !== "not-first-timer-candidate") {
+    return false;
+  }
   return params.isWithinOverallWindow || params.isEligibleForDetail;
 }

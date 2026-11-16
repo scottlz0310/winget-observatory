@@ -82,6 +82,14 @@ function validateEntry(parsed: unknown, lineNumber: number): SampleCacheEntry {
     ) {
       return fail(`Reason が不正です: ${String(entry.Reason)}`);
     }
+    if (entry.FirstTimerVersion !== undefined) {
+      if (
+        typeof entry.FirstTimerVersion !== "number" ||
+        !Number.isInteger(entry.FirstTimerVersion)
+      ) {
+        return fail("FirstTimerVersion が整数ではありません");
+      }
+    }
     return entry as unknown as SampleCacheEntry;
   }
   if (entry.Type === "sample") {

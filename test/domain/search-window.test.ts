@@ -20,13 +20,9 @@ describe("collectMergedCandidates（カーソルスライド方式）", () => {
     created_at: "2026-10-01T00:00:00Z",
     updated_at: mergedAt,
     author,
-    author_association: "NONE",
-    commitCount: 1,
-    is_draft: false,
     pull_request: {
       merged_at: mergedAt,
     },
-    labels: [{ name: "New-Package" }],
   });
 
   it("1,000件未満の場合は単一窓のページネーションのみで全件収集する", async () => {
@@ -266,20 +262,27 @@ describe("collectMergedCandidates（カーソルスライド方式）", () => {
     ).rejects.toThrow("これ以上分割できないため安全に全件走査できません");
   });
 
-  it("targetPr や since より古い PR は除外される", async () => {
+  it("targetPr や merged_at 欠落のアイテムは除外され、クエリに draft:false と除外ラベルが含まれる", async () => {
     const since = new Date("2026-10-05T00:00:00Z");
     const until = new Date("2026-10-10T00:00:00Z");
+    let capturedQuery = "";
 
     const mockClient: CandidateSearchClient = {
-      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => ({
-        totalCount: 3,
-        pageInfo: { hasNextPage: false, endCursor: null },
-        items: [
-          createMockItem(401, "2026-10-08T00:00:00Z"),
-          createMockItem(999, "2026-10-07T00:00:00Z"), // targetPr
-          createMockItem(402, "2026-10-01T00:00:00Z"), // sinceより古い
-        ],
-      }),
+      searchIssuesDetailed: async (query): Promise<GitHubDetailedSearchResult> => {
+        capturedQuery = query;
+        return {
+          totalCount: 3,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          items: [
+            createMockItem(401, "2026-10-08T00:00:00Z"),
+            createMockItem(999, "2026-10-07T00:00:00Z"), // targetPr
+            {
+              ...createMockItem(402, "2026-10-06T00:00:00Z"),
+              pull_request: { merged_at: null },
+            }, // merged_at 欠落
+          ],
+        };
+      },
     };
 
     const results = await collectMergedCandidates({
@@ -293,5 +296,8 @@ describe("collectMergedCandidates（カーソルスライド方式）", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0].number).toBe(401);
+    expect(capturedQuery).toContain("draft:false");
+    expect(capturedQuery).toContain('-label:"Needs-Author-Feedback"');
+    expect(capturedQuery).toContain('-label:"Policy-Test-1.5"');
   });
 });

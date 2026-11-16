@@ -6,6 +6,8 @@ import {
   adaptGraphQLToDetailedSearchItem,
   adaptGraphQLToDetailedSearchResult,
   adaptGraphQLToPrDetail,
+  adaptGraphQLToPrSampleData,
+  adaptGraphQLToPrState,
   adaptGraphQLToPrView,
   adaptGraphQLToSearchItem,
   buildGraphQLSearchQuery,
@@ -28,8 +30,6 @@ describe("GraphQL Adapters", () => {
         url: "https://github.com/microsoft/winget-pkgs/pull/12345",
         createdAt: "2026-10-01T10:00:00Z",
         updatedAt: "2026-10-02T12:00:00Z",
-        author: { login: "testuser" },
-        authorAssociation: "NONE",
       };
 
       const result = adaptGraphQLToSearchItem(node);
@@ -39,63 +39,20 @@ describe("GraphQL Adapters", () => {
         html_url: "https://github.com/microsoft/winget-pkgs/pull/12345",
         created_at: "2026-10-01T10:00:00Z",
         updated_at: "2026-10-02T12:00:00Z",
-        author: "testuser",
-        author_association: "NONE",
       });
-    });
-
-    test("author や authorAssociation が欠落している場合も安全にフォールバックする", () => {
-      const node: GraphQLPullRequestNode = {
-        number: 12346,
-        title: "Ghost User PR",
-        url: "https://github.com/microsoft/winget-pkgs/pull/12346",
-        createdAt: "2026-10-01T10:00:00Z",
-        updatedAt: "2026-10-02T12:00:00Z",
-        author: null,
-        authorAssociation: null,
-      };
-
-      const result = adaptGraphQLToSearchItem(node);
-      expect(result.author).toBeUndefined();
-      expect(result.author_association).toBeUndefined();
-    });
-
-    test("assignees を含むノードでは作成者を除外した third_party_assignees を変換する", () => {
-      const node: GraphQLPullRequestNode = {
-        number: 12347,
-        title: "Assigned PR",
-        url: "https://github.com/microsoft/winget-pkgs/pull/12347",
-        createdAt: "2026-10-01T10:00:00Z",
-        updatedAt: "2026-10-02T12:00:00Z",
-        author: { login: "pr-author" },
-        authorAssociation: "NONE",
-        assignees: {
-          nodes: [{ login: "pr-author" }, { login: "stephengillie" }],
-        },
-      };
-
-      const result = adaptGraphQLToSearchItem(node);
-      expect(result.third_party_assignees).toEqual(["stephengillie"]);
     });
   });
 
   describe("adaptGraphQLToDetailedSearchItem", () => {
-    test("ラベル、ドラフト状態、マージ日時、作者、コミット数を含むノードを変換できる", () => {
+    test("マージ日時、作者を含むノードを変換できる", () => {
       const node: GraphQLPullRequestNode = {
         number: 100,
         title: "Detailed PR",
         url: "https://github.com/microsoft/winget-pkgs/pull/100",
         createdAt: "2026-10-01T00:00:00Z",
         updatedAt: "2026-10-05T00:00:00Z",
-        isDraft: false,
         mergedAt: "2026-10-05T12:00:00Z",
         author: { login: "first-timer-user" },
-        commits: {
-          totalCount: 1,
-        },
-        labels: {
-          nodes: [{ name: "Area-Package" }, { name: "Validation-Passed" }],
-        },
       };
 
       const result = adaptGraphQLToDetailedSearchItem(node);
@@ -106,9 +63,6 @@ describe("GraphQL Adapters", () => {
         created_at: "2026-10-01T00:00:00Z",
         updated_at: "2026-10-05T00:00:00Z",
         author: "first-timer-user",
-        commitCount: 1,
-        labels: [{ name: "Area-Package" }, { name: "Validation-Passed" }],
-        is_draft: false,
         pull_request: {
           merged_at: "2026-10-05T12:00:00Z",
         },
@@ -122,14 +76,11 @@ describe("GraphQL Adapters", () => {
         url: "https://github.com/microsoft/winget-pkgs/pull/101",
         createdAt: "2026-10-01T00:00:00Z",
         updatedAt: "2026-10-02T00:00:00Z",
-        isDraft: true,
         mergedAt: null,
       };
 
       const result = adaptGraphQLToDetailedSearchItem(node);
-      expect(result.is_draft).toBeTrue();
       expect(result.pull_request?.merged_at).toBeNull();
-      expect(result.labels).toEqual([]);
     });
   });
 
@@ -215,8 +166,8 @@ describe("GraphQL Adapters", () => {
     });
   });
 
-  describe("adaptGraphQLToPrDetail", () => {
-    test("コミット履歴や作者情報を含む完全な PR 詳細を ProgressPrDetail に変換できる", () => {
+  describe("adaptGraphQLToPrDetail & adaptGraphQLToPrState & adaptGraphQLToPrSampleData", () => {
+    test("commits(last: 1) の totalCount と最新コミットを含む PR 詳細を ProgressPrDetail に変換できる", () => {
       const node: GraphQLPullRequestNode = {
         number: 300,
         title: "Full Detail PR",
@@ -227,20 +178,12 @@ describe("GraphQL Adapters", () => {
         updatedAt: "2026-10-03T00:00:00Z",
         mergedAt: null,
         closedAt: null,
-        author: { login: "alice" },
-        authorAssociation: "CONTRIBUTOR",
         labels: {
           nodes: [{ name: "Automated-Merge" }],
         },
         commits: {
+          totalCount: 2,
           nodes: [
-            {
-              commit: {
-                oid: "abc1234",
-                messageHeadline: "feat: add package",
-                committedDate: "2026-10-01T00:00:00Z",
-              },
-            },
             {
               commit: {
                 oid: "def5678",
@@ -266,18 +209,12 @@ describe("GraphQL Adapters", () => {
         labels: ["Automated-Merge"],
         commits: [
           {
-            oid: "abc1234",
-            messageHeadline: "feat: add package",
-            committedDate: "2026-10-01T00:00:00Z",
-          },
-          {
             oid: "def5678",
             messageHeadline: "fix: update url",
             committedDate: "2026-10-02T00:00:00Z",
           },
         ],
-        author: "alice",
-        authorAssociation: "CONTRIBUTOR",
+        commitCount: 2,
       });
     });
 
@@ -296,6 +233,31 @@ describe("GraphQL Adapters", () => {
       const result = adaptGraphQLToPrDetail(node);
       expect(result.state).toBe("MERGED");
       expect(result.mergedAt).toBe("2026-10-03T12:00:00Z");
+      expect(adaptGraphQLToPrState(node)).toEqual({
+        state: "MERGED",
+        mergedAt: "2026-10-03T12:00:00Z",
+      });
+    });
+
+    test("adaptGraphQLToPrSampleData は createdAt, commitCount, latestCommittedDate, author, timeline を変換する", () => {
+      const node: GraphQLPullRequestNode = {
+        createdAt: "2026-10-01T00:00:00Z",
+        author: { login: "sample-author" },
+        commits: {
+          totalCount: 4,
+          nodes: [{ commit: { committedDate: "2026-10-04T00:00:00Z" } }],
+        },
+      };
+      const timeline = [
+        { event: "labeled", created_at: "2026-10-01T01:00:00Z", label: { name: "New-Package" } },
+      ];
+      expect(adaptGraphQLToPrSampleData(node, timeline)).toEqual({
+        createdAt: "2026-10-01T00:00:00Z",
+        commitCount: 4,
+        latestCommittedDate: "2026-10-04T00:00:00Z",
+        author: "sample-author",
+        timeline,
+      });
     });
   });
 

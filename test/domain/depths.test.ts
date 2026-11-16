@@ -51,8 +51,6 @@ describe("Domain: depths logic", () => {
       html_url: "https://github.com/microsoft/winget-pkgs/pull/430799",
       created_at: "2026-09-07T07:53:38Z",
       updated_at: "2026-11-04T02:04:16Z",
-      author: "repeater-author",
-      author_association: "CONTRIBUTOR",
     };
 
     const row = formatDepthsRow(item);
@@ -65,8 +63,6 @@ describe("Domain: depths logic", () => {
     expect(row.タイトル).toBe("New package: LiamCottle.ReticulumMeshChat ...");
     expect(row.Title).toBe(item.title);
     expect(row.Url).toBe(item.html_url);
-    expect(row.Author).toBe("repeater-author");
-    expect(row.AuthorAssociation).toBe("CONTRIBUTOR");
   });
 
   test("formatTargetPrInfo は PR 情報を正しく TargetPrInfo にマッピングする", () => {
@@ -157,7 +153,6 @@ describe("Domain: depths logic", () => {
         author: { login: "alice" },
         authorAssociation: "NONE",
         commits: { totalCount: 1 },
-        labels: { nodes: [{ name: "New-Package" }, { name: "Validation-Completed" }] },
       },
       {
         number: 450002,
@@ -168,7 +163,6 @@ describe("Domain: depths logic", () => {
         author: { login: "bob-contributor" },
         authorAssociation: "CONTRIBUTOR",
         commits: { totalCount: 1 },
-        labels: { nodes: [{ name: "New-Package" }] },
       },
       {
         number: 450003,
@@ -179,18 +173,6 @@ describe("Domain: depths logic", () => {
         author: { login: "charlie" },
         authorAssociation: "NONE",
         commits: { totalCount: 2 },
-        labels: { nodes: [{ name: "New-Package" }] },
-      },
-      {
-        number: 450004,
-        title: "Blocked Label PR (Should be excluded)",
-        url: "https://github.com/microsoft/winget-pkgs/pull/450004",
-        createdAt: "2026-10-09T05:00:00Z",
-        updatedAt: "2026-10-09T05:30:00Z",
-        author: { login: "dave" },
-        authorAssociation: "NONE",
-        commits: { totalCount: 1 },
-        labels: { nodes: [{ name: "Validation-Submission-Failed" }] },
       },
       {
         number: 450005,
@@ -218,9 +200,8 @@ describe("Domain: depths logic", () => {
       expect(isFirstTimerCandidate(sampleNodes[0])).toBe(true);
       expect(isFirstTimerCandidate(sampleNodes[1])).toBe(false); // CONTRIBUTOR
       expect(isFirstTimerCandidate(sampleNodes[2])).toBe(true); // 2 commits（コミット数制限撤廃により初回提出者として許容）
-      expect(isFirstTimerCandidate(sampleNodes[3])).toBe(false); // blocked label
-      expect(isFirstTimerCandidate(sampleNodes[4])).toBe(false); // author null
-      expect(isFirstTimerCandidate(sampleNodes[5])).toBe(true);
+      expect(isFirstTimerCandidate(sampleNodes[3])).toBe(false); // author null
+      expect(isFirstTimerCandidate(sampleNodes[4])).toBe(true);
     });
 
     test("formatGraphQLDepthsRow は正しく DepthsRow を組み立て、CommitCount も格納する", () => {
@@ -238,13 +219,12 @@ describe("Domain: depths logic", () => {
       expect(multiCommitRow.CommitCount).toBe(2);
     });
 
-    test("isStaleCandidate は1コミット限定かつ除外ラベルなしの健康体を判定する（常連含む）", () => {
+    test("isStaleCandidate は1コミット限定の健康体を判定する（常連含む）", () => {
       expect(isStaleCandidate(sampleNodes[0])).toBe(true); // 1 commit, NONE
       expect(isStaleCandidate(sampleNodes[1])).toBe(true); // 1 commit, CONTRIBUTOR（優等生の底は常連含む）
       expect(isStaleCandidate(sampleNodes[2])).toBe(false); // 2 commits（1コミット限定のため除外）
-      expect(isStaleCandidate(sampleNodes[3])).toBe(false); // blocked label
-      expect(isStaleCandidate(sampleNodes[4])).toBe(true); // 1 commit, author null でも優等生としては許容
-      expect(isStaleCandidate(sampleNodes[5])).toBe(true);
+      expect(isStaleCandidate(sampleNodes[3])).toBe(true); // 1 commit, author null でも優等生としては許容
+      expect(isStaleCandidate(sampleNodes[4])).toBe(true);
     });
   });
 

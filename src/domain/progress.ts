@@ -13,17 +13,20 @@ import type {
 } from "../models/progress";
 import { buildGuidance, compareWithSamples, toSnapshotSamples } from "./benchmark";
 import { DAY_MS, formatDateTimeWithDay } from "./formatters";
-import { isBlockedLabel } from "./labels";
 
 export { formatDateTimeWithDay, formatDelta, formatHumanDays } from "./formatters";
 export {
   BLOCKED_LABELS,
   BLOCKED_PATTERNS,
+  buildExcludedLabelQueryParts,
   buildHealthyQueryParts,
+  buildMergedCandidateQueryParts,
   INVESTIGATION_LABELS,
   isBlockedLabel,
   isEligibleLabels,
+  PATTERN_BLOCKED_LABELS,
   REQUIRED_LABELS,
+  WAIVED_LABEL_PREFIX,
 } from "./labels";
 export { parseCsvRows, QUEUE_BASIS, serializeCsvRows, toHistoryRow } from "./progress-csv";
 export { simulateReadySince } from "./timeline";
@@ -81,7 +84,8 @@ export function calculateProgressStats(
 }
 
 /**
- * 作成順で基準 PR より前に並ぶ検索結果から、除外ラベルを持たない直前ライバル PR を抽出する。
+ * 作成順で基準 PR より前に並ぶ検索結果から、直前ライバル PR を抽出する。
+ * 阻害ラベルの除外は Search クエリ（`-label:...`）側で実施済み。
  */
 export function extractRivalPrs(
   items: GitHubDetailedSearchItem[],
@@ -91,8 +95,6 @@ export function extractRivalPrs(
   const rivals: ProgressRivalPr[] = [];
   for (const item of items) {
     if (item.number >= targetPr) continue;
-    const hasBlocked = (item.labels ?? []).some((l) => isBlockedLabel(l.name));
-    if (hasBlocked) continue;
 
     rivals.push({
       number: item.number,

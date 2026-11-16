@@ -164,8 +164,8 @@ async function fetchAndValidateTargetPr(
   const pr = await client.getPullRequestDetails(options.repository, options.targetPr);
   const created = new Date(pr.createdAt);
   const commits = pr.commits;
-  const commitCount = commits.length;
-  const latestCommit = commitCount > 0 ? commits[commitCount - 1] : null;
+  const commitCount = pr.commitCount ?? commits.length;
+  const latestCommit = commits.length > 0 ? commits[commits.length - 1] : null;
   const latestCommittedDate = latestCommit ? new Date(latestCommit.committedDate) : created;
 
   const totalLifetimeDays = (now.getTime() - created.getTime()) / DAY_MS;
@@ -288,17 +288,17 @@ async function collectOpenQueueInfo(
   }
   const allTotal = frontRes.totalCount;
 
-  // 2. 作成順での累積待ちと直前ライバル PR 抽出
+  // 2. 作成順での累積待ちと直前ライバル PR 抽出（阻害ラベルはクエリ側で除外済みのため必要最小限の 6 件取得）
   const aheadQuery = `${eligibleQuery} created:<${created.toISOString()}`;
-  const aheadRes = await client.searchIssuesDetailed(aheadQuery, "created", "desc", 15);
+  const aheadRes = await client.searchIssuesDetailed(aheadQuery, "created", "desc", 6);
   const aheadTotal = aheadRes.totalCount;
 
-  // 3. 実質待ち: 指摘なく順番待ちをしている PR は更新が止まっているため、更新順が実際の待ち順位になる
+  // 3. 実質待ち: 指摘なく順番待ちをしている PR は更新が止まっているため、更新順が実際の待ち順位になる（件数のみ取得）
   const updatedAheadRes = await client.searchIssuesDetailed(
     `${eligibleQuery} updated:<${new Date(prUpdatedAt).toISOString()}`,
     "updated",
     "asc",
-    1,
+    0,
   );
 
   const rivals = extractRivalPrs(aheadRes.items, targetPr);
@@ -366,9 +366,9 @@ async function fetchExitCounts(
     created.toISOString().replace(/\.\d{3}Z$/, "Z"),
     REQUIRED_LABELS,
   );
-  const mergedOlder = (await client.searchIssuesDetailed(exitQueries.merged, "updated", "desc", 1))
+  const mergedOlder = (await client.searchIssuesDetailed(exitQueries.merged, "updated", "desc", 0))
     .totalCount;
-  const closedOlder = (await client.searchIssuesDetailed(exitQueries.closed, "updated", "desc", 1))
+  const closedOlder = (await client.searchIssuesDetailed(exitQueries.closed, "updated", "desc", 0))
     .totalCount;
   log(
     `離脱の累積         : 基準 PR の起票以降に、起票が前の PR がマージ ${mergedOlder} 件・未マージでクローズ ${closedOlder} 件`,

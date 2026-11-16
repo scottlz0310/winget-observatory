@@ -23,8 +23,21 @@ export interface ProgressPrDetail {
   closedAt: string | null;
   labels: string[];
   commits: ProgressCommitSummary[];
+  /** PR の総コミット数（commits(last: 1) 取得時の totalCount。省略時は commits.length） */
+  commitCount?: number;
+}
+
+export interface ProgressPrState {
+  state: "OPEN" | "CLOSED" | "MERGED";
+  mergedAt: string | null;
+}
+
+export interface ProgressPrSampleData {
+  createdAt: string;
+  commitCount: number;
+  latestCommittedDate: string;
   author?: string;
-  authorAssociation?: string;
+  timeline: ProgressTimelineEvent[];
 }
 
 export interface ProgressTimelineEvent {
@@ -261,10 +274,6 @@ export interface GitHubDetailedSearchItem {
   created_at: string;
   updated_at: string;
   author?: string;
-  author_association?: string;
-  commitCount?: number;
-  labels?: { name: string }[];
-  is_draft?: boolean;
   pull_request?: {
     merged_at?: string | null;
   };

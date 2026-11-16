@@ -93,7 +93,7 @@ function appendJsonLine(path: string, value: ForecastHistoryLine): void {
 
 export async function runRecordForecast(
   options: RecordForecastOptions,
-  client: Pick<GitHubApiClient, "getPullRequestDetails"> = new GitHubApiClient(),
+  client: Pick<GitHubApiClient, "getPullRequestState"> = new GitHubApiClient(),
   log: (msg: string) => void = console.log,
 ): Promise<RecordForecastResult> {
   const { targetPr, repository, dataDir } = options;
@@ -106,7 +106,7 @@ export async function runRecordForecast(
     return { action: "skipped", reason };
   }
 
-  const pr = await client.getPullRequestDetails(repository, targetPr);
+  const pr = await client.getPullRequestState(repository, targetPr);
 
   if (pr.state === "MERGED" && pr.mergedAt) {
     const outcome: ForecastOutcomeRecord = {
