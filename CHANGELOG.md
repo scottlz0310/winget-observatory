@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - 除外条件の GitHub Search クエリ押し込みと GraphQL 取得フィールド削ぎ落とし・サンプル計測クエリ統合（#100）:
-  - `src/domain/labels.ts`: `microsoft/winget-pkgs` 実在のパターン一致阻害ラベル 46 件を `PATTERN_BLOCKED_LABELS` として定義し、`buildHealthyQueryParts` および `buildMergedCandidateQueryParts`（新設）で全 77 件の `-label:"..."` をサーバー側 Search クエリに押し込み。モデレーター免除ラベル `Waived-*`（`Waived-Validation-*-Error` 4 件を含む）を `isBlockedLabel` の阻害判定および `-label:` 除外対象から外して健康体扱いに統一
+  - `src/domain/labels.ts`, `src/models/sample-cache.ts`, `src/domain/sample-cache.ts`, `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`: `microsoft/winget-pkgs` 実在のパターン一致阻害ラベル 46 件を `PATTERN_BLOCKED_LABELS` として定義し、`buildHealthyQueryParts` および `buildMergedCandidateQueryParts`（新設）で全 77 件の `-label:"..."` をサーバー側 Search クエリに押し込み。モデレーター免除ラベル `Waived-*`（`Waived-Validation-*-Error` 4 件を含む）を `isBlockedLabel` の阻害判定および `-label:` 除外対象から外して健康体扱いに統一し、旧版の `no-ready` スキップキャッシュおよび `timeline-blocking` サンプルキャッシュを再評価・移行するよう `CURRENT_FIRST_TIMER_VERSION = 3` に更新
   - `src/domain/exit-breakdown.ts`: 離脱内訳クエリ `buildExitCountQueries` に `draft:false` を追加し、`EffectiveAhead` 母集団と条件を整合
   - `src/domain/search-window.ts`, `src/domain/first-timer.ts`: マージ済み候補探索クエリに `draft:false` と全阻害 `-label:` を押し込み、クライアント側の重複日時再フィルタおよび不要な事前ラベル・Draft 判定を削除
   - `src/domain/depths.ts`, `src/cli/explore-depths.ts`, `src/domain/progress.ts`: サーバー側 `-label:` 押し込みに伴いクライアント側の `hasBlockedLabel` / `isBlockedLabel` 再フィルタと冗長なクライアント側再ソートを削除

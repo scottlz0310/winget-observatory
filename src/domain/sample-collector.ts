@@ -67,6 +67,7 @@ function createSkippedEntry(
     Number: prNumber,
     MergedAt: mergedAt.toISOString(),
     Reason: reason,
+    FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
   };
 }
 
@@ -90,12 +91,17 @@ function resolveCachedCandidate(params: {
   const { cand, cached, isWithinOverallWindow, candidateAuthorCounts, canFetchMore } = params;
   const candAuthorCount = cand.author ? (candidateAuthorCounts.get(cand.author) ?? 0) : 0;
 
-  if (cached.Type === "skipped" && cached.Reason === "not-first-timer-candidate") {
-    const needsReevaluation = shouldReevaluateSkippedCandidate({
+  if (cached.Type === "skipped") {
+    const shouldReevaluate = shouldReevaluateSkippedCandidate({
+      reason: cached.Reason,
+      firstTimerVersion: cached.FirstTimerVersion,
       isWithinOverallWindow,
       isEligibleForDetail: isCandidateEligible(cand, candidateAuthorCounts),
     });
-    return { needsReevaluation };
+    if (cached.Reason === "no-ready") {
+      return { needsReevaluation: shouldReevaluate && canFetchMore };
+    }
+    return { needsReevaluation: shouldReevaluate };
   }
 
   if (cached.Type === "sample") {

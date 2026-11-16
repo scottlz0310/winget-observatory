@@ -83,6 +83,7 @@ describe("Domain: parseSampleCache", () => {
     Number: 7,
     MergedAt: "2026-11-01T00:00:00.000Z",
     Reason: "no-ready",
+    FirstTimerVersion: 3,
   };
   const skippedNotFirstTimer: SampleCacheEntry = {
     Type: "skipped",
@@ -155,6 +156,11 @@ describe("Domain: parseSampleCache", () => {
     [
       "FirstTimerVersion が整数ではない",
       `${JSON.stringify(entry({ FirstTimerVersion: "v2" }))}\n`,
+      "FirstTimerVersion が整数ではありません",
+    ],
+    [
+      "skipped の FirstTimerVersion が整数ではない",
+      `${JSON.stringify({ ...skipped, FirstTimerVersion: "v3" })}\n`,
       "FirstTimerVersion が整数ではありません",
     ],
   ])("壊れた行は握りつぶさず行番号つきで例外にする: %s", (_name, text, message) => {
