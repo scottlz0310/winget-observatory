@@ -8,6 +8,7 @@ import type {
 } from "../../src/models/forecast";
 import type { ForecastHistoryLine } from "../../src/models/forecast-history";
 import type { ProgressHistoryRow, ProgressSnapshot } from "../../src/models/progress";
+import type { FirstTimerFastestRanking } from "../../src/models/sample-cache";
 
 export interface BuildOptions {
   dataDir: string;
@@ -32,4 +33,5 @@ export interface DashboardRenderInput {
   forecastHistory?: ForecastHistoryLine[];
   firstTimerFrontierSamples?: FirstTimerFrontierSample[];
   unreviewedFrontierSamples?: UnreviewedFrontierSample[];
+  firstTimerFastestRanking?: FirstTimerFastestRanking;
 }

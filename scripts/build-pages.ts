@@ -11,6 +11,7 @@ import {
 } from "../src/domain/forecast";
 import { parseForecastHistory } from "../src/domain/forecast-history";
 import { parseCsvRows } from "../src/domain/progress-csv";
+import { extractFirstTimerFastestRanking, parseSampleCache } from "../src/domain/sample-cache";
 import type {
   FirstTimerFrontierSample,
   StaleFrontierSample,
@@ -18,6 +19,7 @@ import type {
 } from "../src/models/forecast";
 import type { ForecastHistoryLine } from "../src/models/forecast-history";
 import type { ProgressHistoryRow } from "../src/models/progress";
+import type { FirstTimerFastestRanking } from "../src/models/sample-cache";
 import { generateDashboardHtml } from "./pages/template";
 import type { BuildOptions, LatestDepths, LatestProgress } from "./pages/types";
 
@@ -117,6 +119,13 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     [],
   );
 
+  const firstTimerFastestRanking = readOptionalParsed<FirstTimerFastestRanking>(
+    join(dataDir, "merged-samples.jsonl"),
+    "マージ済みサンプルキャッシュ",
+    (raw) => extractFirstTimerFastestRanking(parseSampleCache(raw)),
+    { totalCount: 0, items: [] },
+  );
+
   const html = generateDashboardHtml({
     progress,
     depths,
@@ -125,6 +134,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     forecastHistory,
     firstTimerFrontierSamples,
     unreviewedFrontierSamples,
+    firstTimerFastestRanking,
   });
   const htmlPath = join(outputDir, "index.html");
   writeFileSync(htmlPath, html, "utf-8");

@@ -40,6 +40,7 @@ import {
 } from "./sections/hero-and-kpi";
 import {
   renderDurationStatsSection,
+  renderFirstTimerFastestRankingSection,
   renderOvertakeSection,
   renderRivalsSection,
   renderSamplesSection,
@@ -67,6 +68,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     forecastHistory = [],
     firstTimerFrontierSamples = [],
     unreviewedFrontierSamples = [],
+    firstTimerFastestRanking,
   } = input;
 
   const updatedJst = progress?.TimestampJst || depths?.TimestampJst || "未観測";
@@ -257,6 +259,8 @@ ${DASHBOARD_CSS}
     ${renderForecastScoreSection(forecastHistory, forecastScores)}
 
     ${renderRecentHistorySection(recentHistoryWithDeltas, repo)}
+
+    ${renderFirstTimerFastestRankingSection(firstTimerFastestRanking, repo)}
 
     ${renderSamplesSection(progress, repo)}
 

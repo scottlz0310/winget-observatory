@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ダッシュボードに蓄積済み `merged-samples.jsonl` を用いた「初回提出者 最速マージランキング（蓄積全件 TOP 10）」セクションを追加:
+  - `src/models/sample-cache.ts`, `src/domain/sample-cache.ts`: `Type === "sample"` を `Number` キーで後続行優先の重複排除し、`IsFirstTimer === true` の全件数と `TotalDays` 昇順上位 10 件を抽出する `extractFirstTimerFastestRanking` を追加
+  - `scripts/build-pages.ts`, `scripts/pages/types.ts`, `scripts/pages/sections/stats-and-samples.ts`, `scripts/pages/template.ts`: `🧪 比較に使ったサンプル` セクション直前に `🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）`（9 列・0 件時代替メッセージ・該当全件数表示）を追加
+
 ## [0.4.0] - 2026-11-17
 
 ### Changed

@@ -1595,4 +1595,126 @@ describe("buildDashboard: 過去実績との比較", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("merged-samples.jsonl から初回提出者 最速マージランキング（TOP 10）を比較サンプルセクション直前に描画する", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-first-timer-ranking-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(
+      join(dataDir, "latest-progress.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-17T00:00:00Z",
+        TimestampJst: "2026-11-17 09:00:00",
+        Repository: "microsoft/winget-pkgs",
+        TargetPr: 464302,
+        PrTitle: "Target Package",
+        SampleCount: 1,
+        Samples: [
+          {
+            Number: 9001,
+            Relation: "older",
+            CommitCount: 1,
+            TurnDays: 1.0,
+            TotalDays: 1.0,
+            ReadyDays: 1.0,
+            LatestCommittedDate: "2026-11-10T00:00:00Z",
+            MergedAt: "2026-11-11T00:00:00Z",
+            IsFirstTimer: false,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const makeCacheSample = (
+      num: number,
+      totalDays: number,
+      isFirstTimer: boolean,
+      title = `New package: Pkg.${num}`,
+    ) => ({
+      Type: "sample",
+      Number: num,
+      Title: title,
+      CreatedAt: "2026-08-01T00:00:00Z",
+      LatestCommittedDate: "2026-08-01T01:00:00.000Z",
+      CommitCount: 2,
+      ReadyAt: "2026-08-01T02:00:00.000Z",
+      MergedAt: "2026-08-02T00:00:00.000Z",
+      TotalDays: totalDays,
+      TurnDays: Math.max(0.1, totalDays - 0.1),
+      ReadyDays: Math.max(0.05, totalDays - 0.2),
+      Author: `author-${num}`,
+      IsFirstTimer: isFirstTimer,
+    });
+
+    // 11 件の初回提出者 + 常連 + 後続行上書き（#410001 は 0.05 -> false 除外、#410002 は false -> 0.14 採用）
+    const cacheLines = [
+      makeCacheSample(410001, 0.05, true, "Should be excluded later"),
+      makeCacheSample(410002, 50.0, false, "Old false row"),
+      makeCacheSample(410003, 0.2, false, "Regular contributor"),
+      ...Array.from({ length: 11 }, (_, idx) => makeCacheSample(420000 + idx, idx + 1.0, true)),
+      makeCacheSample(410001, 0.05, false, "Disqualified in later line"),
+      makeCacheSample(410002, 0.14, true, "Fastest updated entry"),
+    ];
+    writeFileSync(
+      join(dataDir, "merged-samples.jsonl"),
+      `${cacheLines.map((l) => JSON.stringify(l)).join("\n")}\n`,
+      "utf-8",
+    );
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+
+      const rankingPos = html.indexOf("🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）");
+      const samplesPos = html.indexOf("🧪 比較に使ったサンプル");
+      expect(rankingPos).toBeGreaterThan(-1);
+      expect(samplesPos).toBeGreaterThan(rankingPos);
+
+      const rankingSection = html.slice(rankingPos, samplesPos);
+      // 該当全件数 = 11 + 1 (#410002) = 12 件のうち TOP 10
+      expect(rankingSection).toContain("全 12 件");
+      expect(rankingSection).toContain("上位 10 件");
+      expect(rankingSection).toContain("<th>順位</th>");
+      expect(rankingSection).toContain("<th>PR 番号</th>");
+      expect(rankingSection).toContain("<th>コミット数</th>");
+      expect(rankingSection).toContain("<th>通算日数</th>");
+      expect(rankingSection).toContain("<th>最終コミット後</th>");
+      expect(rankingSection).toContain("<th>成立後</th>");
+      expect(rankingSection).toContain("<th>起票日時 (JST)</th>");
+      expect(rankingSection).toContain("<th>マージ日時 (JST)</th>");
+      expect(rankingSection).toContain("<th>タイトル</th>");
+
+      expect(rankingSection).toContain(
+        'href="https://github.com/microsoft/winget-pkgs/pull/410002"',
+      );
+      expect(rankingSection).toContain("Fastest updated entry");
+      expect(rankingSection).toContain("0.1 日");
+      expect(rankingSection).toContain("2026-08-01(土) 09:00");
+      expect(rankingSection).toContain("2026-08-02(日) 09:00");
+      // 後続行で除外された #410001、常連 #410003、11位以下 (#420009, #420010) は含まれない
+      expect(rankingSection).not.toContain("#410001");
+      expect(rankingSection).not.toContain("#410003");
+      expect(rankingSection).not.toContain("#420009");
+      expect(rankingSection).not.toContain("#420010");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("初回提出者サンプルが 0 件または merged-samples.jsonl 未存在時は代替メッセージを表示する", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-first-timer-ranking-empty-"));
+    const dataDir = join(tempDir, "data");
+    const outputDir = join(tempDir, "site");
+    mkdirSync(dataDir, { recursive: true });
+
+    try {
+      const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
+      expect(html).toContain("🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）");
+      expect(html).toContain("対象の初回提出者サンプルがまだありません");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

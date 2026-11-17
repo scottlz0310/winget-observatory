@@ -3,6 +3,7 @@
 import { describeGuidance, describeOvertake } from "../../../src/domain/benchmark";
 import { DAY_MS, formatDateTimeWithDay, round1 } from "../../../src/domain/formatters";
 import type { ReferenceGuidance } from "../../../src/models/progress";
+import type { FirstTimerFastestRanking } from "../../../src/models/sample-cache";
 import { escapeHtml, formatDaysStat } from "../formatters";
 import type { LatestProgress } from "../types";
 
@@ -199,6 +200,64 @@ export function renderRivalsSection(progress: LatestProgress | null): string {
       <tbody>${rows}
       </tbody>
     </table>`;
+}
+
+/** 初回提出者限定の最速マージランキング（蓄積全件 TOP 10） */
+export function renderFirstTimerFastestRankingSection(
+  ranking: FirstTimerFastestRanking | undefined,
+  repo: string,
+): string {
+  const totalCount = ranking?.totalCount ?? 0;
+  const items = ranking?.items ?? [];
+
+  if (items.length === 0) {
+    return `
+    <h2 class="section-title">🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）</h2>
+    <p class="section-note">蓄積サンプル内の初回提出者: 0 件</p>
+    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 2rem;">対象の初回提出者サンプルがまだありません</p>`;
+  }
+
+  const rows = items
+    .map(
+      (item, index) => `
+        <tr>
+          <td>${index + 1}</td>
+          <td><a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(item.Number)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a></td>
+          <td>${escapeHtml(item.CommitCount)}</td>
+          <td>${item.TotalDays.toFixed(1)} 日</td>
+          <td>${item.TurnDays.toFixed(1)} 日</td>
+          <td>${item.ReadyDays.toFixed(1)} 日</td>
+          <td>${escapeHtml(formatDateTimeWithDay(item.CreatedAt))}</td>
+          <td>${escapeHtml(formatDateTimeWithDay(item.MergedAt))}</td>
+          <td>${escapeHtml(item.Title)}</td>
+        </tr>`,
+    )
+    .join("");
+
+  return `
+    <h2 class="section-title">🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）</h2>
+    <p class="section-note">
+      蓄積サンプル内の初回提出者（全 ${totalCount} 件）から、通算日数（起票→マージ）が短い上位 ${items.length} 件を表示しています。
+    </p>
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>順位</th>
+            <th>PR 番号</th>
+            <th>コミット数</th>
+            <th>通算日数</th>
+            <th>最終コミット後</th>
+            <th>成立後</th>
+            <th>起票日時 (JST)</th>
+            <th>マージ日時 (JST)</th>
+            <th>タイトル</th>
+          </tr>
+        </thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 /** 比較に使ったマージ済みサンプルの一覧（折りたたみ） */

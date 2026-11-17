@@ -46,3 +46,11 @@ export interface CachedSkippedEntry {
 }
 
 export type SampleCacheEntry = CachedSampleEntry | CachedSkippedEntry;
+
+/** 初回提出者 最速マージランキングの集計結果 */
+export interface FirstTimerFastestRanking {
+  /** 重複排除後の IsFirstTimer === true 該当全件数 */
+  totalCount: number;
+  /** TotalDays 昇順の上位最大 N 件 */
+  items: CachedSampleEntry[];
+}
