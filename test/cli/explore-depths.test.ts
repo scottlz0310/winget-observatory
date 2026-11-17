@@ -1745,4 +1745,163 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("部分キャッシュ（新しい日時の skipped レコードのみ）があっても過去の未キャッシュ初回マージPRを取りこぼさず、アサイン解除済みオープンPRも含める", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-mainstream-partial-cache-"));
+    const samplesPath = join(tempDir, "merged-samples.jsonl");
+    const now = new Date("2026-11-17T00:00:00Z");
+
+    // 11/16 の skipped レコード 1 件（および IsFirstTimer=false 1 件）だけがキャッシュに存在
+    writeFileSync(
+      samplesPath,
+      [
+        JSON.stringify({
+          Type: "skipped",
+          Number: 951,
+          Reason: "no-ready",
+          MergedAt: "2026-11-16T00:00:00Z",
+        }),
+        JSON.stringify({
+          Type: "sample",
+          Number: 952,
+          Title: "Known Repeater",
+          CreatedAt: "2026-11-10T00:00:00Z",
+          LatestCommittedDate: "2026-11-10T00:00:00Z",
+          CommitCount: 1,
+          ReadyAt: "2026-11-10T01:00:00Z",
+          MergedAt: "2026-11-15T00:00:00Z",
+          TotalDays: 5,
+          TurnDays: 5,
+          ReadyDays: 5,
+          Author: "known-repeater",
+          IsFirstTimer: false,
+          FirstTimerReason: "lifetime-merged",
+          FirstTimerVersion: 4,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const queriedAuthors: string[] = [];
+    const mockClient = {
+      graphql: async <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
+        if (query.includes("SearchInterventionCandidates")) {
+          const searchQ = String(variables?.query ?? "");
+          if (searchQ.includes("is:open")) {
+            // 11/15 に人間 AssignedEvent があるが現在は assignees: [] に解除されているオープン PR
+            return {
+              search: {
+                issueCount: 1,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    number: 960,
+                    title: "Unassigned After Event 960",
+                    url: "https://github.com/microsoft/winget-pkgs/pull/960",
+                    state: "OPEN",
+                    createdAt: "2026-10-08T00:00:00Z",
+                    updatedAt: "2026-11-16T00:00:00Z",
+                    author: { __typename: "User", login: "unassigned-open-ft" },
+                    authorAssociation: "NONE",
+                    commits: { totalCount: 1 },
+                    assignees: { nodes: [] },
+                    reviews: { nodes: [] },
+                    comments: { nodes: [] },
+                    timelineItems: {
+                      nodes: [
+                        {
+                          __typename: "AssignedEvent",
+                          createdAt: "2026-11-15T00:00:00Z",
+                          actor: { __typename: "User", login: "stephengillie" },
+                          assignee: { __typename: "User", login: "stephengillie" },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            } as unknown as T;
+          }
+          // merged 検索は 7 日窓全体を返し、11/14 マージの未キャッシュ PR #950 と既知常連 #952 を含む
+          expect(searchQ).toContain("merged:2026-11-10T00:00:00.000Z..2026-11-17T00:00:00.000Z");
+          return {
+            search: {
+              issueCount: 2,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  number: 950,
+                  title: "Uncached Earlier Merged FT 950",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/950",
+                  state: "MERGED",
+                  createdAt: "2026-10-04T00:00:00Z",
+                  updatedAt: "2026-11-14T00:00:00Z",
+                  mergedAt: "2026-11-14T00:00:00Z",
+                  author: { __typename: "User", login: "uncached-merged-ft" },
+                  authorAssociation: "CONTRIBUTOR",
+                  commits: { totalCount: 1 },
+                  reviews: {
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "trenly" },
+                        state: "APPROVED",
+                        submittedAt: "2026-11-14T00:00:00Z",
+                      },
+                    ],
+                  },
+                },
+                {
+                  number: 952,
+                  title: "Known Repeater",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/952",
+                  state: "MERGED",
+                  createdAt: "2026-11-10T00:00:00Z",
+                  updatedAt: "2026-11-15T00:00:00Z",
+                  mergedAt: "2026-11-15T00:00:00Z",
+                  author: { __typename: "User", login: "known-repeater" },
+                  authorAssociation: "CONTRIBUTOR",
+                  commits: { totalCount: 1 },
+                  reviews: {
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "trenly" },
+                        state: "APPROVED",
+                        submittedAt: "2026-11-15T00:00:00Z",
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          } as unknown as T;
+        }
+        if (query.includes("author:")) {
+          queriedAuthors.push(query);
+          if (query.includes("unassigned-open-ft"))
+            return { u_0: { issueCount: 0 } } as unknown as T;
+          if (query.includes("uncached-merged-ft"))
+            return { u_0: { issueCount: 1 } } as unknown as T;
+        }
+        return {} as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    try {
+      const frontier = await fetchFirstReviewMainstreamFrontier({
+        client: mockClient,
+        repository: "microsoft/winget-pkgs",
+        now,
+        samplesPath,
+      });
+
+      // #950 (10/04 MERGED) と #960 (10/08 OPEN) の 2 件が拾われ、#952 (known-repeater) は著者照会せずスキップ
+      expect(frontier.CohortCount).toBe(2);
+      expect(frontier.OpenCount).toBe(1);
+      expect(frontier.MergedCount).toBe(1);
+      expect(frontier.MedianCreatedAt).toBe("2026-10-06T00:00:00.000Z");
+      expect(queriedAuthors.some((q) => q.includes("known-repeater"))).toBe(false);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

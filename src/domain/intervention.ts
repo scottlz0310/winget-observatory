@@ -413,7 +413,7 @@ export function calculateFirstReviewMainstreamFrontier(
   >();
 
   for (const candidate of candidates) {
-    if (!candidate.intervention.Intervened || !candidate.intervention.FirstHumanInterventionAt) {
+    if (!candidate.intervention.FirstHumanInterventionAt) {
       continue;
     }
     const createdMs = Date.parse(candidate.createdAt);

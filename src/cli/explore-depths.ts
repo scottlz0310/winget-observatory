@@ -534,7 +534,7 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
         name,
         node,
       );
-      if (!summary.Intervened || !summary.FirstHumanInterventionAt) continue;
+      if (!summary.FirstHumanInterventionAt) continue;
       const interventionMs = Date.parse(summary.FirstHumanInterventionAt);
       if (
         !Number.isFinite(interventionMs) ||
@@ -576,10 +576,10 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       }
     }
 
-    // 2. マージ済み PR（キャッシュ優先 ＋ キャッシュ以降の増分のみ GraphQL 検索）
-    const cachedMergedNumbers = new Set<number>();
+    // 2. マージ済み PR（7日窓全体から未キャッシュ・未確定分を補完しつつ、キャッシュ済み初回/常連判定を活用して著者照会を削減）
     const cachedFirstTimerNumbers: number[] = [];
-    let maxCachedMergedMs = windowStartMs;
+    const cachedFirstTimerSet = new Set<number>();
+    const knownNonFirstTimerNumbers = new Set<number>();
 
     if (samplesPath && existsSync(samplesPath)) {
       const rawCache = readFileSync(samplesPath, "utf-8");
@@ -589,18 +589,90 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
         if (!Number.isFinite(mergedMs) || mergedMs < windowStartMs || mergedMs > nowMs) {
           continue;
         }
-        cachedMergedNumbers.add(entry.Number);
-        if (mergedMs > maxCachedMergedMs) {
-          maxCachedMergedMs = mergedMs;
-        }
-        if (entry.Type === "sample" && entry.IsFirstTimer === true) {
-          cachedFirstTimerNumbers.push(entry.Number);
+        if (entry.Type === "sample") {
+          if (entry.IsFirstTimer === true) {
+            cachedFirstTimerNumbers.push(entry.Number);
+            cachedFirstTimerSet.add(entry.Number);
+          } else if (entry.IsFirstTimer === false) {
+            knownNonFirstTimerNumbers.add(entry.Number);
+          }
+        } else if (entry.Reason === "not-first-timer-candidate") {
+          knownNonFirstTimerNumbers.add(entry.Number);
         }
       }
     }
 
-    for (let i = 0; i < cachedFirstTimerNumbers.length; i += batchSize) {
-      const chunk = cachedFirstTimerNumbers.slice(i, i + batchSize);
+    const handledCachedNumbers = new Set<number>();
+    const mergedNodes = await collectInterventionSearchNodes(
+      client,
+      `repo:${repository} is:pr is:merged label:New-Package`,
+      "merged",
+      windowStart,
+      now,
+    );
+
+    const uncachedMergedIntervened: FirstReviewCohortCandidate[] = [];
+    for (const node of mergedNodes) {
+      if (knownNonFirstTimerNumbers.has(node.number)) continue;
+
+      if (cachedFirstTimerSet.has(node.number)) {
+        handledCachedNumbers.add(node.number);
+        const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
+          graphqlInvoker,
+          owner,
+          name,
+          node,
+        );
+        if (!summary.FirstHumanInterventionAt) continue;
+        candidates.push({
+          number: resolvedNode.number,
+          title: resolvedNode.title,
+          url: resolvedNode.url,
+          state: "MERGED",
+          author: resolvedNode.author?.login,
+          commitCount: resolvedNode.commits?.totalCount,
+          createdAt: resolvedNode.createdAt,
+          mergedAt: resolvedNode.mergedAt ?? null,
+          intervention: summary,
+        });
+        continue;
+      }
+
+      if (!node.author?.login) continue;
+      const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
+        graphqlInvoker,
+        owner,
+        name,
+        node,
+      );
+      if (!summary.FirstHumanInterventionAt) continue;
+      const interventionMs = Date.parse(summary.FirstHumanInterventionAt);
+      if (
+        !Number.isFinite(interventionMs) ||
+        interventionMs < windowStartMs ||
+        interventionMs > nowMs
+      ) {
+        continue;
+      }
+      uncachedMergedIntervened.push({
+        number: resolvedNode.number,
+        title: resolvedNode.title,
+        url: resolvedNode.url,
+        state: "MERGED",
+        author: resolvedNode.author?.login,
+        commitCount: resolvedNode.commits?.totalCount,
+        createdAt: resolvedNode.createdAt,
+        mergedAt: resolvedNode.mergedAt ?? null,
+        intervention: summary,
+      });
+    }
+
+    // Search インデックス遅延や部分結果時に備え、キャッシュ済み初回 PR で検索未出現のものだけバッチ補完する
+    const missingCachedFirstTimers = cachedFirstTimerNumbers.filter(
+      (num) => !handledCachedNumbers.has(num),
+    );
+    for (let i = 0; i < missingCachedFirstTimers.length; i += batchSize) {
+      const chunk = missingCachedFirstTimers.slice(i, i + batchSize);
       const batchQuery = buildPullRequestBatchInterventionQuery(chunk);
       const batchRes = await client.graphql<{
         repository?: Record<string, (GraphQLPullRequestNode & GraphQLPrNode) | null> | null;
@@ -615,7 +687,7 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
           name,
           prNode,
         );
-        if (!summary.Intervened || !summary.FirstHumanInterventionAt) continue;
+        if (!summary.FirstHumanInterventionAt) continue;
         candidates.push({
           number: resolvedNode.number,
           title: resolvedNode.title,
@@ -630,63 +702,21 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       }
     }
 
-    const mergedSearchSince = new Date(maxCachedMergedMs);
-    if (mergedSearchSince.getTime() < nowMs) {
-      const extraMergedNodes = await collectInterventionSearchNodes(
-        client,
-        `repo:${repository} is:pr is:merged label:New-Package`,
-        "merged",
-        mergedSearchSince,
-        now,
+    if (uncachedMergedIntervened.length > 0) {
+      const mergedAuthors = uncachedMergedIntervened
+        .map((c) => c.author)
+        .filter((login): login is string => Boolean(login));
+      await resolveAuthorMergedCounts(
+        repository,
+        mergedAuthors,
+        (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
+        { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
       );
-      const uncachedMergedIntervened: FirstReviewCohortCandidate[] = [];
-      for (const node of extraMergedNodes) {
-        if (cachedMergedNumbers.has(node.number)) continue;
-        if (!node.author?.login) continue;
-        const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
-          graphqlInvoker,
-          owner,
-          name,
-          node,
-        );
-        if (!summary.Intervened || !summary.FirstHumanInterventionAt) continue;
-        const interventionMs = Date.parse(summary.FirstHumanInterventionAt);
-        if (
-          !Number.isFinite(interventionMs) ||
-          interventionMs < windowStartMs ||
-          interventionMs > nowMs
-        ) {
-          continue;
-        }
-        uncachedMergedIntervened.push({
-          number: resolvedNode.number,
-          title: resolvedNode.title,
-          url: resolvedNode.url,
-          state: "MERGED",
-          author: resolvedNode.author?.login,
-          commitCount: resolvedNode.commits?.totalCount,
-          createdAt: resolvedNode.createdAt,
-          mergedAt: resolvedNode.mergedAt ?? null,
-          intervention: summary,
-        });
-      }
-
-      if (uncachedMergedIntervened.length > 0) {
-        const mergedAuthors = uncachedMergedIntervened
-          .map((c) => c.author)
-          .filter((login): login is string => Boolean(login));
-        await resolveAuthorMergedCounts(
-          repository,
-          mergedAuthors,
-          (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
-          { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
-        );
-        for (const candidate of uncachedMergedIntervened) {
-          if (!candidate.author) continue;
-          // 既にマージ済みの初回 PR なので累計マージ数は 1 件以下（単発マージ）のみ許容
-          if ((mergedCountCache.get(candidate.author) ?? 0) <= 1) {
-            candidates.push(candidate);
-          }
+      for (const candidate of uncachedMergedIntervened) {
+        if (!candidate.author) continue;
+        // 既にマージ済みの初回 PR なので累計マージ数は 1 件以下（単発マージ）のみ許容
+        if ((mergedCountCache.get(candidate.author) ?? 0) <= 1) {
+          candidates.push(candidate);
         }
       }
     }

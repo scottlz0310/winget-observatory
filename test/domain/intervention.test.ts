@@ -475,4 +475,44 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
     expect(frontier.MedianCreatedAt).toBe("2026-10-11T00:00:00.000Z");
     expect(frontier.LagDays).toBe(37);
   });
+
+  test("第三者 AssignedEvent の後にアサイン解除され現在 Intervened=false でも、FirstHumanInterventionAt が窓内ならコホートに含める", () => {
+    const intervention = classifyPrIntervention({
+      author: { __typename: "User", login: "submitter" },
+      assignees: { nodes: [] },
+      reviews: { nodes: [] },
+      comments: { nodes: [] },
+      timelineItems: {
+        nodes: [
+          {
+            __typename: "AssignedEvent",
+            createdAt: "2026-11-15T00:00:00Z",
+            actor: { __typename: "User", login: "stephengillie" },
+            assignee: { __typename: "User", login: "stephengillie" },
+          },
+        ],
+      },
+    });
+    expect(intervention.Intervened).toBe(false);
+    expect(intervention.FirstHumanInterventionAt).toBe("2026-11-15T00:00:00.000Z");
+
+    const frontier = calculateFirstReviewMainstreamFrontier(
+      [
+        {
+          number: 31,
+          title: "Unassigned after human assign event",
+          url: "https://github.com/microsoft/winget-pkgs/pull/31",
+          state: "OPEN",
+          author: "submitter",
+          commitCount: 1,
+          createdAt: "2026-10-08T00:00:00Z",
+          intervention,
+        },
+      ],
+      NOW,
+    );
+    expect(frontier.CohortCount).toBe(1);
+    expect(frontier.MedianCreatedAt).toBe("2026-10-08T00:00:00.000Z");
+    expect(frontier.Items?.[0].InterventionKind).toBe("assignee");
+  });
 });
