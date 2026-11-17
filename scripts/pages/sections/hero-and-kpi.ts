@@ -1,12 +1,6 @@
 // 初回提出者サマリー・予想比較パネル・KPI グリッド・トリアージフロー図の描画セクション
 
-import {
-  DAY_MS,
-  formatJstDate,
-  formatJstDateTime,
-  formatMonthDay,
-  round1,
-} from "../../../src/domain/formatters";
+import { DAY_MS, formatJstDate, formatMonthDay, round1 } from "../../../src/domain/formatters";
 import type { DashboardCalculatedMetrics } from "../../../src/models/dashboard";
 import type { FirstReviewForecast, FirstReviewForecastStatus } from "../../../src/models/forecast";
 import type { ForecastComparison, HypothesisId } from "../../../src/models/forecast-comparison";
@@ -15,8 +9,7 @@ import type { DeltaBadge, LatestDepths, LatestProgress } from "../types";
 
 const HYPOTHESIS_STYLE: Record<HypothesisId, { mark: string; color: string }> = {
   "rank-velocity": { mark: "①", color: "var(--primary)" },
-  "update-order": { mark: "②", color: "var(--warning)" },
-  "creation-order": { mark: "③", color: "var(--success)" },
+  "creation-order": { mark: "②", color: "var(--success)" },
 };
 
 function formatCohortForecastTarget(
@@ -153,7 +146,7 @@ export function renderFirstTimerHeroSummary(
     </section>`;
 }
 
-/** 3 つの仮説によるマージ時期の予想を比較するパネル（ページの最上部に置く） */
+/** 2 つの仮説によるマージ時期の予想を比較するパネル（ページの最上部に置く） */
 export function renderForecastPanel(
   comparison: ForecastComparison,
   timelineSvg: string | null,
@@ -196,9 +189,9 @@ export function renderForecastPanel(
 
   return `
     <section class="card forecast-panel" aria-label="マージ時期の予想の比較">
-      <div class="card-title">予想マージ日（3 つの仮説の比較）</div>
+      <div class="card-title">予想マージ日（2 つの仮説の比較）</div>
       <div class="card-value">${headline} <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">${headlineDays}</span></div>
-      <div class="card-subtext">範囲は主な予想の最小〜最大です。3 つの仮説は前提が異なり、どれが実態に近いかはまだ検証できていません。</div>
+      <div class="card-subtext">範囲は主な予想の最小〜最大です。2 つの仮説は前提が異なり、どちらが実態に近いかはまだ検証できていません。</div>
       ${timelineSvg ? `<div style="margin: 0.75rem 0;">${timelineSvg}</div>` : ""}
       <div style="overflow-x: auto;">
         <table style="margin-bottom: 0;">
@@ -226,7 +219,7 @@ const FIRST_REVIEW_BADGE_MAP: Record<FirstReviewForecastStatus, { label: string;
     },
     "no-progress": { label: "停滞中（定常目安）", style: "background: #fee2e2; color: #b91c1c;" },
     "no-samples": {
-      label: "未観測",
+      label: "データ不足",
       style: "background: var(--code-bg); color: var(--text-muted);",
     },
     "no-target": {
@@ -260,9 +253,9 @@ function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
     }
     case "reached":
       return {
-        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（未レビュー前線が基準 PR 起票日を通過）</span>`,
+        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（基準 PR の起票日ラインに到達済み）</span>`,
         detailText:
-          "未レビュー前線の先頭起票日時が基準 PR の起票日時に追いついています（定常・実測ベースともに残り 0 日）。",
+          "主戦場ライン（直近7日初回人間介入コホートの起票日時中央値）が基準 PR の起票日以降に到達しています（基準 PR の起票日ラインに到達済み・残り 0 日）。",
       };
     case "forecasted": {
       const dateStr =
@@ -275,7 +268,7 @@ function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
           : "";
       return {
         headlineHtml: `${escapeHtml(dateStr)} <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">${escapeHtml(etaStr)}</span>`,
-        detailText: `直近 ${forecast.windowHours} 時間の未レビュー前線進行速度（${forecast.observedSpeed} 日/日）に基づく見込みです${steadyRef}。`,
+        detailText: `直近 ${forecast.windowHours} 時間の主戦場ライン進行速度（${forecast.observedSpeed} 日/日）に基づく見込みです${steadyRef}。`,
       };
     }
     case "insufficient-window": {
@@ -295,41 +288,38 @@ function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
           : "";
       return {
         headlineHtml: `<span style="color: var(--warning);">停滞中（実測算出不能）</span>`,
-        detailText: `直近 ${forecast.windowHours} 時間で未レビュー前線が進んでいないため実測予想日を出せません。${steadyNote}`,
+        detailText: `直近 ${forecast.windowHours} 時間で主戦場ラインが進んでいないため実測予想日を出せません。${steadyNote}`,
       };
     }
     case "no-target":
       return {
         headlineHtml: `<span style="color: var(--text-muted);">基準 PR 起票日時が不明</span>`,
         detailText:
-          "基準 PR の起票日時が記録されていないため、到達予想日を算出できません（未レビュー前線の現在位置のみ表示）。",
+          "基準 PR の起票日時が記録されていないため、到達予想日を算出できません（主戦場ラインの現在位置のみ表示）。",
       };
     case "no-samples":
       return {
-        headlineHtml: `<span style="color: var(--text-muted);">未観測</span>`,
+        headlineHtml: `<span style="color: var(--text-muted);">データ不足</span>`,
         detailText:
-          "未レビュー前線の観測データがありません（次回の定期観測から記録・算出されます）。",
+          "直近 7 日間に初回人間介入が入った初回提出 PR コホートの観測データが不足しているため算出できません。",
       };
   }
 }
 
 /**
- * 基準 PR への初回レビュー到達予想パネルを描画する（最終マージ予想の 3 仮説とは独立した指標）
+ * 基準 PR への初回レビュー到達予想パネルを描画する（主戦場ライン方式・最終マージ予想の 2 仮説とは独立した指標）
  */
-export function renderFirstReviewForecastPanel(
-  forecast: FirstReviewForecast,
-  repo: string,
-): string {
+export function renderFirstReviewForecastPanel(forecast: FirstReviewForecast): string {
   const badge = FIRST_REVIEW_BADGE_MAP[forecast.status];
   const { headlineHtml, detailText } = renderFirstReviewHeadline(forecast);
   const { frontier } = forecast;
 
   const frontierValueHtml = frontier
-    ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${frontier.pr}" target="_blank">#${frontier.pr}</a>`
-    : `<span style="color: var(--text-muted);">-</span>`;
+    ? `${escapeHtml(formatJstDate(frontier.createdMs))}`
+    : `<span style="color: var(--text-muted);">データ不足</span>`;
   const frontierSubHtml = frontier
-    ? `起票: ${escapeHtml(formatJstDateTime(frontier.createdMs, false))}（経過 ${forecast.lagDays ?? "-"} 日）`
-    : "未観測";
+    ? `直近7日初回介入 ${frontier.cohortCount}件の中央値（経過 ${forecast.lagDays ?? "-"} 日 / Open ${frontier.openCount}・Merged ${frontier.mergedCount}）`
+    : "対象コホート 0 件または未観測";
 
   const hasTargetIntervention = Boolean(forecast.targetIntervention?.Intervened);
   const gapValueHtml = hasTargetIntervention
@@ -341,8 +331,8 @@ export function renderFirstReviewForecastPanel(
     ? escapeHtml(formatTargetInterventionLabel(forecast))
     : forecast.gapDays !== null
       ? forecast.gapDays <= 0
-        ? "未レビュー前線が基準 PR の起票日に到達済み"
-        : "基準 PR の起票日 − 前線先頭の起票日"
+        ? "基準 PR の起票日ラインに到達済み"
+        : "基準 PR の起票日 − 主戦場ライン中央値"
       : "基準 PR の起票日時が不明";
 
   const speedValueHtml =
@@ -351,18 +341,18 @@ export function renderFirstReviewForecastPanel(
       : `<span style="color: var(--text-muted);">-</span>`;
   const speedSubHtml =
     forecast.observedSpeed !== null
-      ? `直近 ${forecast.windowHours} 時間の実測（起票日基準）`
+      ? `直近 ${forecast.windowHours} 時間の実測（中央値推移）`
       : forecast.observedUnavailable === "no-progress"
         ? `直近 ${forecast.windowHours} 時間で進行なし`
         : forecast.observedUnavailable === "insufficient-window"
           ? "6 時間以上の観測間隔が貯まると算出"
-          : "速度の算出待ち";
+          : "データ不足（速度の算出待ち）";
 
   return `
     <section class="card forecast-panel" style="border-left: 4px solid #0ea5e9; margin-top: 1rem; margin-bottom: 0.5rem;" aria-label="初回レビュー到達予想">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.4rem;">
         <div class="card-title" style="margin-bottom: 0; font-weight: 600; color: var(--text-color);">
-          👀 初回レビュー到達予想（未レビュー前線・起票順）
+          👀 初回レビュー到達予想（主戦場ライン・7日初回介入コホート中央値）
         </div>
         <span class="badge" style="${badge.style}">${escapeHtml(badge.label)}</span>
       </div>
@@ -370,9 +360,9 @@ export function renderFirstReviewForecastPanel(
       <div class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(detailText)}</div>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 0.5rem;">
         <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">未レビュー前線の現在位置</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">主戦場ラインの現在位置</div>
           <div style="font-size: 1.1rem; font-weight: 700;">${frontierValueHtml}</div>
-          <div class="card-subtext">${frontierSubHtml}</div>
+          <div class="card-subtext">${escapeHtml(frontierSubHtml)}</div>
         </div>
         <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
           <div style="font-size: 0.75rem; color: var(--text-muted);">基準 PR との起票日差 / 状態</div>
@@ -380,13 +370,13 @@ export function renderFirstReviewForecastPanel(
           <div class="card-subtext">${gapSubHtml}</div>
         </div>
         <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">未レビュー前線の進行速度</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">主戦場ラインの進行速度</div>
           <div style="font-size: 1.1rem; font-weight: 700;">${speedValueHtml}</div>
           <div class="card-subtext">${escapeHtml(speedSubHtml)}</div>
         </div>
       </div>
       <div class="card-subtext">
-        ※ 純粋ボット・作成者本人・自動検証ログを除き、人間レビュー・手動コメント・第三者 Assignees がすべて無い健康な New-Package PR を起票順（createdAt）で追跡しています。既存の「予想マージ日（3 仮説）」とは独立した初回介入の目安です。
+        ※ 純粋ボット・作成者本人・自動検証ログ（(Deterministic automation）を除き、直近 7 日間に初めて人間介入（人間レビュー・手動コメント・第三者 Assignees）が入った初回提出者（New-Package）PR 群（オープン中＋直近マージ済み）の起票日時中央値を主戦場ラインとしています。既存の「予想マージ日（2 仮説）」とは独立した初回介入の目安です。
       </div>
     </section>`;
 }

@@ -53,7 +53,7 @@ describe("Domain: toForecastRecord", () => {
   const comparison = (estimateCounts: number[]): ForecastComparison => ({
     nowMs: 0,
     range: null,
-    hypotheses: (["rank-velocity", "update-order", "creation-order"] as const).map((id, i) => ({
+    hypotheses: (["rank-velocity", "creation-order"] as const).map((id, i) => ({
       id,
       title: id,
       premise: "",
@@ -70,8 +70,8 @@ describe("Domain: toForecastRecord", () => {
     })),
   });
 
-  test("すべての仮説・モデルの予想を、ISO の日付つきで 1 件の記録にまとめる", () => {
-    const record = toForecastRecord(comparison([1, 2, 1]), {
+  test("現行 2 仮説の予想を、ISO の日付つきで 1 件の記録にまとめる", () => {
+    const record = toForecastRecord(comparison([1, 2]), {
       repository: "o/r",
       targetPr: 7,
       timestamp: "2026-11-08T00:00:00Z",
@@ -82,10 +82,10 @@ describe("Domain: toForecastRecord", () => {
       Repository: "o/r",
       TargetPr: 7,
     });
-    expect(record?.Estimates).toHaveLength(4);
+    expect(record?.Estimates).toHaveLength(3);
     expect(record?.Estimates[1]).toEqual({
-      Key: "update-order:0",
-      Hypothesis: "update-order",
+      Key: "creation-order:0",
+      Hypothesis: "creation-order",
       Date: "2026-12-01T00:00:00.000Z",
       EtaDays: 5.5,
       Primary: true,
@@ -96,7 +96,7 @@ describe("Domain: toForecastRecord", () => {
 
   test("予想日が 1 件も無い観測は記録しない", () => {
     expect(
-      toForecastRecord(comparison([0, 0, 0]), {
+      toForecastRecord(comparison([0, 0]), {
         repository: "o/r",
         targetPr: 7,
         timestamp: "2026-11-08T00:00:00Z",
@@ -197,8 +197,8 @@ describe("Domain: scoreForecasts", () => {
     expect(scores[0].keys[0].lastErrorDays).toBe(3);
   });
 
-  test("仮説・モデルの表示順（順位消化 → 更新順 → 作成順）に並べ、基準 PR ごとに採点する", () => {
-    const scores = scoreForecasts([
+  test("仮説・モデルの表示順（順位消化 → 作成順）に並べ、旧 update-order 履歴を後方互換で読み込みつつ採点対象からは除外する", () => {
+    const rawJsonl = [
       forecast("2026-11-08T00:00:00Z", [
         ["creation-order:p75", "creation-order", 5],
         ["update-order:observed", "update-order", 1],
@@ -209,12 +209,17 @@ describe("Domain: scoreForecasts", () => {
       forecast("2026-11-08T00:00:00Z", [["rank-velocity", "rank-velocity", 7]], 2),
       outcome(),
       outcome(new Date(MERGED + 5 * DAY).toISOString(), 2),
-    ]);
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n");
+
+    const parsed = parseForecastHistory(rawJsonl);
+    expect(parsed).toHaveLength(4);
+
+    const scores = scoreForecasts(parsed);
     expect(scores.map((s) => s.targetPr)).toEqual([1, 2]);
     expect(scores[0].keys.map((k) => k.key)).toEqual([
       "rank-velocity",
-      "update-order:steady",
-      "update-order:observed",
       "creation-order:median",
       "creation-order:p75",
     ]);

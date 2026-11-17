@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient } from "../../src/api/github";
 import {
+  fetchFirstReviewMainstreamFrontier,
   fetchFirstTimerBottom,
   fetchInterventionFrontiers,
   fetchStaleBottom,
@@ -11,7 +12,8 @@ import {
   resolveDefaultDataDir,
   runExploreDepths,
 } from "../../src/cli/explore-depths";
-import { buildHealthyBaseQuery } from "../../src/domain/depths";
+import { buildHealthyBaseQuery, CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
+import { FIRST_REVIEW_MAINSTREAM_MODE } from "../../src/domain/intervention";
 import type { GitHubPrView, GitHubSearchItem, GraphQLPrNode } from "../../src/models/depths";
 
 describe("CLI: explore-depths", () => {
@@ -1427,7 +1429,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     expect(r2.intervenedTruncated).toBe(true);
   });
 
-  test("runExploreDepths は DepthsVersion=3 で UnreviewedBottom / IntervenedBottom / TargetPr.Intervention を保存する", async () => {
+  test("runExploreDepths は DepthsVersion=4 で FirstReviewFrontier / UnreviewedBottom / IntervenedBottom / TargetPr.Intervention を保存する", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-depths-intervention-"));
     const outputPath = join(tempDir, "latest-depths.json");
     const historyPath = join(tempDir, "depths-history.jsonl");
@@ -1541,7 +1543,8 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
         () => {},
       );
 
-      expect(snapshot.DepthsVersion).toBe(3);
+      expect(snapshot.DepthsVersion).toBe(CURRENT_DEPTHS_VERSION);
+      expect(snapshot.FirstReviewFrontier?.Mode).toBe(FIRST_REVIEW_MAINSTREAM_MODE);
       expect(snapshot.TargetPr?.Intervention?.PrimaryBadge?.Label).toBe(
         "コメント済: stephengillie",
       );
@@ -1554,11 +1557,190 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       expect(snapshot.StaleBottom[1].ThirdPartyAssignees).toEqual(["stephengillie"]);
 
       const saved = JSON.parse(readFileSync(outputPath, "utf-8"));
-      expect(saved.DepthsVersion).toBe(3);
+      expect(saved.DepthsVersion).toBe(CURRENT_DEPTHS_VERSION);
+      expect(saved.FirstReviewFrontier.Mode).toBe(FIRST_REVIEW_MAINSTREAM_MODE);
       expect(saved.UnreviewedBottom[0].Number).toBe(801);
       expect(saved.IntervenedBottom[0].Intervention.PrimaryBadge.Label).toBe(
         "コメント済: stephengillie",
       );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fetchFirstReviewMainstreamFrontier はオープンPRと merged-samples.jsonl キャッシュ・増分マージPRを合算し、ボット/常連を除外して中央値を算出する", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-mainstream-test-"));
+    const samplesPath = join(tempDir, "merged-samples.jsonl");
+    const now = new Date("2026-11-17T00:00:00Z");
+
+    // キャッシュ済みマージ済み PR #901（初回提出者・3日前にマージ）
+    writeFileSync(
+      samplesPath,
+      `${JSON.stringify({
+        Type: "sample",
+        Number: 901,
+        Title: "Merged First Timer 901",
+        CreatedAt: "2026-10-01T00:00:00Z",
+        LatestCommittedDate: "2026-10-01T00:00:00Z",
+        CommitCount: 1,
+        ReadyAt: "2026-10-01T01:00:00Z",
+        MergedAt: "2026-11-14T00:00:00Z",
+        TotalDays: 44,
+        TurnDays: 44,
+        ReadyDays: 44,
+        Author: "cached-ft",
+        IsFirstTimer: true,
+        FirstTimerVersion: 4,
+      })}\n`,
+      "utf-8",
+    );
+
+    const mockClient = {
+      graphql: async <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
+        if (query.includes("SearchInterventionCandidates")) {
+          const searchQ = String(variables?.query ?? "");
+          if (searchQ.includes("is:open")) {
+            return {
+              search: {
+                issueCount: 2,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  // 有効なオープン初回 PR #902（手動コメントが5日前）
+                  {
+                    number: 902,
+                    title: "Open First Timer 902",
+                    url: "https://github.com/microsoft/winget-pkgs/pull/902",
+                    state: "OPEN",
+                    createdAt: "2026-10-11T00:00:00Z",
+                    updatedAt: "2026-11-12T00:00:00Z",
+                    author: { __typename: "User", login: "open-ft" },
+                    authorAssociation: "NONE",
+                    commits: { totalCount: 1 },
+                    comments: {
+                      nodes: [
+                        {
+                          author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+                          body: "bot",
+                          createdAt: "2026-10-11T01:00:00Z",
+                        },
+                        {
+                          author: { __typename: "User", login: "stephengillie" },
+                          body: "Please check checksum",
+                          createdAt: "2026-11-12T00:00:00Z",
+                        },
+                      ],
+                    },
+                  },
+                  // 常連 CONTRIBUTOR #903 → 除外
+                  {
+                    number: 903,
+                    title: "Repeater 903",
+                    url: "https://github.com/microsoft/winget-pkgs/pull/903",
+                    state: "OPEN",
+                    createdAt: "2026-11-05T00:00:00Z",
+                    updatedAt: "2026-11-16T00:00:00Z",
+                    author: { __typename: "User", login: "repeater-open" },
+                    authorAssociation: "CONTRIBUTOR",
+                    commits: { totalCount: 1 },
+                    reviews: {
+                      nodes: [
+                        {
+                          author: { __typename: "User", login: "stephengillie" },
+                          state: "APPROVED",
+                          submittedAt: "2026-11-16T00:00:00Z",
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            } as unknown as T;
+          }
+          // キャッシュ以降の増分マージ PR #904（初回提出者・1日前に人間レビュー＋マージ）
+          return {
+            search: {
+              issueCount: 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  number: 904,
+                  title: "Incremental Merged FT 904",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/904",
+                  state: "MERGED",
+                  createdAt: "2026-10-21T00:00:00Z",
+                  updatedAt: "2026-11-16T12:00:00Z",
+                  mergedAt: "2026-11-16T12:00:00Z",
+                  author: { __typename: "User", login: "inc-ft" },
+                  authorAssociation: "CONTRIBUTOR",
+                  commits: { totalCount: 2 },
+                  reviews: {
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "trenly" },
+                        state: "APPROVED",
+                        submittedAt: "2026-11-16T12:00:00Z",
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          } as unknown as T;
+        }
+        if (query.includes("GetPullRequestInterventionBatch")) {
+          return {
+            repository: {
+              pr0: {
+                number: 901,
+                title: "Merged First Timer 901",
+                url: "https://github.com/microsoft/winget-pkgs/pull/901",
+                state: "MERGED",
+                createdAt: "2026-10-01T00:00:00Z",
+                updatedAt: "2026-11-14T00:00:00Z",
+                mergedAt: "2026-11-14T00:00:00Z",
+                author: { __typename: "User", login: "cached-ft" },
+                authorAssociation: "CONTRIBUTOR",
+                commits: { totalCount: 1 },
+                reviews: {
+                  nodes: [
+                    {
+                      author: { __typename: "User", login: "stephengillie" },
+                      state: "APPROVED",
+                      submittedAt: "2026-11-14T00:00:00Z",
+                    },
+                  ],
+                },
+              },
+            },
+          } as unknown as T;
+        }
+        // resolveAuthorMergedCounts: open-ft=0, inc-ft=1
+        if (query.includes("author:open-ft")) {
+          return { u_0: { issueCount: 0 } } as unknown as T;
+        }
+        if (query.includes("author:inc-ft")) {
+          return { u_0: { issueCount: 1 } } as unknown as T;
+        }
+        return {} as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    try {
+      const frontier = await fetchFirstReviewMainstreamFrontier({
+        client: mockClient,
+        repository: "microsoft/winget-pkgs",
+        now,
+        samplesPath,
+      });
+
+      // 3 件: #901 (10/01 MERGED), #902 (10/11 OPEN), #904 (10/21 MERGED) → 中央値は 10/11
+      expect(frontier.Mode).toBe(FIRST_REVIEW_MAINSTREAM_MODE);
+      expect(frontier.CohortCount).toBe(3);
+      expect(frontier.OpenCount).toBe(1);
+      expect(frontier.MergedCount).toBe(2);
+      expect(frontier.MedianCreatedAt).toBe("2026-10-11T00:00:00.000Z");
+      expect(frontier.LagDays).toBe(37);
+      expect(frontier.Items?.map((i) => i.Number)).toEqual([904, 901, 902]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

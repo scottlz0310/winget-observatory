@@ -1,5 +1,10 @@
 import { classifyPrIntervention } from "../domain/intervention";
-import type { GitHubPrView, GitHubSearchItem, PrInterventionSummary } from "../models/depths";
+import type {
+  GitHubPrView,
+  GitHubSearchItem,
+  PrInterventionInput,
+  PrInterventionSummary,
+} from "../models/depths";
 import type {
   GitHubDetailedSearchItem,
   GitHubDetailedSearchResult,
@@ -211,60 +216,82 @@ export async function resolvePrInterventionWithPaging<TNode extends GraphQLPullR
   prNode: TNode,
   maxExtraPages = DEFAULT_MAX_INTERVENTION_EXTRA_PAGES,
 ): Promise<{ node: TNode; summary: PrInterventionSummary }> {
-  let currentSummary = classifyPrIntervention(prNode);
-  if (currentSummary.Intervened || !prNode.number) {
-    return { node: prNode, summary: currentSummary };
-  }
-
-  const prNumber = prNode.number;
+  let currentSummary = classifyPrIntervention(prNode as PrInterventionInput);
   let reviewNodes = [...(prNode.reviews?.nodes ?? [])];
   let commentNodes = [...(prNode.comments?.nodes ?? [])];
 
-  const recomputeSummary = (): boolean => {
+  const recomputeSummary = (): PrInterventionSummary => {
     currentSummary = classifyPrIntervention({
       author: prNode.author,
       assignees: prNode.assignees,
       reviews: reviewNodes,
       comments: commentNodes,
+      timelineItems: prNode.timelineItems as PrInterventionInput["timelineItems"],
     });
-    return currentSummary.Intervened;
+    return currentSummary;
   };
 
-  await fetchRemainingInterventionConnection({
-    label: "reviews",
-    prNumber,
-    maxExtraPages,
-    initialHasNext: Boolean(prNode.reviews?.pageInfo?.hasNextPage),
-    initialCursor: prNode.reviews?.pageInfo?.endCursor ?? null,
-    fetchPage: async (after) => {
-      const pageData = await graphqlFn<GraphQLReviewsPageResponse>(
-        GET_PULL_REQUEST_REVIEWS_PAGE_QUERY,
-        { owner, name, number: prNumber, after },
-      );
-      const conn = pageData?.repository?.pullRequest?.reviews;
-      return {
-        hasNextPage: Boolean(conn?.pageInfo?.hasNextPage),
-        endCursor: conn?.pageInfo?.endCursor ?? null,
-        nodes: Array.isArray(conn?.nodes) ? conn.nodes : [],
-      };
-    },
-    onPageNodes: (nodes) => {
-      reviewNodes = [...reviewNodes, ...nodes];
-      return recomputeSummary();
-    },
-  });
+  const canStopPagingAtLastNode = (lastTs: string | null | undefined): boolean => {
+    if (!currentSummary.Intervened) return false;
+    const firstMs = currentSummary.FirstHumanInterventionAt
+      ? Date.parse(currentSummary.FirstHumanInterventionAt)
+      : Number.NaN;
+    if (!Number.isFinite(firstMs)) return true;
+    const lastMs = lastTs ? Date.parse(lastTs) : Number.NaN;
+    // 時系列昇順の末尾ノードがすでに既知の初回介入日時以降であれば、後続ページにより早い介入は存在しない
+    return Number.isFinite(lastMs) && lastMs >= firstMs;
+  };
 
-  if (!currentSummary.Intervened) {
+  if (
+    prNode.number &&
+    (!currentSummary.Intervened ||
+      !canStopPagingAtLastNode(
+        reviewNodes[reviewNodes.length - 1]?.submittedAt ??
+          reviewNodes[reviewNodes.length - 1]?.createdAt,
+      ))
+  ) {
+    await fetchRemainingInterventionConnection({
+      label: "reviews",
+      prNumber: prNode.number,
+      maxExtraPages,
+      initialHasNext: Boolean(prNode.reviews?.pageInfo?.hasNextPage),
+      initialCursor: prNode.reviews?.pageInfo?.endCursor ?? null,
+      fetchPage: async (after) => {
+        const pageData = await graphqlFn<GraphQLReviewsPageResponse>(
+          GET_PULL_REQUEST_REVIEWS_PAGE_QUERY,
+          { owner, name, number: prNode.number, after },
+        );
+        const conn = pageData?.repository?.pullRequest?.reviews;
+        return {
+          hasNextPage: Boolean(conn?.pageInfo?.hasNextPage),
+          endCursor: conn?.pageInfo?.endCursor ?? null,
+          nodes: Array.isArray(conn?.nodes) ? conn.nodes : [],
+        };
+      },
+      onPageNodes: (nodes) => {
+        reviewNodes = [...reviewNodes, ...nodes];
+        recomputeSummary();
+        const last = nodes[nodes.length - 1];
+        return canStopPagingAtLastNode(last?.submittedAt ?? last?.createdAt);
+      },
+    });
+  }
+
+  if (
+    prNode.number &&
+    (!currentSummary.Intervened ||
+      !canStopPagingAtLastNode(commentNodes[commentNodes.length - 1]?.createdAt))
+  ) {
     await fetchRemainingInterventionConnection({
       label: "comments",
-      prNumber,
+      prNumber: prNode.number,
       maxExtraPages,
       initialHasNext: Boolean(prNode.comments?.pageInfo?.hasNextPage),
       initialCursor: prNode.comments?.pageInfo?.endCursor ?? null,
       fetchPage: async (after) => {
         const pageData = await graphqlFn<GraphQLCommentsPageResponse>(
           GET_PULL_REQUEST_COMMENTS_PAGE_QUERY,
-          { owner, name, number: prNumber, after },
+          { owner, name, number: prNode.number, after },
         );
         const conn = pageData?.repository?.pullRequest?.comments;
         return {
@@ -275,7 +302,9 @@ export async function resolvePrInterventionWithPaging<TNode extends GraphQLPullR
       },
       onPageNodes: (nodes) => {
         commentNodes = [...commentNodes, ...nodes];
-        return recomputeSummary();
+        recomputeSummary();
+        const last = nodes[nodes.length - 1];
+        return canStopPagingAtLastNode(last?.createdAt);
       },
     });
   }

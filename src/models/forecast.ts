@@ -25,9 +25,9 @@ export interface FirstTimerFrontierSample {
   createdMs: number;
 }
 
-import type { PrInterventionSummary } from "./depths";
+import type { FirstReviewFrontierMode, PrInterventionSummary } from "./depths";
 
-/** 未レビュー（完全未着手）前線の先頭（人間レビュー・手動コメント・第三者アサインなし・起票が最古の健康な PR）の 1 回分の観測 */
+/** 未レビュー（完全未着手）前線の先頭（人間レビュー・手動コメント・第三者アサインなし・起票が最古の健康な PR）の 1 回分の観測（旧 v3 用） */
 export interface UnreviewedFrontierSample {
   /** 観測時刻（UTC ミリ秒） */
   timestampMs: number;
@@ -35,6 +35,22 @@ export interface UnreviewedFrontierSample {
   pr: number;
   /** 先頭 PR の起票時刻（UTC ミリ秒） */
   createdMs: number;
+}
+
+/** 主戦場ライン方式（直近 7 日間の初回人間介入コホートの起票日時中央値）の 1 回分の観測（v4 以降） */
+export interface MainstreamFrontierSample {
+  /** 観測時刻（UTC ミリ秒） */
+  timestampMs: number;
+  /** 主戦場ライン（起票日時の中央値、UTC ミリ秒） */
+  createdMs: number;
+  /** コホート件数合計（Open + Merged） */
+  cohortCount: number;
+  /** オープン中 PR 件数 */
+  openCount: number;
+  /** 直近マージ済み PR 件数 */
+  mergedCount: number;
+  /** 指標モード識別子（旧未着手底との混在ガード用） */
+  mode: FirstReviewFrontierMode;
 }
 
 export type ForecastUnavailableReason =
@@ -51,7 +67,7 @@ export type FirstReviewForecastStatus =
   | ForecastUnavailableReason
   /** 基準 PR 自身に人間レビュー・手動コメント・第三者 Assignees のいずれかが付与済み（初回レビュー・介入到達済み） */
   | "target-intervened"
-  /** 未レビュー前線が基準 PR の起票時刻に到達済み */
+  /** 主戦場ライン（起票日時中央値）が基準 PR の起票時刻に到達済み */
   | "reached"
   /** 実測速度に基づく初回レビュー到達予想日を算出済み */
   | "forecasted";
@@ -59,8 +75,15 @@ export type FirstReviewForecastStatus =
 export interface FirstReviewForecast {
   /** 到達予想の状態 */
   status: FirstReviewForecastStatus;
-  /** 最新の未レビュー前線先頭 PR */
-  frontier: { pr: number; createdMs: number; observedMs: number } | null;
+  /** 最新の主戦場ライン位置（旧互換で pr はオプショナル） */
+  frontier: {
+    pr?: number;
+    createdMs: number;
+    observedMs: number;
+    cohortCount: number;
+    openCount: number;
+    mergedCount: number;
+  } | null;
   /** 先頭の経過日数: 観測時刻 − 先頭の起票時刻（日） */
   lagDays: number | null;
   /** 基準 PR の起票時刻 − 先頭の起票時刻（日）。0 以下なら前線が基準 PR に到達済み */

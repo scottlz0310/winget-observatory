@@ -119,7 +119,7 @@ describe("CLI: runRecordForecast", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("未マージなら、3 つの仮説の予想日を観測時刻つきで 1 行追記する", async () => {
+  test("未マージなら、2 つの仮説（順位消化・作成順）の予想日を観測時刻つきで 1 行追記する", async () => {
     writeSnapshots();
     const result = await runRecordForecast(options, clientOf(pr({})), () => {});
 
@@ -136,12 +136,11 @@ describe("CLI: runRecordForecast", () => {
     );
     // 順位消化: 最新の観測 (2026-11-08T00:00Z) + 24 日
     expect(byKey["rank-velocity"]).toBe("2026-12-02");
-    // 更新順（定常）: 基準 PR の更新 11-05 − 先頭の更新 10-09 = 27 日、観測 11-08 + 27 日
-    expect(byKey["update-order:steady"]).toBe("2026-12-05");
     // 作成順: 起票 10-29 + 中央値 44 日 / 75%点 45 日
     expect(byKey["creation-order:median"]).toBe("2026-12-12");
     expect(byKey["creation-order:p75"]).toBe("2026-12-13");
-    // 先頭が進んでいないため、実測の進みによる予想は無い
+    // 仮説②（更新順）は記録対象外
+    expect(byKey["update-order:steady"]).toBeUndefined();
     expect(byKey["update-order:observed"]).toBeUndefined();
   });
 

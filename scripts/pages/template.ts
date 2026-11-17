@@ -26,7 +26,6 @@ import {
   renderBoundaryTableSection,
   renderExitBreakdownSection,
   renderForecastScoreSection,
-  renderForecastSection,
   renderInterventionFrontierComparisonSection,
   renderRecentHistorySection,
 } from "./sections/depths-and-history";
@@ -64,10 +63,9 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     progress,
     depths,
     csvRows,
-    frontierSamples = [],
     forecastHistory = [],
     firstTimerFrontierSamples = [],
-    unreviewedFrontierSamples = [],
+    mainstreamFrontierSamples = [],
     firstTimerFastestRanking,
   } = input;
 
@@ -115,15 +113,6 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
       strokeDasharray: "4 2",
       points: chartRecords.map((r) => ({ x: r.timestampMs, y: r.totalAhead })),
     },
-    {
-      label: "優等生の底 更新からの遅れ",
-      axis: "right",
-      color: "var(--warning)",
-      strokeWidth: 2,
-      points: frontierSamples
-        .slice(-CHART_MAX_POINTS)
-        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.updatedMs) / DAY_MS })),
-    },
   ];
 
   if (firstTimerFrontierSamples.length > 0) {
@@ -138,13 +127,13 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     });
   }
 
-  if (unreviewedFrontierSamples.length > 0) {
+  if (mainstreamFrontierSamples.length > 0) {
     dualSeries.push({
-      label: "👀 未レビュー前線 起票経過",
+      label: "👀 主戦場ライン 起票経過（7日初回介入中央値）",
       axis: "right",
       color: "#0ea5e9",
       strokeWidth: 2.5,
-      points: unreviewedFrontierSamples
+      points: mainstreamFrontierSamples
         .slice(-CHART_MAX_POINTS)
         .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
     });
@@ -153,13 +142,13 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
   const queueChart = renderDualAxisLineChartSvg({
     title: "待ち件数と底の遅れの推移（統合時系列チャート）",
     leftAxisLabel: "待ち件数",
-    rightAxisLabel: "先頭の経過・遅れ（日）",
+    rightAxisLabel: "先頭・主戦場の経過（日）",
     series: dualSeries,
     rightDecimals: 1,
   });
 
   const comparison = calculateForecastComparison(
-    buildForecastSource({ progress, depths, history: historyRecords, frontierSamples }),
+    buildForecastSource({ progress, depths, history: historyRecords }),
   );
   const parsedTargetCreatedMs = depths?.TargetPr?.CreatedAt
     ? Date.parse(depths.TargetPr.CreatedAt)
@@ -171,8 +160,11 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     : progress?.Timestamp && typeof progress.TotalLifetimeDays === "number"
       ? Date.parse(progress.Timestamp) - progress.TotalLifetimeDays * DAY_MS
       : null;
+  const isLatestCohortEmpty =
+    depths?.FirstReviewFrontier?.Mode === "cohort-median-7d" &&
+    depths.FirstReviewFrontier.CohortCount === 0;
   const firstReviewForecast = calculateFirstReviewForecast(
-    unreviewedFrontierSamples,
+    isLatestCohortEmpty ? [] : mainstreamFrontierSamples,
     Number.isNaN(parsedTargetCreatedMs) ? null : parsedTargetCreatedMs,
     {
       targetIntervention: depths?.TargetPr?.Intervention,
@@ -180,7 +172,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     },
   );
   const timelineSvg = renderTimelineSvg({
-    title: "3 つの仮説による予想マージ日",
+    title: "2 つの仮説による予想マージ日",
     nowMs: comparison.nowMs,
     markers: buildForecastTimelineMarkers(comparison),
     band: comparison.range
@@ -220,7 +212,7 @@ ${DASHBOARD_CSS}
 
     ${renderForecastPanel(comparison, timelineSvg)}
 
-    ${renderFirstReviewForecastPanel(firstReviewForecast, repo)}
+    ${renderFirstReviewForecastPanel(firstReviewForecast)}
 
     ${renderKpiGridSection({
       progress,
@@ -233,7 +225,7 @@ ${DASHBOARD_CSS}
 
     <h2 class="section-title">📉 待ち件数の推移（キュー推移と底の進行の統合時系列）</h2>
     <p class="section-note">
-      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は待機列の先頭経過日数（優等生の底＝更新からの遅れ、🌱 初回提出者の底＝起票からの経過、👀 未レビュー前線＝起票からの経過）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
+      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は前線の起票経過日数（🌱 初回提出者の底＝起票からの経過、👀 主戦場ライン＝直近7日初回介入コホートの起票日時中央値）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
     </p>
     ${renderChartCard(queueChart)}
 
@@ -258,8 +250,6 @@ ${DASHBOARD_CSS}
     ${renderInterventionFrontierComparisonSection(depths)}
 
     ${renderBottomComparisonSection(depths)}
-
-    ${renderForecastSection(frontierSamples)}
 
     ${renderForecastScoreSection(forecastHistory, forecastScores)}
 

@@ -1,16 +1,17 @@
 /**
  * 予想日の履歴（forecast-history.jsonl）と、実際のマージ日との答え合わせの型定義。
  *
- * 1 行 1 JSON。観測のたびに 3 つの仮説の予想日を記録し、基準 PR がマージされたら結果を記録する。
+ * 1 行 1 JSON。観測のたびに予想日を記録し、基準 PR がマージされたら結果を記録する。
+ * 廃止された旧仮説（update-order）を含む過去レコードの読み込み互換も保持する。
  */
 
-import type { HypothesisId } from "./forecast-comparison";
+import type { LegacyHypothesisId } from "./forecast-comparison";
 
 /** 1 回の観測で、ある仮説・モデルが出した予想日 */
 export interface ForecastRecordEstimate {
-  /** 例: "update-order:steady" */
+  /** 例: "rank-velocity", "creation-order:median"（過去レコードでは "update-order:steady" 等も含む） */
   Key: string;
-  Hypothesis: HypothesisId;
+  Hypothesis: LegacyHypothesisId;
   /** 予想日（ISO 8601, UTC） */
   Date: string;
   /** 観測時点から予想日までの日数 */
@@ -45,7 +46,7 @@ export type ForecastHistoryLine = ForecastRecord | ForecastOutcomeRecord;
 /** あるキー（仮説・モデル）の予想の当たり具合。誤差は「予想日 − 実際のマージ日」（日）で、正なら予想が遅すぎた */
 export interface ForecastKeyScore {
   key: string;
-  hypothesis: HypothesisId;
+  hypothesis: LegacyHypothesisId;
   /** 採点に使った予想の件数（マージ前に記録されたもの） */
   count: number;
   meanErrorDays: number;

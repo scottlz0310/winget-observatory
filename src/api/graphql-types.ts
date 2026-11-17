@@ -23,6 +23,8 @@ export interface GraphQLReviewNode {
     login?: string | null;
   } | null;
   state?: string | null;
+  submittedAt?: string | null;
+  createdAt?: string | null;
 }
 
 export interface GraphQLReviewConnection {
@@ -37,6 +39,7 @@ export interface GraphQLCommentNode {
     login?: string | null;
   } | null;
   body?: string | null;
+  createdAt?: string | null;
 }
 
 export interface GraphQLCommentConnection {
@@ -91,6 +94,18 @@ export type GraphQLTimelineItemNode =
   | {
       __typename: "ReadyForReviewEvent";
       createdAt: string;
+    }
+  | {
+      __typename: "AssignedEvent";
+      createdAt: string;
+      actor?: {
+        __typename?: string | null;
+        login?: string | null;
+      } | null;
+      assignee?: {
+        __typename?: string | null;
+        login?: string | null;
+      } | null;
     }
   | {
       __typename: string;

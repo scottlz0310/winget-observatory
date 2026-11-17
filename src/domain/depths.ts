@@ -1,6 +1,7 @@
 import type {
   DepthsRow,
   DepthsSnapshot,
+  FirstReviewFrontier,
   GitHubPrView,
   GitHubSearchItem,
   GraphQLPrNode,
@@ -28,8 +29,9 @@ export function getThirdPartyAssignees(
  * - 未設定 / 1: 旧定義（StaleBottom=全コミット、FirstTimerBottom=updatedAt順・生涯マージ未検証）
  * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み、Unassigned/Assigned）
  * - 3: 介入判定分離版（UnreviewedBottom / IntervenedBottom: 人間レビュー・手動コメント・第三者アサイン OR 分離）
+ * - 4: 主戦場ライン版（FirstReviewFrontier: 直近7日間初回人間介入コホートの createdAt 中央値・オープン＋マージ済み）
  */
-export const CURRENT_DEPTHS_VERSION = 3;
+export const CURRENT_DEPTHS_VERSION = 4;
 
 /**
  * タイトル文字列をコンソール/表示用に切り詰める（45文字超は先頭42文字 + "..."）。
@@ -214,6 +216,7 @@ export function createDepthsSnapshot(params: {
   intervenedBottom?: DepthsRow[];
   unreviewedTruncated?: boolean;
   intervenedTruncated?: boolean;
+  firstReviewFrontier?: FirstReviewFrontier;
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
@@ -230,6 +233,7 @@ export function createDepthsSnapshot(params: {
     ...(params.intervenedBottom ? { IntervenedBottom: params.intervenedBottom } : {}),
     ...(params.unreviewedTruncated ? { UnreviewedTruncated: true } : {}),
     ...(params.intervenedTruncated ? { IntervenedTruncated: true } : {}),
+    ...(params.firstReviewFrontier ? { FirstReviewFrontier: params.firstReviewFrontier } : {}),
     ExpressLane: params.expressLane,
   };
 }

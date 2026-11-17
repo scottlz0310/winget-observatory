@@ -1,11 +1,7 @@
 // GitHub Pages ダッシュボード描画モジュール共通の型定義
 
 import type { DepthsSnapshot } from "../../src/models/depths";
-import type {
-  FirstTimerFrontierSample,
-  StaleFrontierSample,
-  UnreviewedFrontierSample,
-} from "../../src/models/forecast";
+import type { FirstTimerFrontierSample, MainstreamFrontierSample } from "../../src/models/forecast";
 import type { ForecastHistoryLine } from "../../src/models/forecast-history";
 import type { ProgressHistoryRow, ProgressSnapshot } from "../../src/models/progress";
 import type { FirstTimerFastestRanking } from "../../src/models/sample-cache";
@@ -29,9 +25,8 @@ export interface DashboardRenderInput {
   progress: LatestProgress | null;
   depths: LatestDepths | null;
   csvRows: ProgressHistoryRow[];
-  frontierSamples?: StaleFrontierSample[];
   forecastHistory?: ForecastHistoryLine[];
   firstTimerFrontierSamples?: FirstTimerFrontierSample[];
-  unreviewedFrontierSamples?: UnreviewedFrontierSample[];
+  mainstreamFrontierSamples?: MainstreamFrontierSample[];
   firstTimerFastestRanking?: FirstTimerFastestRanking;
 }
