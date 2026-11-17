@@ -207,7 +207,20 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     ).toBe(true);
   });
 
-  test("v4 以降のレコードは shouldReevaluateAuthorFirstTimer も false を返す", () => {
+  test("v3 未満（v2 / 未設定）や v4 以降のレコードは shouldReevaluateAuthorFirstTimer が false を返す", () => {
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        firstTimerVersion: 2,
+        author: "old-user",
+      }),
+    ).toBe(false);
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        author: "old-user",
+      }),
+    ).toBe(false);
     expect(
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: "timeline-blocking",

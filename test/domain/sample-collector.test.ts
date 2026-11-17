@@ -743,7 +743,7 @@ describe("orchestrateSampleCollection", () => {
         FirstTimerReason: "timeline-blocking",
         FirstTimerVersion: 3,
       },
-      // 走査窓外の古いキャッシュ（candidates に含まれない）も Author 照会で救済される
+      // 走査窓外の古いキャッシュ（candidates に含まれない）も Author 照会で再判定される
       {
         Type: "sample",
         Number: 411138,
@@ -761,6 +761,23 @@ describe("orchestrateSampleCollection", () => {
         FirstTimerReason: "timeline-blocking",
         FirstTimerVersion: 3,
       },
+      {
+        Type: "sample",
+        Number: 411139,
+        Title: "Older Repeat Author",
+        CreatedAt: "2026-06-01T00:00:00Z",
+        LatestCommittedDate: "2026-06-01T00:00:00Z",
+        CommitCount: 1,
+        ReadyAt: "2026-06-02T00:00:00Z",
+        MergedAt: "2026-07-01T00:00:00Z",
+        TotalDays: 30,
+        TurnDays: 30,
+        ReadyDays: 29,
+        Author: "older-repeat-author",
+        IsFirstTimer: false,
+        FirstTimerReason: "timeline-blocking",
+        FirstTimerVersion: 3,
+      },
     ];
 
     let sampleDataCalled = 0;
@@ -773,7 +790,7 @@ describe("orchestrateSampleCollection", () => {
       graphql: async <T = unknown>(query: string) => {
         graphqlQueries.push(query);
         if (query.includes("author:older-first-timer")) {
-          return { u_0: { issueCount: 1 } } as T;
+          return { u_0: { issueCount: 1 }, u_1: { issueCount: 3 } } as T;
         }
         return {
           u_0: { issueCount: 1 }, // tamakichi23
@@ -818,5 +835,114 @@ describe("orchestrateSampleCollection", () => {
     expect(c411138?.Type === "sample" && c411138.IsFirstTimer).toBeTrue();
     expect(c411138?.Type === "sample" && c411138.FirstTimerReason).toBeUndefined();
     expect(c411138?.Type === "sample" && c411138.FirstTimerVersion).toBe(4);
+
+    const c411139 = result.finalCache.find((e) => e.Number === 411139);
+    expect(c411139?.Type === "sample" && c411139.IsFirstTimer).toBeFalse();
+    expect(c411139?.Type === "sample" && c411139.FirstTimerReason).toBe("lifetime-merged");
+    expect(c411139?.Type === "sample" && c411139.FirstTimerVersion).toBe(4);
+  });
+
+  it("走査窓外の v2 timeline-blocking（Waived-* による ReadyAt 未修正）は窓外処理で v4 へ昇格させず、候補復帰時にタイムライン再取得で正しい ReadyDays と初回判定へ修復する", async () => {
+    const v2LegacyCache: SampleCacheEntry[] = [
+      {
+        Type: "sample",
+        Number: 1102,
+        Title: "PR #1102",
+        CreatedAt: "2026-10-01T00:00:00Z",
+        LatestCommittedDate: "2026-10-01T00:00:00Z",
+        CommitCount: 1,
+        ReadyAt: "2026-10-04T00:00:00.000Z",
+        MergedAt: "2026-10-05T00:00:00.000Z",
+        TotalDays: 4,
+        TurnDays: 4,
+        ReadyDays: 1,
+        Author: "waived-temp-user",
+        IsFirstTimer: false,
+        FirstTimerReason: "timeline-blocking",
+        FirstTimerVersion: 2,
+      },
+    ];
+
+    let sampleDataCalled = 0;
+    let graphqlCalled = 0;
+    const client: SampleCollectorClient = {
+      getPullRequestSampleData: async () => {
+        sampleDataCalled++;
+        return {
+          createdAt: "2026-10-01T00:00:00Z",
+          commitCount: 1,
+          latestCommittedDate: "2026-10-01T00:00:00Z",
+          author: "waived-temp-user",
+          timeline: [
+            {
+              event: "labeled",
+              created_at: "2026-10-01T00:00:00Z",
+              label: { name: "New-Package" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T00:00:00Z",
+              label: { name: "Azure-Pipeline-Passed" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-01T00:00:00Z",
+              label: { name: "Validation-Completed" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-10-02T00:00:00Z",
+              label: { name: "Waived-Validation-Defender-Error" },
+            },
+            {
+              event: "unlabeled",
+              created_at: "2026-10-04T00:00:00Z",
+              label: { name: "Waived-Validation-Defender-Error" },
+            },
+          ],
+        };
+      },
+      graphql: async <T = unknown>() => {
+        graphqlCalled++;
+        return { u_0: { issueCount: 1 } } as T;
+      },
+    };
+
+    // 第 1 段階: 走査窓外（candidates: []）では v2 のまま保持され、v4 へ早まって昇格しない
+    const outsideResult = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [],
+      overallSinceDate: new Date("2026-10-10T00:00:00Z"),
+      fetchBudget: 5,
+      initialCache: v2LegacyCache,
+    });
+
+    expect(sampleDataCalled).toBe(0);
+    expect(graphqlCalled).toBe(0);
+    expect(outsideResult.cacheModified).toBeFalse();
+    const kept1102 = outsideResult.finalCache.find((e) => e.Number === 1102);
+    expect(kept1102?.Type === "sample" && kept1102.FirstTimerVersion).toBe(2);
+    expect(kept1102?.Type === "sample" && kept1102.ReadyDays).toBe(1);
+    expect(kept1102?.Type === "sample" && kept1102.FirstTimerReason).toBe("timeline-blocking");
+
+    // 第 2 段階: 候補へ復帰するとタイムライン再取得が行われ、ReadyDays=4 かつ IsFirstTimer=true (v4) へ修復される
+    const restoredResult = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [createSearchItem(1102, "2026-10-05T00:00:00.000Z", "waived-temp-user")],
+      overallSinceDate: new Date("2026-09-01T00:00:00Z"),
+      fetchBudget: 5,
+      initialCache: outsideResult.finalCache,
+    });
+
+    expect(sampleDataCalled).toBe(1);
+    expect(graphqlCalled).toBe(1);
+    expect(restoredResult.fetchedCount).toBe(1);
+    expect(restoredResult.samples[0]?.readyAt).toBe("2026-10-01T00:00:00.000Z");
+    expect(restoredResult.samples[0]?.days).toBe(4);
+    expect(restoredResult.samples[0]?.isFirstTimer).toBeTrue();
+    expect(restoredResult.samples[0]?.firstTimerReason).toBeUndefined();
+    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(4);
   });
 });

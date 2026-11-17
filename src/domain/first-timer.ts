@@ -230,8 +230,9 @@ export function shouldReevaluateCachedSample(params: {
 
 /**
  * タイムライン・詳細の再取得を行わず、保存済み Author を用いた初回提出者判定の再評価のみ行うべきか判定する純粋関数。
- * v4 で timeline-blocking 除外を廃止したため、Author が既に保存されている旧版 timeline-blocking エントリを
- * 最小限の API コール（累計マージ数照会のみ）で再判定する。
+ * v4 で timeline-blocking 除外を廃止したため、ReadyAt 再計測済みの v3（MIN_WAIVED_READY_VERSION 以上）かつ
+ * Author が既に保存されている timeline-blocking エントリのみ、最小限の API コール（累計マージ数照会のみ）で再判定する。
+ * v3 未満（Waived-* による ReadyAt 後ろ倒しの可能性あり）は shouldReevaluateCachedSample 側でタイムラインごと再取得する。
  */
 export function shouldReevaluateAuthorFirstTimer(params: {
   firstTimerReason?: string;
@@ -239,7 +240,8 @@ export function shouldReevaluateAuthorFirstTimer(params: {
   author?: string;
 }): boolean {
   if (
-    params.firstTimerVersion !== undefined &&
+    params.firstTimerVersion === undefined ||
+    params.firstTimerVersion < MIN_WAIVED_READY_VERSION ||
     params.firstTimerVersion >= CURRENT_FIRST_TIMER_VERSION
   ) {
     return false;
