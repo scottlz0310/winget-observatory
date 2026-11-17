@@ -72,11 +72,41 @@ query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
       createdAt
       updatedAt
       author {
+        __typename
         login
       }
       assignees(first: 10) {
         nodes {
+          __typename
           login
+        }
+      }
+      reviews(first: 20) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          author {
+            __typename
+            login
+          }
+          state
+        }
+      }
+      comments(first: 20) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          author {
+            __typename
+            login
+          }
+          body
         }
       }
     }
@@ -259,3 +289,133 @@ export const FIRST_TIMER_GRAPHQL_QUERY = `query($query: String!, $first: Int!, $
     }
   }
 }`;
+
+export const SEARCH_PR_NUMBERS_QUERY = `
+query SearchPrNumbers($query: String!, $first: Int!, $after: String) {
+  search(query: $query, type: ISSUE, first: $first, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        number
+      }
+    }
+  }
+}
+`;
+
+export const GET_PULL_REQUEST_REVIEWS_PAGE_QUERY = `
+query GetPullRequestReviewsPage($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(first: 50, after: $after) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          author {
+            __typename
+            login
+          }
+          state
+        }
+      }
+    }
+  }
+}
+`;
+
+export const GET_PULL_REQUEST_COMMENTS_PAGE_QUERY = `
+query GetPullRequestCommentsPage($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(first: 50, after: $after) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          author {
+            __typename
+            login
+          }
+          body
+        }
+      }
+    }
+  }
+}
+`;
+
+/**
+ * 複数 PR の介入判定用メタデータ・reviews・comments・assignees を 1 リクエストで取得する alias クエリを構築する。
+ */
+export function buildPullRequestBatchInterventionQuery(numbers: readonly number[]): string {
+  const fields = numbers
+    .map((num, idx) => {
+      if (!Number.isInteger(num) || num <= 0) {
+        throw new Error(`PR 番号が不正です: ${num}`);
+      }
+      return `
+    pr${idx}: pullRequest(number: ${num}) {
+      number
+      title
+      url
+      createdAt
+      updatedAt
+      author {
+        __typename
+        login
+      }
+      authorAssociation
+      commits {
+        totalCount
+      }
+      assignees(first: 10) {
+        nodes {
+          __typename
+          login
+        }
+      }
+      reviews(first: 20) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          author {
+            __typename
+            login
+          }
+          state
+        }
+      }
+      comments(first: 20) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          author {
+            __typename
+            login
+          }
+          body
+        }
+      }
+    }`;
+    })
+    .join("\n");
+
+  return `query GetPullRequestInterventionBatch($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {${fields}
+  }
+}`;
+}

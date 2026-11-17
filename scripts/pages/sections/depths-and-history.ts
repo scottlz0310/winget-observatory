@@ -1,11 +1,11 @@
 // キュー境界探索テーブル・待機列の底の比較・仮説②根拠・予想答え合わせ・離脱内訳・直近10回履歴テーブルの描画セクション
 
 import { formatDeltaBadge } from "../../../src/domain/dashboard";
-import { summarizeAssigneeFrontier } from "../../../src/domain/depths";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
 import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
+import { summarizeInterventionFrontier } from "../../../src/domain/intervention";
 import type { HistoryRowWithDelta } from "../../../src/models/dashboard";
-import type { DepthsRow } from "../../../src/models/depths";
+import type { DepthsRow, InterventionKind } from "../../../src/models/depths";
 import type {
   ExitBreakdownResult,
   ExitBreakdownUnavailableReason,
@@ -21,6 +21,25 @@ interface BottomTableRenderOptions {
   highlightRepeaters?: boolean;
   highlightThirdPartyAssignees?: boolean;
   elapsedBasis?: "updated" | "created";
+}
+
+const INTERVENTION_BADGE_COLORS: Record<InterventionKind, string> = {
+  review: "background: #ede9fe; color: #5b21b6;",
+  comment: "background: #e0f2fe; color: #0369a1;",
+  assignee: "background: #fef3c7; color: #b45309;",
+};
+
+function renderInterventionBadge(item: DepthsRow): string {
+  const badge = item.Intervention?.PrimaryBadge;
+  if (badge) {
+    const colorStyle = INTERVENTION_BADGE_COLORS[badge.Kind];
+    return `<span class="badge" style="${colorStyle} font-size: 0.7rem; margin-left: 0.35rem;" title="人間の介入（レビュー・手動コメント・第三者 Assignees）を検知">${escapeHtml(badge.Label)}</span>`;
+  }
+  const thirdPartyAssignees = item.ThirdPartyAssignees ?? [];
+  if (thirdPartyAssignees.length > 0) {
+    return `<span class="badge" style="${INTERVENTION_BADGE_COLORS.assignee} font-size: 0.7rem; margin-left: 0.35rem;" title="作成者以外の第三者 Assignees（${escapeHtml(thirdPartyAssignees.join(", "))}）が付与済み">アサイン済: ${escapeHtml(thirdPartyAssignees.join(", "))}</span>`;
+  }
+  return "";
 }
 
 /** 底の行一覧のテーブル HTML を生成する */
@@ -52,18 +71,14 @@ function renderBottomRowTable(
         highlightRepeaters && isRepeater
           ? `<span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者ではないため、初回提出者の底では除外">常連除外</span>`
           : "";
-      const thirdPartyAssignees = item.ThirdPartyAssignees ?? [];
-      const assigneeBadge =
-        highlightThirdPartyAssignees && thirdPartyAssignees.length > 0
-          ? `<span class="badge" style="background: #fef3c7; color: #b45309; font-size: 0.7rem; margin-left: 0.35rem;" title="作成者以外の第三者 Assignees（${escapeHtml(thirdPartyAssignees.join(", "))}）が付与済み">アサイン済: ${escapeHtml(thirdPartyAssignees.join(", "))}</span>`
-          : "";
+      const interventionBadge = highlightThirdPartyAssignees ? renderInterventionBadge(item) : "";
       const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
       const commitCountText = item.CommitCount !== undefined ? `${item.CommitCount}` : "-";
       const commitCountCell = showCommitCount ? `<td>${commitCountText}</td>` : "";
       return `
         <tr>
           <td>${index + 1}</td>
-          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}${assigneeBadge}</td>
+          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}${interventionBadge}</td>
           ${authorCell}
           ${commitCountCell}
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
@@ -201,22 +216,22 @@ export function renderBottomComparisonSection(depths: LatestDepths | null): stri
     </div>`;
 }
 
-function renderAssigneeFrontierCard(params: {
+function renderInterventionFrontierCard(params: {
   title: string;
   description: string;
-  items: NonNullable<LatestDepths["UnassignedBottom"]>;
+  items: DepthsRow[];
   timestamp: string;
   truncated: boolean;
   hasRecorded: boolean;
   emptyConfirmedText: string;
   emptyLegacyText: string;
-  highlightThirdPartyAssignees: boolean;
+  highlightInterventions: boolean;
   borderColor: string;
   titleColor: string;
   badgeStyle: string;
   extraMeta?: string;
 }): string {
-  const summary = summarizeAssigneeFrontier(params.items, params.timestamp);
+  const summary = summarizeInterventionFrontier(params.items, params.timestamp);
   const badgeText = params.truncated
     ? params.items.length === 0
       ? "探索上限到達・未確定"
@@ -229,7 +244,7 @@ function renderAssigneeFrontierCard(params: {
           showAuthor: true,
           showCommitCount: true,
           highlightRepeaters: false,
-          highlightThirdPartyAssignees: params.highlightThirdPartyAssignees,
+          highlightThirdPartyAssignees: params.highlightInterventions,
           elapsedBasis: "created",
         })}${
           params.truncated
@@ -261,61 +276,75 @@ function renderAssigneeFrontierCard(params: {
       </div>`;
 }
 
-/** 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）比較セクションを描画する */
-export function renderAssigneeFrontierComparisonSection(depths: LatestDepths | null): string {
+/** 未レビュー・介入分離（未レビュー前線 vs レビュー・介入済み前線）比較セクションを描画する */
+export function renderInterventionFrontierComparisonSection(depths: LatestDepths | null): string {
   const timestamp = depths?.Timestamp ?? "";
-  const unassignedItems = depths?.UnassignedBottom ?? [];
-  const assignedItems = depths?.AssignedBottom ?? [];
-  const unassignedTruncated = Boolean(depths?.UnassignedTruncated);
-  const assignedTruncated = Boolean(depths?.AssignedTruncated);
-  const hasRecordedUnassigned =
-    depths?.UnassignedBottom !== undefined ||
-    depths?.AssignedBottom !== undefined ||
-    unassignedTruncated ||
-    assignedTruncated;
+  const unreviewedItems = depths?.UnreviewedBottom ?? [];
+  const intervenedItems = depths?.IntervenedBottom ?? [];
+  const unreviewedTruncated = Boolean(depths?.UnreviewedTruncated);
+  const intervenedTruncated = Boolean(depths?.IntervenedTruncated);
+  const hasRecordedIntervention =
+    depths?.UnreviewedBottom !== undefined ||
+    depths?.IntervenedBottom !== undefined ||
+    unreviewedTruncated ||
+    intervenedTruncated;
 
-  const assignedSummary = summarizeAssigneeFrontier(assignedItems, timestamp);
-  const assigneeBreakdown =
-    assignedSummary.assigneeCounts.length > 0
-      ? ` / 内訳: ${assignedSummary.assigneeCounts.map((a) => `${a.login}(${a.count})`).join(", ")}`
+  const intervenedSummary = summarizeInterventionFrontier(intervenedItems, timestamp);
+  const kindParts: string[] = [];
+  if (intervenedSummary.kindCounts.review > 0) {
+    kindParts.push(`レビュー(${intervenedSummary.kindCounts.review})`);
+  }
+  if (intervenedSummary.kindCounts.comment > 0) {
+    kindParts.push(`コメント(${intervenedSummary.kindCounts.comment})`);
+  }
+  if (intervenedSummary.kindCounts.assignee > 0) {
+    kindParts.push(`アサイン(${intervenedSummary.kindCounts.assignee})`);
+  }
+  const actorPart =
+    intervenedSummary.actorCounts.length > 0
+      ? ` [${intervenedSummary.actorCounts.map((a) => `${a.login}(${a.count})`).join(", ")}]`
       : "";
+  const intervenedBreakdown =
+    kindParts.length > 0 ? ` / 内訳: ${kindParts.join(", ")}${actorPart}` : "";
 
-  return `<h2 class="section-title">👀 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）</h2>
+  return `<h2 class="section-title">👀 未レビュー・介入分離（未レビュー前線 vs レビュー・介入済み前線）</h2>
     <p class="section-note">
-      健康な待機 PR（New-Package・起票順）から、PR 作成者自身のセルフアサインを除外した第三者 Assignees の有無で分離しています。未アサイン前線は誰にも触れられていない純粋な未着手キュー、アサイン済み前線は自動警告放置や修正往復中の仕掛かり案件です。
+      健康な待機 PR（New-Package・起票順）から、ボット・作成者本人・自動検証ログ（(Deterministic automation）を除いた「人間レビュー」「手動コメント」「第三者 Assignees」の有無で分離しています。未レビュー前線は誰にも触れられていない完全未着手キュー、レビュー・介入済み前線は何らかの人間介入が入った案件です。
     </p>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
-      ${renderAssigneeFrontierCard({
-        title: "🟦 未アサイン前線（純粋未着手）",
-        description: "第三者 Assignees なし（セルフアサイン含む）。起票日時の古い順です。",
-        items: unassignedItems,
+      ${renderInterventionFrontierCard({
+        title: "🟦 未レビュー前線（完全未着手）",
+        description:
+          "人間レビュー・手動コメント・第三者 Assignees すべて無し（ボット・本人・自動ログ除く）。起票日時の古い順です。",
+        items: unreviewedItems,
         timestamp,
-        truncated: unassignedTruncated,
-        hasRecorded: hasRecordedUnassigned,
-        emptyConfirmedText: "現在、未アサインの健康な待機 PR はありません。",
+        truncated: unreviewedTruncated,
+        hasRecorded: hasRecordedIntervention,
+        emptyConfirmedText: "現在、完全未着手の健康な待機 PR はありません。",
         emptyLegacyText:
-          "未アサイン前線のデータはまだありません（次回の定期観測から記録されます）。",
-        highlightThirdPartyAssignees: false,
+          "未レビュー前線のデータはまだありません（次回の定期観測から記録されます）。",
+        highlightInterventions: false,
         borderColor: "#0ea5e9",
         titleColor: "#0284c7",
         badgeStyle: "background: #e0f2fe; color: #0369a1; font-weight: 600;",
       })}
 
-      ${renderAssigneeFrontierCard({
-        title: "🟧 アサイン済み前線（介入済み・仕掛かり）",
-        description: "第三者 Assignees ありの健康な待機 PR。起票日時の古い順です。",
-        items: assignedItems,
+      ${renderInterventionFrontierCard({
+        title: "🟧 レビュー・介入済み前線（何らかの人間介入あり）",
+        description:
+          "人間レビュー・手動コメント・第三者 Assignees のいずれかがある健康な待機 PR。起票日時の古い順です。",
+        items: intervenedItems,
         timestamp,
-        truncated: assignedTruncated,
-        hasRecorded: hasRecordedUnassigned,
-        emptyConfirmedText: "現在、第三者アサイン済みの健康な待機 PR はありません。",
+        truncated: intervenedTruncated,
+        hasRecorded: hasRecordedIntervention,
+        emptyConfirmedText: "現在、レビュー・介入済みの健康な待機 PR はありません。",
         emptyLegacyText:
-          "アサイン済み前線のデータはまだありません（次回の定期観測から記録されます）。",
-        highlightThirdPartyAssignees: true,
+          "レビュー・介入済み前線のデータはまだありません（次回の定期観測から記録されます）。",
+        highlightInterventions: true,
         borderColor: "var(--warning)",
         titleColor: "var(--warning)",
         badgeStyle: "background: #fef3c7; color: #b45309; font-weight: 600;",
-        extraMeta: assigneeBreakdown,
+        extraMeta: intervenedBreakdown,
       })}
     </div>`;
 }

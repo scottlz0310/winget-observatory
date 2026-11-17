@@ -1284,8 +1284,8 @@ describe("buildDashboard: 過去実績との比較", () => {
     }
   });
 
-  test("Issue #96: 初回レビュー到達予想・未アサイン前線 vs アサイン済み前線・既存底の第三者アサインバッジ・時系列チャートを描画する", () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-issue-96-"));
+  test("未レビュー前線 vs レビュー・介入済み前線・初回レビュー到達予想・代表バッジ・時系列チャートを描画する", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-intervention-"));
     const dataDir = join(tempDir, "data");
     const outputDir = join(tempDir, "site");
     mkdirSync(dataDir, { recursive: true });
@@ -1310,6 +1310,18 @@ describe("buildDashboard: 過去実績との比較", () => {
       createdAt: string,
       updatedAt: string,
       thirdPartyAssignees: string[],
+      intervention?: {
+        Intervened: boolean;
+        ThirdPartyAssignees: string[];
+        HumanReviewCount: number;
+        ManualCommentCount: number;
+        PrimaryBadge?: {
+          Kind: "review" | "comment" | "assignee";
+          Actor: string;
+          Label: string;
+          ReviewState?: string;
+        };
+      },
     ) => ({
       PR: `#${num}`,
       Number: num,
@@ -1324,6 +1336,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       AuthorAssociation: "NONE",
       CommitCount: 1,
       ThirdPartyAssignees: thirdPartyAssignees,
+      ...(intervention ? { Intervention: intervention } : {}),
     });
 
     const latestDepths = {
@@ -1340,6 +1353,12 @@ describe("buildDashboard: 過去実績との比較", () => {
         UpdatedAt: "2026-11-05T00:00:00Z",
         Author: "scottlz0310",
         ThirdPartyAssignees: [],
+        Intervention: {
+          Intervened: false,
+          ThirdPartyAssignees: [],
+          HumanReviewCount: 0,
+          ManualCommentCount: 0,
+        },
       },
       HealthyBottom: [],
       AbsoluteBottom: [],
@@ -1351,16 +1370,50 @@ describe("buildDashboard: 過去実績との比較", () => {
         makeRow(440003, "2026-10-23T00:00:00Z", "2026-10-24T00:00:00Z", []),
         makeRow(440004, "2026-10-24T00:00:00Z", "2026-10-25T00:00:00Z", ["stephengillie"]),
       ],
-      UnassignedBottom: [makeRow(441002, "2026-10-27T00:00:00Z", "2026-10-27T00:00:00Z", [])],
-      AssignedBottom: [
-        makeRow(441001, "2026-10-21T00:00:00Z", "2026-10-22T00:00:00Z", ["stephengillie"]),
+      UnreviewedBottom: [makeRow(441002, "2026-10-27T00:00:00Z", "2026-10-27T00:00:00Z", [])],
+      IntervenedBottom: [
+        makeRow(441001, "2026-10-21T00:00:00Z", "2026-10-22T00:00:00Z", [], {
+          Intervened: true,
+          ThirdPartyAssignees: [],
+          HumanReviewCount: 1,
+          ManualCommentCount: 0,
+          PrimaryBadge: {
+            Kind: "review",
+            Actor: "matteozanettii",
+            Label: "レビュー済: matteozanettii (APPROVED)",
+            ReviewState: "APPROVED",
+          },
+        }),
+        makeRow(441003, "2026-10-22T00:00:00Z", "2026-10-23T00:00:00Z", [], {
+          Intervened: true,
+          ThirdPartyAssignees: [],
+          HumanReviewCount: 0,
+          ManualCommentCount: 1,
+          PrimaryBadge: {
+            Kind: "comment",
+            Actor: "stephengillie",
+            Label: "コメント済: stephengillie",
+          },
+        }),
       ],
       ExpressLane: [],
     };
     writeFileSync(join(dataDir, "latest-depths.json"), JSON.stringify(latestDepths), "utf-8");
 
-    // 24 時間で未アサイン前線が 2 日分進行 (2026-10-25 -> 2026-10-27) => 速度 2 日/日、残り 9 日 / 2 = 4.5 日後
+    // v2 履歴 (UnassignedBottom) は混入させず、v3 の 24 時間進行 (2026-10-25 -> 2026-10-27 => 速度 2 日/日、残り 9 日 / 2 = 4.5 日後) で算出
     const historyLines = [
+      {
+        DepthsVersion: 2,
+        Timestamp: "2026-11-13T00:00:00Z",
+        TimestampJst: "2026-11-13 09:00:00",
+        Repository: "microsoft/winget-pkgs",
+        TargetPr: latestDepths.TargetPr,
+        HealthyBottom: [],
+        AbsoluteBottom: [],
+        StaleBottom: latestDepths.StaleBottom,
+        UnassignedBottom: [makeRow(440999, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", [])],
+        ExpressLane: [],
+      },
       {
         DepthsVersion: CURRENT_DEPTHS_VERSION,
         Timestamp: "2026-11-14T00:00:00Z",
@@ -1370,8 +1423,8 @@ describe("buildDashboard: 過去実績との比較", () => {
         HealthyBottom: [],
         AbsoluteBottom: [],
         StaleBottom: latestDepths.StaleBottom,
-        UnassignedBottom: [makeRow(441000, "2026-10-25T00:00:00Z", "2026-10-25T00:00:00Z", [])],
-        AssignedBottom: latestDepths.AssignedBottom,
+        UnreviewedBottom: [makeRow(441000, "2026-10-25T00:00:00Z", "2026-10-25T00:00:00Z", [])],
+        IntervenedBottom: latestDepths.IntervenedBottom,
         ExpressLane: [],
       },
       latestDepths,
@@ -1386,14 +1439,14 @@ describe("buildDashboard: 過去実績との比較", () => {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
       // 初回レビュー到達予想パネル
-      expect(html).toContain("👀 初回レビュー到達予想（未アサイン前線・起票順）");
+      expect(html).toContain("👀 初回レビュー到達予想（未レビュー前線・起票順）");
       expect(html).toContain("実測速度ベース");
       expect(html).toContain("約 4.5 日後");
       expect(html).toContain("2 日/日");
       expect(html).toContain("#441002");
 
-      // 統合時系列チャートに未アサイン前線系列
-      expect(html).toContain("👀 未アサイン前線 起票経過");
+      // 統合時系列チャートに未レビュー前線系列
+      expect(html).toContain("👀 未レビュー前線 起票経過");
 
       // 既存底テーブル（StaleBottom / FirstTimerBottom）で第三者アサイン済みバッジ
       const staleSection = html
@@ -1406,18 +1459,20 @@ describe("buildDashboard: 過去実績との比較", () => {
         .split("🔮 仮説② の根拠")[0];
       expect(firstTimerSection).toContain("アサイン済: stephengillie");
 
-      // 未アサイン前線 vs アサイン済み前線比較セクション
-      expect(html).toContain("👀 第三者アサイン分離（未アサイン前線 vs アサイン済み前線）");
-      expect(html).toContain("🟦 未アサイン前線（純粋未着手）");
-      expect(html).toContain("🟧 アサイン済み前線（介入済み・仕掛かり）");
-      expect(html).toContain("stephengillie(1)");
+      // 未レビュー前線 vs レビュー・介入済み前線比較セクション
+      expect(html).toContain("👀 未レビュー・介入分離（未レビュー前線 vs レビュー・介入済み前線）");
+      expect(html).toContain("🟦 未レビュー前線（完全未着手）");
+      expect(html).toContain("🟧 レビュー・介入済み前線（何らかの人間介入あり）");
+      expect(html).toContain("レビュー済: matteozanettii (APPROVED)");
+      expect(html).toContain("コメント済: stephengillie");
+      expect(html).toContain("レビュー(1), コメント(1)");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  test("Issue #96: 基準 PR 自身が第三者アサイン済みの場合は初回レビュー到達済みとして表示し、旧 Depthsv2 データとも後方互換を保つ", () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-issue-96-assigned-"));
+  test("基準 PR 自身がコメント／レビュー等で介入済みの場合は初回レビュー到達済みとして表示し、旧 Depthsv2 データとも後方互換を保つ", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-target-intervened-"));
     const dataDir = join(tempDir, "data");
     const outputDir = join(tempDir, "site");
     mkdirSync(dataDir, { recursive: true });
@@ -1435,7 +1490,17 @@ describe("buildDashboard: 過去実績との比較", () => {
           CreatedAt: "2026-11-05T00:00:00Z",
           CreatedAtJst: "2026-11-05 09:00",
           UpdatedAt: "2026-11-05T00:00:00Z",
-          ThirdPartyAssignees: ["stephengillie"],
+          Intervention: {
+            Intervened: true,
+            ThirdPartyAssignees: [],
+            HumanReviewCount: 0,
+            ManualCommentCount: 1,
+            PrimaryBadge: {
+              Kind: "comment",
+              Actor: "stephengillie",
+              Label: "コメント済: stephengillie",
+            },
+          },
         },
         StaleBottom: [
           {
@@ -1453,13 +1518,13 @@ describe("buildDashboard: 過去実績との比較", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
-      expect(html).toContain("基準PRアサイン済み");
-      expect(html).toContain("（第三者アサイン済み: stephengillie）");
+      expect(html).toContain("基準PR介入済み");
+      expect(html).toContain("（コメント済: stephengillie）");
       expect(html).toContain(
-        "未アサイン前線のデータはまだありません（次回の定期観測から記録されます）。",
+        "未レビュー前線のデータはまだありません（次回の定期観測から記録されます）。",
       );
       expect(html).toContain(
-        "アサイン済み前線のデータはまだありません（次回の定期観測から記録されます）。",
+        "レビュー・介入済み前線のデータはまだありません（次回の定期観測から記録されます）。",
       );
       expect(html).not.toContain("アサイン済: undefined");
     } finally {
@@ -1467,8 +1532,8 @@ describe("buildDashboard: 過去実績との比較", () => {
     }
   });
 
-  test("Issue #96: 走査上限到達（UnassignedTruncated / AssignedTruncated）時は未確定として表示し該当なしと断定しない", () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-issue-96-truncated-"));
+  test("走査上限到達（UnreviewedTruncated / IntervenedTruncated）時は未確定として表示し該当なしと断定しない", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-intervention-truncated-"));
     const dataDir = join(tempDir, "data");
     const outputDir = join(tempDir, "site");
     mkdirSync(dataDir, { recursive: true });
@@ -1483,21 +1548,32 @@ describe("buildDashboard: 過去実績との比較", () => {
         HealthyBottom: [],
         AbsoluteBottom: [],
         StaleBottom: [],
-        UnassignedBottom: [],
-        AssignedBottom: [
+        UnreviewedBottom: [],
+        IntervenedBottom: [
           {
             Number: 442001,
-            Title: "Assigned PR",
+            Title: "Intervened PR",
             Url: "https://github.com/microsoft/winget-pkgs/pull/442001",
             CreatedAt: "2026-10-20T00:00:00Z",
             UpdatedAt: "2026-10-21T00:00:00Z",
             Author: "user1",
             CommitCount: 1,
             ThirdPartyAssignees: ["stephengillie"],
+            Intervention: {
+              Intervened: true,
+              ThirdPartyAssignees: ["stephengillie"],
+              HumanReviewCount: 0,
+              ManualCommentCount: 0,
+              PrimaryBadge: {
+                Kind: "assignee",
+                Actor: "stephengillie",
+                Label: "アサイン済: stephengillie",
+              },
+            },
           },
         ],
-        UnassignedTruncated: true,
-        AssignedTruncated: true,
+        UnreviewedTruncated: true,
+        IntervenedTruncated: true,
         ExpressLane: [],
       }),
       "utf-8",
@@ -1510,7 +1586,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain(
         "走査上限に到達したため探索を打ち切りました（未走査の PR が残っており、対象 PR の有無は未確定です）。",
       );
-      expect(html).not.toContain("現在、未アサインの健康な待機 PR はありません。");
+      expect(html).not.toContain("現在、完全未着手の健康な待機 PR はありません。");
       expect(html).toContain("上位 1 件（上限到達・一部未完）");
       expect(html).toContain(
         "※ 走査上限に到達したため途中で打ち切りました（未走査の PR が残っています）。",

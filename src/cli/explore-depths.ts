@@ -1,7 +1,12 @@
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { GitHubApiClient } from "../api/github";
-import { FIRST_TIMER_GRAPHQL_QUERY } from "../api/graphql-queries";
+import { GitHubApiClient, parseRepository, resolvePrInterventionWithPaging } from "../api/github";
+import {
+  buildPullRequestBatchInterventionQuery,
+  FIRST_TIMER_GRAPHQL_QUERY,
+  SEARCH_PR_NUMBERS_QUERY,
+} from "../api/graphql-queries";
+import type { GraphQLPullRequestNode } from "../api/graphql-types";
 import {
   buildAbsoluteBaseQuery,
   buildExpressQuery,
@@ -10,12 +15,11 @@ import {
   formatDepthsRow,
   formatGraphQLDepthsRow,
   formatTargetPrInfo,
-  getThirdPartyAssignees,
   isFirstTimerCandidate,
   isStaleCandidate,
-  summarizeAssigneeFrontier,
 } from "../domain/depths";
 import { DEFAULT_AUTHOR_MERGED_BATCH_SIZE, resolveAuthorMergedCounts } from "../domain/first-timer";
+import { summarizeInterventionFrontier } from "../domain/intervention";
 import type {
   DepthsRow,
   DepthsSnapshot,
@@ -239,86 +243,129 @@ export async function fetchFirstTimerBottom(
   return rows.slice(0, limit);
 }
 
-export interface AssigneeFrontiersResult {
-  unassignedBottom: DepthsRow[];
-  assignedBottom: DepthsRow[];
-  unassignedTruncated: boolean;
-  assignedTruncated: boolean;
+/** 介入判定バッチ 1 リクエストあたりの PR 取得件数 */
+export const INTERVENTION_BATCH_SIZE = 15;
+
+export interface InterventionFrontiersResult {
+  unreviewedBottom: DepthsRow[];
+  intervenedBottom: DepthsRow[];
+  unreviewedTruncated: boolean;
+  intervenedTruncated: boolean;
+}
+
+interface GraphQLSearchNumbersResponse {
+  search?: {
+    pageInfo?: {
+      hasNextPage?: boolean;
+      endCursor?: string | null;
+    };
+    nodes?: Array<{ number?: number | null } | null>;
+  };
 }
 
 /**
- * 健康な待機 PR（sort:created-asc）を 1 回のページング走査で走査し、
- * 第三者 Assignees の有無によって「未アサイン前線」と「アサイン済み前線」に分離して各上位 limit 件を抽出する。
- * 阻害ラベルはすべて baseQuery（`-label:...`）でサーバー側除外済み。
- * 走査上限到達により未走査 PR を残したまま打ち切られた区分は *Truncated=true として記録し、全件走査の自然終端と区別する。
+ * 2 段階パイプライン（第1段階: 軽量 Search で PR 番号収集 → 第2段階: GraphQL alias バッチで詳細エッジ判定）により、
+ * 健康な待機 PR（sort:created-asc）を「未レビュー（完全未着手）前線」と「レビュー・介入済み前線」に分離して各上位 limit 件を抽出する。
+ * 両区分が limit 件に到達した時点で後続バッチ・後続 Search ページの取得を即打ち切る。
+ * 走査上限到達により未走査 PR を残したまま打ち切られた区分は *Truncated=true として記録する。
  */
-export async function fetchAssigneeFrontiers(
+export async function fetchInterventionFrontiers(
   client: GitHubApiClient,
   baseQuery: string,
   limit = STALE_BOTTOM_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
-): Promise<AssigneeFrontiersResult> {
+  batchSize = INTERVENTION_BATCH_SIZE,
+): Promise<InterventionFrontiersResult> {
+  const { owner, name } = parseRepository(
+    extractRepositoryFromQuery(baseQuery) ?? DEFAULT_REPOSITORY,
+  );
   let cursor: string | null = null;
   let hasNext = true;
   let traversedCount = 0;
   let reachedNaturalEnd = false;
-  const unassignedBottom: DepthsRow[] = [];
-  const assignedBottom: DepthsRow[] = [];
+  const unreviewedBottom: DepthsRow[] = [];
+  const intervenedBottom: DepthsRow[] = [];
   const query = `${baseQuery} sort:created-asc`;
+  const graphqlInvoker = <T = unknown>(q: string, vars?: Record<string, unknown>) =>
+    client.graphql<T>(q, vars);
 
   while (
     hasNext &&
     traversedCount < maxTraverseNodes &&
-    (unassignedBottom.length < limit || assignedBottom.length < limit)
+    (unreviewedBottom.length < limit || intervenedBottom.length < limit)
   ) {
     const fetchCount = Math.min(FIRST_TIMER_PAGE_SIZE, maxTraverseNodes - traversedCount);
     try {
-      const gqlRes: GraphQLSearchFirstTimerResponse =
-        await client.graphql<GraphQLSearchFirstTimerResponse>(FIRST_TIMER_GRAPHQL_QUERY, {
+      const searchRes: GraphQLSearchNumbersResponse =
+        await client.graphql<GraphQLSearchNumbersResponse>(SEARCH_PR_NUMBERS_QUERY, {
           query,
           first: fetchCount,
           ...(cursor ? { after: cursor } : {}),
         });
 
-      const nodes = gqlRes.search?.nodes ?? [];
-      traversedCount += nodes.length;
+      const rawNodes = searchRes.search?.nodes ?? [];
+      traversedCount += rawNodes.length;
+      const numbers = rawNodes
+        .map((n) => n?.number)
+        .filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0);
 
-      for (const node of nodes) {
-        if (!node?.number) continue;
-        const thirdParty = getThirdPartyAssignees(node);
-        const row = formatGraphQLDepthsRow(node);
-        if (thirdParty.length === 0) {
-          if (unassignedBottom.length < limit) {
-            unassignedBottom.push(row);
-          }
-        } else if (assignedBottom.length < limit) {
-          assignedBottom.push(row);
-        }
-        if (unassignedBottom.length >= limit && assignedBottom.length >= limit) {
+      for (let i = 0; i < numbers.length; i += batchSize) {
+        if (unreviewedBottom.length >= limit && intervenedBottom.length >= limit) {
           break;
+        }
+        const chunk = numbers.slice(i, i + batchSize);
+        const batchQuery = buildPullRequestBatchInterventionQuery(chunk);
+        const batchRes = await client.graphql<{
+          repository?: Record<string, (GraphQLPullRequestNode & GraphQLPrNode) | null> | null;
+        }>(batchQuery, { owner, name });
+
+        const repoNodes = batchRes.repository ?? {};
+        for (let idx = 0; idx < chunk.length; idx++) {
+          const prNode = repoNodes[`pr${idx}`];
+          if (!prNode?.number) continue;
+
+          const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
+            graphqlInvoker,
+            owner,
+            name,
+            prNode,
+          );
+          const row = formatGraphQLDepthsRow(resolvedNode, summary);
+
+          if (!summary.Intervened) {
+            if (unreviewedBottom.length < limit) {
+              unreviewedBottom.push(row);
+            }
+          } else if (intervenedBottom.length < limit) {
+            intervenedBottom.push(row);
+          }
+
+          if (unreviewedBottom.length >= limit && intervenedBottom.length >= limit) {
+            break;
+          }
         }
       }
 
-      hasNext = Boolean(gqlRes.search?.pageInfo?.hasNextPage);
-      cursor = gqlRes.search?.pageInfo?.endCursor ?? null;
+      hasNext = Boolean(searchRes.search?.pageInfo?.hasNextPage);
+      cursor = searchRes.search?.pageInfo?.endCursor ?? null;
 
-      if (!hasNext || !cursor || nodes.length === 0) {
+      if (!hasNext || !cursor || rawNodes.length === 0) {
         reachedNaturalEnd = true;
         break;
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`未アサイン前線・アサイン済み前線の GraphQL 取得に失敗しました: ${msg}`, {
+      throw new Error(`未レビュー前線・介入済み前線の GraphQL 取得に失敗しました: ${msg}`, {
         cause: err,
       });
     }
   }
 
   return {
-    unassignedBottom: unassignedBottom.slice(0, limit),
-    assignedBottom: assignedBottom.slice(0, limit),
-    unassignedTruncated: !reachedNaturalEnd && unassignedBottom.length < limit,
-    assignedTruncated: !reachedNaturalEnd && assignedBottom.length < limit,
+    unreviewedBottom: unreviewedBottom.slice(0, limit),
+    intervenedBottom: intervenedBottom.slice(0, limit),
+    unreviewedTruncated: !reachedNaturalEnd && unreviewedBottom.length < limit,
+    intervenedTruncated: !reachedNaturalEnd && intervenedBottom.length < limit,
   };
 }
 
@@ -366,20 +413,28 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
 function printRowTable(
   rows: DepthsRow[],
   log = console.log,
-  options: { showCommitCount?: boolean; showThirdPartyAssignees?: boolean } | boolean = false,
+  options:
+    | { showCommitCount?: boolean; showThirdPartyAssignees?: boolean; showIntervention?: boolean }
+    | boolean = false,
 ): void {
   const showCommitCount =
     typeof options === "boolean" ? options : (options.showCommitCount ?? false);
   const showThirdPartyAssignees =
     typeof options === "boolean" ? false : (options.showThirdPartyAssignees ?? false);
+  const showIntervention =
+    typeof options === "boolean" ? false : (options.showIntervention ?? false);
   if (rows.length === 0) {
     log("  （該当なし）");
     return;
   }
   for (const row of rows) {
     const commitCol = showCommitCount ? ` | ${String(row.CommitCount ?? "-").padStart(2)}c` : "";
-    const assigneeCol =
-      showThirdPartyAssignees && row.ThirdPartyAssignees && row.ThirdPartyAssignees.length > 0
+    const badgeLabel = showIntervention ? row.Intervention?.PrimaryBadge?.Label : undefined;
+    const assigneeCol = badgeLabel
+      ? ` | [${badgeLabel}]`
+      : (showThirdPartyAssignees || showIntervention) &&
+          row.ThirdPartyAssignees &&
+          row.ThirdPartyAssignees.length > 0
         ? ` | [${row.ThirdPartyAssignees.join(", ")}]`
         : "";
     log(
@@ -449,9 +504,14 @@ export async function runExploreDepths(
     mergedCountCache,
   );
 
-  // 5. 未アサイン前線／アサイン済み前線（健康な待機 PR を第三者 Assignees 有無で分離・起票日時順）
-  const { unassignedBottom, assignedBottom, unassignedTruncated, assignedTruncated } =
-    await fetchAssigneeFrontiers(client, healthyBase, STALE_BOTTOM_LIMIT, FIRST_TIMER_MAX_NODES);
+  // 5. 未レビュー（完全未着手）前線／レビュー・介入済み前線（健康な待機 PR を 2 段階判定で分離・起票日時順）
+  const { unreviewedBottom, intervenedBottom, unreviewedTruncated, intervenedTruncated } =
+    await fetchInterventionFrontiers(
+      client,
+      healthyBase,
+      STALE_BOTTOM_LIMIT,
+      FIRST_TIMER_MAX_NODES,
+    );
 
   // 6. 特急レーン（Express Lane）
   let expressBottom: DepthsRow[] = [];
@@ -462,8 +522,8 @@ export async function runExploreDepths(
   }
 
   const now = new Date();
-  const unassignedSummary = summarizeAssigneeFrontier(unassignedBottom, now);
-  const assignedSummary = summarizeAssigneeFrontier(assignedBottom, now);
+  const unreviewedSummary = summarizeInterventionFrontier(unreviewedBottom, now);
+  const intervenedSummary = summarizeInterventionFrontier(intervenedBottom, now);
 
   if (!options.asJson) {
     log("【1. 健康的な大底 (Healthy Bottom)】");
@@ -490,31 +550,38 @@ export async function runExploreDepths(
     printRowTable(firstTimerBottom, log, { showCommitCount: true, showThirdPartyAssignees: true });
     log("");
 
-    log("【5A. 未アサイン前線 (Unassigned Frontier / 純粋未着手)】");
-    const unassignedTruncatedNote = unassignedTruncated ? " [※走査上限到達のため一部未完了]" : "";
+    log("【5A. 未レビュー（完全未着手）前線 (Unreviewed Frontier)】");
+    const unreviewedTruncatedNote = unreviewedTruncated ? " [※走査上限到達のため一部未完了]" : "";
     log(
-      `説明: 第三者 Assignees が付いていない健康なPR（セルフアサイン含む）の起票順先頭 (上位 ${unassignedSummary.count} 件 / 先頭: ${unassignedSummary.head ? `${unassignedSummary.head.PR} 起票 ${unassignedSummary.head.作成日時}・経過 ${unassignedSummary.headElapsedDays ?? "-"} 日` : unassignedTruncated ? "走査上限到達・未確定" : "該当なし"})${unassignedTruncatedNote}`,
+      `説明: 人間レビュー・手動コメント・第三者 Assignees がすべて無い健康なPR（ボット・作成者本人・自動ログ除く）の起票順先頭 (上位 ${unreviewedSummary.count} 件 / 先頭: ${unreviewedSummary.head ? `${unreviewedSummary.head.PR} 起票 ${unreviewedSummary.head.作成日時}・経過 ${unreviewedSummary.headElapsedDays ?? "-"} 日` : unreviewedTruncated ? "走査上限到達・未確定" : "該当なし"})${unreviewedTruncatedNote}`,
     );
-    if (unassignedBottom.length === 0 && unassignedTruncated) {
+    if (unreviewedBottom.length === 0 && unreviewedTruncated) {
       log("  走査上限に到達し、未走査の PR が残っているため有無は未確定です");
     } else {
-      printRowTable(unassignedBottom, log, { showCommitCount: true });
+      printRowTable(unreviewedBottom, log, { showCommitCount: true });
     }
     log("");
 
-    log("【5B. アサイン済み前線 (Assigned Frontier / 介入済み・仕掛かり)】");
-    const assignedTruncatedNote = assignedTruncated ? " [※走査上限到達のため一部未完了]" : "";
-    const assigneeBreakdown =
-      assignedSummary.assigneeCounts.length > 0
-        ? ` / 内訳: ${assignedSummary.assigneeCounts.map((a) => `${a.login}(${a.count})`).join(", ")}`
-        : "";
+    log("【5B. レビュー・介入済み前線 (Intervened Frontier)】");
+    const intervenedTruncatedNote = intervenedTruncated ? " [※走査上限到達のため一部未完了]" : "";
+    const kindParts: string[] = [];
+    if (intervenedSummary.kindCounts.review > 0) {
+      kindParts.push(`レビュー(${intervenedSummary.kindCounts.review})`);
+    }
+    if (intervenedSummary.kindCounts.comment > 0) {
+      kindParts.push(`コメント(${intervenedSummary.kindCounts.comment})`);
+    }
+    if (intervenedSummary.kindCounts.assignee > 0) {
+      kindParts.push(`アサイン(${intervenedSummary.kindCounts.assignee})`);
+    }
+    const intervenedBreakdown = kindParts.length > 0 ? ` / 内訳: ${kindParts.join(", ")}` : "";
     log(
-      `説明: 第三者 Assignees が付いている健康なPRの起票順先頭 (上位 ${assignedSummary.count} 件 / 先頭: ${assignedSummary.head ? `${assignedSummary.head.PR} 起票 ${assignedSummary.head.作成日時}・経過 ${assignedSummary.headElapsedDays ?? "-"} 日` : assignedTruncated ? "走査上限到達・未確定" : "該当なし"}${assigneeBreakdown})${assignedTruncatedNote}`,
+      `説明: 人間レビュー・手動コメント・第三者 Assignees のいずれかが付いている健康なPRの起票順先頭 (上位 ${intervenedSummary.count} 件 / 先頭: ${intervenedSummary.head ? `${intervenedSummary.head.PR} 起票 ${intervenedSummary.head.作成日時}・経過 ${intervenedSummary.headElapsedDays ?? "-"} 日` : intervenedTruncated ? "走査上限到達・未確定" : "該当なし"}${intervenedBreakdown})${intervenedTruncatedNote}`,
     );
-    if (assignedBottom.length === 0 && assignedTruncated) {
+    if (intervenedBottom.length === 0 && intervenedTruncated) {
       log("  走査上限に到達し、未走査の PR が残っているため有無は未確定です");
     } else {
-      printRowTable(assignedBottom, log, { showCommitCount: true, showThirdPartyAssignees: true });
+      printRowTable(intervenedBottom, log, { showCommitCount: true, showIntervention: true });
     }
     log("");
 
@@ -538,10 +605,10 @@ export async function runExploreDepths(
     absoluteBottom,
     staleBottom,
     firstTimerBottom,
-    unassignedBottom,
-    assignedBottom,
-    unassignedTruncated,
-    assignedTruncated,
+    unreviewedBottom,
+    intervenedBottom,
+    unreviewedTruncated,
+    intervenedTruncated,
     expressLane: expressBottom,
   });
 

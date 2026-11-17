@@ -3,7 +3,7 @@
  * 外部 I/O を行わない純粋関数群であり、src/models の型定義のみに依存する。
  */
 
-import type { DepthsRow, DepthsSnapshot } from "../models/depths";
+import type { DepthsRow, DepthsSnapshot, PrInterventionSummary } from "../models/depths";
 import type {
   FirstReviewForecast,
   FirstReviewForecastStatus,
@@ -12,10 +12,13 @@ import type {
   LifetimeForecast,
   StaleFrontierForecast,
   StaleFrontierSample,
-  UnassignedFrontierSample,
+  UnreviewedFrontierSample,
 } from "../models/forecast";
 import { CURRENT_DEPTHS_VERSION } from "./depths";
 import { DAY_MS, HOUR_MS, round1 } from "./formatters";
+
+/** 優等生の底・初回提出者の底の定義が現行と互換な最小バージョン（v2 と v3 で定義不変） */
+export const MIN_STALE_DEPTHS_VERSION = 2;
 
 /** 速度を測るために必要な最小の観測間隔（これ未満は誤差が大きいため測らない） */
 export const MIN_WINDOW_HOURS = 6;
@@ -46,14 +49,16 @@ export function parseDepthsHistory(text: string): DepthsSnapshot[] {
 
 function extractFrontierSamples<T extends { timestampMs: number }>(
   snapshots: DepthsSnapshot[],
-  definitionVersion: number,
+  minDefinitionVersion: number,
   selectHead: (snapshot: DepthsSnapshot) => DepthsRow | undefined,
   selectAnchorIso: (head: DepthsRow) => string,
   buildSample: (timestampMs: number, pr: number, anchorMs: number) => T,
 ): T[] {
   const samples: T[] = [];
   for (const snapshot of snapshots) {
-    if (snapshot.DepthsVersion !== definitionVersion) continue;
+    if (snapshot.DepthsVersion === undefined || snapshot.DepthsVersion < minDefinitionVersion) {
+      continue;
+    }
     const head = selectHead(snapshot);
     if (!head) continue;
     const timestampMs = Date.parse(snapshot.Timestamp);
@@ -66,15 +71,15 @@ function extractFrontierSamples<T extends { timestampMs: number }>(
 
 /**
  * スナップショット列から、優等生の底の先頭（1コミット限定・更新が最古の健康な PR）の観測列を時刻昇順で取り出す。
- * 観測定義が異なる旧履歴（DepthsVersion 不一致・未設定）、優等生の底が空の観測、日時が不正な観測は除く。
+ * 観測定義が異なる旧履歴（DepthsVersion 未設定・1）、優等生の底が空の観測、日時が不正な観測は除く。
  */
 export function extractStaleFrontierSamples(
   snapshots: DepthsSnapshot[],
-  definitionVersion = CURRENT_DEPTHS_VERSION,
+  minDefinitionVersion = MIN_STALE_DEPTHS_VERSION,
 ): StaleFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
-    definitionVersion,
+    minDefinitionVersion,
     (s) => s.StaleBottom?.[0],
     (head) => head.UpdatedAt,
     (timestampMs, pr, updatedMs) => ({ timestampMs, pr, updatedMs }),
@@ -84,15 +89,15 @@ export function extractStaleFrontierSamples(
 /**
  * スナップショット列から、初回提出者の底の先頭（起票が最古の初回提出者 PR）の
  * 観測列を時刻昇順で取り出す。
- * 観測定義が異なる旧履歴（DepthsVersion 不一致・未設定）、未記録・空の観測、日時が不正な観測は除く。
+ * 観測定義が異なる旧履歴（DepthsVersion 未設定・1）、未記録・空の観測、日時が不正な観測は除く。
  */
 export function extractFirstTimerFrontierSamples(
   snapshots: DepthsSnapshot[],
-  definitionVersion = CURRENT_DEPTHS_VERSION,
+  minDefinitionVersion = MIN_STALE_DEPTHS_VERSION,
 ): FirstTimerFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
-    definitionVersion,
+    minDefinitionVersion,
     (s) => s.FirstTimerBottom?.[0],
     (head) => head.CreatedAt,
     (timestampMs, pr, createdMs) => ({ timestampMs, pr, createdMs }),
@@ -100,18 +105,18 @@ export function extractFirstTimerFrontierSamples(
 }
 
 /**
- * スナップショット列から、未アサイン前線の先頭（第三者 Assignees なし・起票が最古の健康な PR）の
+ * スナップショット列から、未レビュー（完全未着手）前線の先頭（人間レビュー・手動コメント・第三者アサインなし・起票が最古の健康な PR）の
  * 観測列を時刻昇順で取り出す。
- * 観測定義が異なる旧履歴（DepthsVersion 不一致・未設定）、未記録・空の観測、日時が不正な観測は除く。
+ * 観測定義が異なる旧履歴（DepthsVersion 2 以前・未設定）、未記録・空の観測、日時が不正な観測は除く。
  */
-export function extractUnassignedFrontierSamples(
+export function extractUnreviewedFrontierSamples(
   snapshots: DepthsSnapshot[],
-  definitionVersion = CURRENT_DEPTHS_VERSION,
-): UnassignedFrontierSample[] {
+  minDefinitionVersion = CURRENT_DEPTHS_VERSION,
+): UnreviewedFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
-    definitionVersion,
-    (s) => s.UnassignedBottom?.[0],
+    minDefinitionVersion,
+    (s) => s.UnreviewedBottom?.[0],
     (head) => head.CreatedAt,
     (timestampMs, pr, createdMs) => ({ timestampMs, pr, createdMs }),
   );
@@ -253,35 +258,62 @@ export function calculateStaleFrontierForecast(
 export interface FirstReviewForecastOptions {
   /** 速度を測る期間の上限（時間） */
   windowHours?: number;
-  /** 基準 PR 自身の第三者 Assignees（空なら未アサイン） */
+  /** 基準 PR 自身の介入判定結果（人間レビュー・手動コメント・第三者アサインの OR） */
+  targetIntervention?: PrInterventionSummary | null;
+  /** 基準 PR 自身の第三者 Assignees（旧データ互換フォールバック用） */
   targetThirdPartyAssignees?: readonly string[] | null;
 }
 
+function resolveTargetIntervention(
+  options: FirstReviewForecastOptions,
+): PrInterventionSummary | null {
+  if (options.targetIntervention) {
+    return options.targetIntervention;
+  }
+  const assignees = (options.targetThirdPartyAssignees ?? []).filter((a) => Boolean(a));
+  if (assignees.length === 0) {
+    return null;
+  }
+  return {
+    Intervened: true,
+    ThirdPartyAssignees: assignees,
+    HumanReviewCount: 0,
+    ManualCommentCount: 0,
+    PrimaryBadge: {
+      Kind: "assignee",
+      Actor: assignees[0],
+      Label: `アサイン済: ${assignees.join(", ")}`,
+    },
+  };
+}
+
 /**
- * 未アサイン前線（第三者 Assignees なし・起票日時順）の進みから、
+ * 未レビュー（完全未着手）前線の進みから、
  * 基準 PR へ初回レビュー（メンテナの最初の介入）が到達する見込み日を予想する。
  */
 export function calculateFirstReviewForecast(
-  samples: UnassignedFrontierSample[],
+  samples: UnreviewedFrontierSample[],
   targetCreatedMs: number | null,
   options: FirstReviewForecastOptions = {},
 ): FirstReviewForecast {
   const windowHours = options.windowHours ?? DEFAULT_WINDOW_HOURS;
-  const targetAssignees = (options.targetThirdPartyAssignees ?? []).filter((a) => Boolean(a));
-  const hasTargetAssignee = targetAssignees.length > 0;
+  const targetIntervention = resolveTargetIntervention(options);
+  const targetAssignees = targetIntervention?.ThirdPartyAssignees ?? [];
+  const hasTargetIntervention = Boolean(targetIntervention?.Intervened);
 
   const latest = samples[samples.length - 1];
   if (!latest) {
     return {
-      status: hasTargetAssignee ? "target-assigned" : "no-samples",
+      status: hasTargetIntervention ? "target-intervened" : "no-samples",
       frontier: null,
       lagDays: null,
       gapDays: null,
+      targetIntervention,
       targetAssignees,
-      steadyEtaDays: hasTargetAssignee ? 0 : null,
+      steadyEtaDays: hasTargetIntervention ? 0 : null,
       steadyDateMs: null,
       observedSpeed: null,
-      observedEtaDays: hasTargetAssignee ? 0 : null,
+      observedEtaDays: hasTargetIntervention ? 0 : null,
       observedDateMs: null,
       windowHours: 0,
       observedUnavailable: "no-samples",
@@ -294,18 +326,19 @@ export function calculateFirstReviewForecast(
 
   if (targetCreatedMs === null || Number.isNaN(targetCreatedMs)) {
     return {
-      status: hasTargetAssignee ? "target-assigned" : "no-target",
+      status: hasTargetIntervention ? "target-intervened" : "no-target",
       frontier,
       lagDays,
       gapDays: null,
+      targetIntervention,
       targetAssignees,
-      steadyEtaDays: hasTargetAssignee ? 0 : null,
-      steadyDateMs: hasTargetAssignee ? latest.timestampMs : null,
+      steadyEtaDays: hasTargetIntervention ? 0 : null,
+      steadyDateMs: hasTargetIntervention ? latest.timestampMs : null,
       observedSpeed: velocity.observedSpeed,
-      observedEtaDays: hasTargetAssignee ? 0 : null,
-      observedDateMs: hasTargetAssignee ? latest.timestampMs : null,
+      observedEtaDays: hasTargetIntervention ? 0 : null,
+      observedDateMs: hasTargetIntervention ? latest.timestampMs : null,
       windowHours: velocity.windowHours,
-      observedUnavailable: hasTargetAssignee ? velocity.unavailableReason : "no-target",
+      observedUnavailable: hasTargetIntervention ? velocity.unavailableReason : "no-target",
     };
   }
 
@@ -314,12 +347,13 @@ export function calculateFirstReviewForecast(
   const steadyEtaDays = gapMs <= 0 ? 0 : round1(gapMs / DAY_MS);
   const steadyDateMs = latest.timestampMs + steadyEtaDays * DAY_MS;
 
-  if (hasTargetAssignee) {
+  if (hasTargetIntervention) {
     return {
-      status: "target-assigned",
+      status: "target-intervened",
       frontier,
       lagDays,
       gapDays,
+      targetIntervention,
       targetAssignees,
       steadyEtaDays: 0,
       steadyDateMs: latest.timestampMs,
@@ -337,6 +371,7 @@ export function calculateFirstReviewForecast(
       frontier,
       lagDays,
       gapDays,
+      targetIntervention,
       targetAssignees,
       steadyEtaDays: 0,
       steadyDateMs: latest.timestampMs,
@@ -355,6 +390,7 @@ export function calculateFirstReviewForecast(
       frontier,
       lagDays,
       gapDays,
+      targetIntervention,
       targetAssignees,
       steadyEtaDays,
       steadyDateMs,
@@ -372,6 +408,7 @@ export function calculateFirstReviewForecast(
     frontier,
     lagDays,
     gapDays,
+    targetIntervention,
     targetAssignees,
     steadyEtaDays,
     steadyDateMs,

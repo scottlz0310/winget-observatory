@@ -13,6 +13,7 @@ import {
   parseRepository,
   parseRetryAfterMs,
   RETRYABLE_STATUS_CODES,
+  resolvePrInterventionWithPaging,
   SEARCH_ISSUES_QUERY,
 } from "../../src/api/github";
 import {
@@ -171,6 +172,262 @@ describe("API: GitHubApiClient", () => {
     expect(pr.author).toBe("scottlz0310");
     expect(pr.thirdPartyAssignees).toEqual(["stephengillie"]);
   });
+
+  test("getPullRequest は 1 ページ目で未介入かつ comments に次ページがある場合のみ追加ページングして介入を検出する", async () => {
+    const calledOperations: string[] = [];
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const parsed = JSON.parse(String(init?.body ?? "{}")) as {
+        query?: string;
+        variables?: Record<string, unknown>;
+      };
+      const q = parsed.query ?? "";
+      if (q.includes("GetPullRequestView")) {
+        calledOperations.push("view");
+        return new Response(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  number: 464302,
+                  title: "New package: sample",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/464302",
+                  createdAt: "2026-10-28T21:47:38Z",
+                  updatedAt: "2026-11-02T03:00:00Z",
+                  author: { __typename: "User", login: "scottlz0310" },
+                  assignees: { nodes: [] },
+                  reviews: {
+                    totalCount: 0,
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [],
+                  },
+                  comments: {
+                    totalCount: 22,
+                    pageInfo: { hasNextPage: true, endCursor: "c-page1" },
+                    nodes: [
+                      {
+                        author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+                        body: "CLA",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (q.includes("GetPullRequestCommentsPage")) {
+        calledOperations.push("comments-page");
+        return new Response(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    totalCount: 22,
+                    pageInfo: { hasNextPage: true, endCursor: "c-page2" },
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "stephengillie" },
+                        body: "Need privacy policy",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`想定外のクエリ呼び出し: ${q}`);
+    };
+
+    const client = new GitHubApiClient({ token: "sample-token", fetch: mockFetch });
+    const pr = await client.getPullRequest("microsoft/winget-pkgs", 464302);
+    expect(calledOperations).toEqual(["view", "comments-page"]);
+    expect(pr.intervention?.Intervened).toBe(true);
+    expect(pr.intervention?.PrimaryBadge?.Label).toBe("コメント済: stephengillie");
+  });
+
+  test("resolvePrInterventionWithPaging は reviews の追加ページングで人間レビューを検出したら即終了し、comments の追加ページングを呼ばない", async () => {
+    const calledQueries: string[] = [];
+    const initialNode = {
+      number: 700,
+      author: { __typename: "User", login: "submitter" },
+      assignees: { nodes: [] },
+      reviews: {
+        totalCount: 22,
+        pageInfo: { hasNextPage: true, endCursor: "r-page1" },
+        nodes: [
+          {
+            author: { __typename: "Bot", login: "copilot-pull-request-reviewer" },
+            state: "COMMENTED",
+          },
+        ],
+      },
+      comments: {
+        totalCount: 25,
+        pageInfo: { hasNextPage: true, endCursor: "c-page1" },
+        nodes: [
+          { author: { __typename: "Bot", login: "microsoft-github-policy-service" }, body: "CLA" },
+        ],
+      },
+    };
+
+    const { summary } = await resolvePrInterventionWithPaging(
+      async <T>(query: string): Promise<T> => {
+        calledQueries.push(query);
+        if (query.includes("GetPullRequestReviewsPage")) {
+          return {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  totalCount: 22,
+                  pageInfo: { hasNextPage: true, endCursor: "r-page2" },
+                  nodes: [
+                    { author: { __typename: "User", login: "matteozanettii" }, state: "APPROVED" },
+                  ],
+                },
+              },
+            },
+          } as unknown as T;
+        }
+        throw new Error(`想定外の追加ページング: ${query}`);
+      },
+      "microsoft",
+      "winget-pkgs",
+      initialNode,
+    );
+
+    expect(calledQueries.length).toBe(1);
+    expect(calledQueries[0]).toContain("GetPullRequestReviewsPage");
+    expect(summary.Intervened).toBe(true);
+    expect(summary.PrimaryBadge?.Label).toBe("レビュー済: matteozanettii (APPROVED)");
+  });
+
+  test.each<{
+    name: string;
+    connection: "reviews" | "comments";
+    hasNextPage: boolean;
+    endCursor: string | null;
+    nextCursor?: string | null;
+    expectedMessage: string;
+  }>([
+    {
+      name: "reviews が追加ページング上限到達時に未介入として確定せずエラーにする",
+      connection: "reviews",
+      hasNextPage: true,
+      endCursor: "r-cursor-1",
+      nextCursor: "r-cursor-2",
+      expectedMessage:
+        "reviews が追加ページング上限 (1 ページ) に達したため、未介入と確定できません",
+    },
+    {
+      name: "comments が追加ページング上限到達時に未介入として確定せずエラーにする",
+      connection: "comments",
+      hasNextPage: true,
+      endCursor: "c-cursor-1",
+      nextCursor: "c-cursor-2",
+      expectedMessage:
+        "comments が追加ページング上限 (1 ページ) に達したため、未介入と確定できません",
+    },
+    {
+      name: "reviews で hasNextPage=true かつ endCursor 欠落時はエラーにする",
+      connection: "reviews",
+      hasNextPage: true,
+      endCursor: null,
+      expectedMessage: "reviews ページングで hasNextPage=true ですが endCursor が欠落しているため",
+    },
+    {
+      name: "comments で同一カーソル連続返却時は無限ループを止めてエラーにする",
+      connection: "comments",
+      hasNextPage: true,
+      endCursor: "c-same",
+      nextCursor: "c-same",
+      expectedMessage: "comments ページングでカーソルが進まないため",
+    },
+  ])(
+    "resolvePrInterventionWithPaging fail-closed: $name",
+    async ({ connection, hasNextPage, endCursor, nextCursor, expectedMessage }) => {
+      const initialNode = {
+        number: 701,
+        author: { __typename: "User", login: "submitter" },
+        assignees: { nodes: [] },
+        reviews:
+          connection === "reviews"
+            ? {
+                pageInfo: { hasNextPage, endCursor },
+                nodes: [
+                  {
+                    author: { __typename: "Bot", login: "copilot-pull-request-reviewer" },
+                    state: "COMMENTED",
+                  },
+                ],
+              }
+            : { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        comments:
+          connection === "comments"
+            ? {
+                pageInfo: { hasNextPage, endCursor },
+                nodes: [
+                  {
+                    author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+                    body: "CLA",
+                  },
+                ],
+              }
+            : { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      };
+
+      await expect(
+        resolvePrInterventionWithPaging(
+          async <T>(query: string): Promise<T> => {
+            if (query.includes("GetPullRequestReviewsPage")) {
+              return {
+                repository: {
+                  pullRequest: {
+                    reviews: {
+                      pageInfo: { hasNextPage: true, endCursor: nextCursor ?? null },
+                      nodes: [
+                        {
+                          author: { __typename: "Bot", login: "copilot-pull-request-reviewer" },
+                          state: "COMMENTED",
+                        },
+                      ],
+                    },
+                  },
+                },
+              } as unknown as T;
+            }
+            return {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: nextCursor ?? null },
+                    nodes: [
+                      {
+                        author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+                        body: "CLA",
+                      },
+                    ],
+                  },
+                },
+              },
+            } as unknown as T;
+          },
+          "microsoft",
+          "winget-pkgs",
+          initialNode,
+          1,
+        ),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
 
   test("getPullRequest は PR が存在しない場合（実 API の NOT_FOUND errors 応答）404 GitHubApiError をスローする", async () => {
     const mockFetch = async (): Promise<Response> => {

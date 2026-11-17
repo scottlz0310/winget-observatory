@@ -4,53 +4,15 @@ import type {
   GitHubPrView,
   GitHubSearchItem,
   GraphQLPrNode,
+  PrInterventionSummary,
   TargetPrInfo,
 } from "../models/depths";
 
 import { DAY_MS, formatJstDateTime, round1 } from "./formatters";
+import { extractThirdPartyAssignees } from "./intervention";
 import { buildHealthyQueryParts } from "./labels";
 
-export { formatJstDateTime };
-
-/**
- * PR 作成者（authorLogin）を除外した第三者 Assignees のログイン名一覧を抽出する。
- * - 大文字・小文字を区別せずに作成者本人を除外する（セルフアサインを第三者扱いしない）
- * - authorLogin が null / undefined / 空文字の場合は、有効な全 assignees を第三者として扱う
- * - 重複（大小文字違い含む）を排除して出現順を保つ
- */
-export function extractThirdPartyAssignees(
-  assignees:
-    | ReadonlyArray<string | { login?: string | null } | null | undefined>
-    | null
-    | undefined,
-  authorLogin?: string | null,
-): string[] {
-  if (!Array.isArray(assignees)) {
-    return [];
-  }
-
-  const normalizedAuthor = authorLogin?.trim().toLowerCase() || null;
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const entry of assignees) {
-    const rawLogin = typeof entry === "string" ? entry : entry?.login;
-    const login = rawLogin?.trim();
-    if (!login) continue;
-
-    const normalized = login.toLowerCase();
-    if (normalizedAuthor !== null && normalized === normalizedAuthor) {
-      continue;
-    }
-    if (seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    result.push(login);
-  }
-
-  return result;
-}
+export { extractThirdPartyAssignees, formatJstDateTime };
 
 /**
  * GraphQL PullRequest ノードから第三者 Assignees 一覧を取得する。
@@ -64,9 +26,10 @@ export function getThirdPartyAssignees(
 /**
  * 現行の底スナップショット定義バージョン。
  * - 未設定 / 1: 旧定義（StaleBottom=全コミット、FirstTimerBottom=updatedAt順・生涯マージ未検証）
- * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み）
+ * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み、Unassigned/Assigned）
+ * - 3: 介入判定分離版（UnreviewedBottom / IntervenedBottom: 人間レビュー・手動コメント・第三者アサイン OR 分離）
  */
-export const CURRENT_DEPTHS_VERSION = 2;
+export const CURRENT_DEPTHS_VERSION = 3;
 
 /**
  * タイトル文字列をコンソール/表示用に切り詰める（45文字超は先頭42文字 + "..."）。
@@ -110,6 +73,7 @@ export function formatTargetPrInfo(view: GitHubPrView): TargetPrInfo {
     ...(view.thirdPartyAssignees !== undefined
       ? { ThirdPartyAssignees: view.thirdPartyAssignees }
       : {}),
+    ...(view.intervention !== undefined ? { Intervention: view.intervention } : {}),
   };
 }
 
@@ -137,7 +101,17 @@ export function buildExpressQuery(repository: string, targetCreatedIso: string):
 /**
  * GraphQL 検索ノードを DepthsRow 出力形式へ変換する。
  */
-export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
+export function formatGraphQLDepthsRow(
+  node: GraphQLPrNode,
+  intervention?: PrInterventionSummary,
+): DepthsRow {
+  const thirdPartyAssignees =
+    intervention !== undefined
+      ? intervention.ThirdPartyAssignees
+      : node.assignees !== undefined
+        ? getThirdPartyAssignees(node)
+        : undefined;
+
   return {
     PR: `#${node.number}`,
     Number: node.number,
@@ -151,7 +125,8 @@ export function formatGraphQLDepthsRow(node: GraphQLPrNode): DepthsRow {
     Author: node.author?.login,
     AuthorAssociation: node.authorAssociation,
     CommitCount: node.commits?.totalCount,
-    ...(node.assignees !== undefined ? { ThirdPartyAssignees: getThirdPartyAssignees(node) } : {}),
+    ...(thirdPartyAssignees !== undefined ? { ThirdPartyAssignees: thirdPartyAssignees } : {}),
+    ...(intervention !== undefined ? { Intervention: intervention } : {}),
   };
 }
 
@@ -235,10 +210,10 @@ export function createDepthsSnapshot(params: {
   absoluteBottom: DepthsRow[];
   staleBottom: DepthsRow[];
   firstTimerBottom?: DepthsRow[];
-  unassignedBottom?: DepthsRow[];
-  assignedBottom?: DepthsRow[];
-  unassignedTruncated?: boolean;
-  assignedTruncated?: boolean;
+  unreviewedBottom?: DepthsRow[];
+  intervenedBottom?: DepthsRow[];
+  unreviewedTruncated?: boolean;
+  intervenedTruncated?: boolean;
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
@@ -251,10 +226,10 @@ export function createDepthsSnapshot(params: {
     AbsoluteBottom: params.absoluteBottom,
     StaleBottom: params.staleBottom,
     ...(params.firstTimerBottom ? { FirstTimerBottom: params.firstTimerBottom } : {}),
-    ...(params.unassignedBottom ? { UnassignedBottom: params.unassignedBottom } : {}),
-    ...(params.assignedBottom ? { AssignedBottom: params.assignedBottom } : {}),
-    ...(params.unassignedTruncated ? { UnassignedTruncated: true } : {}),
-    ...(params.assignedTruncated ? { AssignedTruncated: true } : {}),
+    ...(params.unreviewedBottom ? { UnreviewedBottom: params.unreviewedBottom } : {}),
+    ...(params.intervenedBottom ? { IntervenedBottom: params.intervenedBottom } : {}),
+    ...(params.unreviewedTruncated ? { UnreviewedTruncated: true } : {}),
+    ...(params.intervenedTruncated ? { IntervenedTruncated: true } : {}),
     ExpressLane: params.expressLane,
   };
 }
