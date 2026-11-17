@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `src/domain/sample-collector.ts`: `Author` が保存済みの既存 `timeline-blocking` レコードはタイムラインを再取得せず GraphQL 累計マージ数バッチ照会のみで昇格・更新するよう最適化し、走査窓外に残存する `timeline-blocking` レコードも対象化（昇格時に古い `FirstTimerReason` を削除）
   - `src/domain/sample-cache.ts`: `indexSampleCache` を後続行優先の重複排除へ統一し、`extractFirstTimerFastestRanking` と共有
   - `scripts/pages/sections/hero-and-kpi.ts`, `scripts/pages/sections/stats-and-samples.ts`: 見出し・注釈文言を「生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）」に更新
+- 「🧪 比較に使ったサンプル」セクションの視認性・分析性を改善:
+  - `scripts/build-pages.ts`: `Samples` に `Title` / `CreatedAt` が欠落している場合に `merged-samples.jsonl` から補完する `enrichProgressSamplesWithCache` を追加
+  - `scripts/pages/sections/stats-and-samples.ts`, `scripts/pages/styles.ts`, `scripts/pages/template.ts`:
+    - テーブル上部に直近サンプルの通過ペースサマリー（初回のみ P50、同条件: 初回×1コミット P50、1コミット完走率・手直し有無の P50 比較）を追加
+    - 外部依存なしの軽量インライン JS による 3 種ワンクリック切り替えフィルタ（`すべて` / `🌱 初回のみ` / `🎯 同条件: 初回×1コミット`）と 0 件時空状態表示を追加
+    - 独立 `作成順` 列を廃止して `PR / パッケージ`（プレフィックス整理＋ホバー全タイトル＋`⚡後発` バッジ）、`コホート / コミット`、`起票 → マージ（起票日差）`（`MM/DD → MM/DD`＋基準 PR 起票日差）、3 日数列の 6 列へ再編し、`white-space: nowrap` および同条件行強調を適用
 
 ## [0.4.0] - 2026-11-17
 

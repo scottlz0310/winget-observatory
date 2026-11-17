@@ -11,7 +11,11 @@ import {
 } from "../src/domain/forecast";
 import { parseForecastHistory } from "../src/domain/forecast-history";
 import { parseCsvRows } from "../src/domain/progress-csv";
-import { extractFirstTimerFastestRanking, parseSampleCache } from "../src/domain/sample-cache";
+import {
+  extractFirstTimerFastestRanking,
+  indexSampleCache,
+  parseSampleCache,
+} from "../src/domain/sample-cache";
 import type {
   FirstTimerFrontierSample,
   StaleFrontierSample,
@@ -19,7 +23,7 @@ import type {
 } from "../src/models/forecast";
 import type { ForecastHistoryLine } from "../src/models/forecast-history";
 import type { ProgressHistoryRow } from "../src/models/progress";
-import type { FirstTimerFastestRanking } from "../src/models/sample-cache";
+import type { SampleCacheEntry } from "../src/models/sample-cache";
 import { generateDashboardHtml } from "./pages/template";
 import type { BuildOptions, LatestDepths, LatestProgress } from "./pages/types";
 
@@ -64,6 +68,39 @@ function readOptionalParsed<T>(
   }
 }
 
+/**
+ * スナップショットの比較サンプル配列について、Title / CreatedAt が欠落している要素を
+ * merged-samples.jsonl 側のレコードから補完する（非破壊的コピーを返す）。
+ */
+export function enrichProgressSamplesWithCache(
+  progress: LatestProgress | null,
+  cacheEntries: readonly SampleCacheEntry[],
+): LatestProgress | null {
+  if (!progress?.Samples || progress.Samples.length === 0 || cacheEntries.length === 0) {
+    return progress;
+  }
+
+  const cacheIndex = indexSampleCache(cacheEntries);
+  let changed = false;
+  const enrichedSamples = progress.Samples.map((sample) => {
+    const cached = cacheIndex.get(sample.Number);
+    if (cached?.Type !== "sample") return sample;
+
+    const needsTitle = !sample.Title;
+    const needsCreatedAt = !sample.CreatedAt;
+    if (!needsTitle && !needsCreatedAt) return sample;
+
+    changed = true;
+    return {
+      ...sample,
+      ...(needsTitle ? { Title: cached.Title } : {}),
+      ...(needsCreatedAt ? { CreatedAt: cached.CreatedAt } : {}),
+    };
+  });
+
+  return changed ? { ...progress, Samples: enrichedSamples } : progress;
+}
+
 /** 観測データ一式を読み込み、静的 HTML ダッシュボードと RAW データを出力先ディレクトリへ書き出す */
 export function buildDashboard(options: BuildOptions): { htmlPath: string } {
   const { dataDir, outputDir } = options;
@@ -72,7 +109,7 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     mkdirSync(outputDir, { recursive: true });
   }
 
-  const progress = readOptionalParsed<LatestProgress | null>(
+  const rawProgress = readOptionalParsed<LatestProgress | null>(
     join(dataDir, "latest-progress.json"),
     "進捗スナップショット",
     (raw) => JSON.parse(raw) as LatestProgress,
@@ -119,12 +156,14 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     [],
   );
 
-  const firstTimerFastestRanking = readOptionalParsed<FirstTimerFastestRanking>(
+  const sampleCacheEntries = readOptionalParsed<SampleCacheEntry[]>(
     join(dataDir, "merged-samples.jsonl"),
     "マージ済みサンプルキャッシュ",
-    (raw) => extractFirstTimerFastestRanking(parseSampleCache(raw)),
-    { totalCount: 0, items: [] },
+    parseSampleCache,
+    [],
   );
+  const progress = enrichProgressSamplesWithCache(rawProgress, sampleCacheEntries);
+  const firstTimerFastestRanking = extractFirstTimerFastestRanking(sampleCacheEntries);
 
   const html = generateDashboardHtml({
     progress,

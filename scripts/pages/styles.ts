@@ -195,6 +195,66 @@ export const DASHBOARD_CSS = `    :root {
     tr:hover td { background-color: rgba(148, 163, 184, 0.05); }
     .progress-bar { height: 6px; background-color: var(--code-bg); border-radius: 3px; margin-top: 0.4rem; overflow: hidden; }
     .progress-bar > div { height: 100%; background-color: var(--success); border-radius: 3px; }
+    .samples-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .samples-summary-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 0.65rem;
+      padding: 0.85rem 1rem;
+    }
+    .sample-filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+      align-items: center;
+    }
+    .sample-filter-btn {
+      cursor: pointer;
+      border: 1px solid var(--border-color);
+      background-color: var(--card-bg);
+      color: var(--text-color);
+      border-radius: 9999px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+    .sample-filter-btn:hover {
+      border-color: var(--primary);
+    }
+    .sample-filter-btn.is-active {
+      background-color: var(--primary-light);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .sample-filter-count {
+      font-size: 0.75rem;
+      opacity: 0.85;
+    }
+    .sample-nowrap {
+      white-space: nowrap;
+    }
+    .sample-table th, .sample-table td {
+      padding: 0.65rem 0.75rem;
+    }
+    .sample-row-first-timer td {
+      background-color: rgba(22, 163, 74, 0.04);
+    }
+    .sample-row-same-condition td {
+      background-color: rgba(22, 163, 74, 0.09);
+    }
+    .sample-row-same-condition td:first-child {
+      border-left: 4px solid var(--success);
+    }
     .forecast-panel { margin-bottom: 0.5rem; }
     .section-note { font-size: 0.875rem; color: var(--text-muted); margin: -0.5rem 0 1rem; }
     a { color: var(--primary); text-decoration: none; }
