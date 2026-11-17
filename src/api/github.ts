@@ -150,89 +150,133 @@ interface GraphQLCommentsPageResponse {
   } | null;
 }
 
+/** 介入判定の追加ページングにおける 1 コネクションあたりのデフォルト安全上限（50件/page × 50 = 2,500件） */
+export const DEFAULT_MAX_INTERVENTION_EXTRA_PAGES = 50;
+
+interface ConnectionPageResult<TNode> {
+  hasNextPage: boolean;
+  endCursor: string | null;
+  nodes: Array<TNode | null>;
+}
+
+async function fetchRemainingInterventionConnection<TNode>(params: {
+  label: string;
+  prNumber: number;
+  maxExtraPages: number;
+  initialHasNext: boolean;
+  initialCursor: string | null;
+  fetchPage: (cursor: string) => Promise<ConnectionPageResult<TNode>>;
+  onPageNodes: (nodes: Array<TNode | null>) => boolean;
+}): Promise<void> {
+  let hasNext = params.initialHasNext;
+  let cursor = params.initialCursor;
+  let pages = 0;
+
+  while (hasNext) {
+    if (!cursor) {
+      throw new Error(
+        `PR #${params.prNumber} の ${params.label} ページングで hasNextPage=true ですが endCursor が欠落しているため、未介入と確定できません`,
+      );
+    }
+    if (pages >= params.maxExtraPages) {
+      throw new Error(
+        `PR #${params.prNumber} の ${params.label} が追加ページング上限 (${params.maxExtraPages} ページ) に達したため、未介入と確定できません`,
+      );
+    }
+    pages++;
+    const prevCursor = cursor;
+    const page = await params.fetchPage(cursor);
+    if (params.onPageNodes(page.nodes)) {
+      return;
+    }
+    hasNext = page.hasNextPage;
+    cursor = page.endCursor;
+    if (hasNext && cursor === prevCursor) {
+      throw new Error(
+        `PR #${params.prNumber} の ${params.label} ページングでカーソルが進まないため、未介入と確定できません`,
+      );
+    }
+  }
+}
+
 /**
  * 1 回目の PR 取得ノード（reviews/comments 20件）で未介入のまま後続ページが残っている場合のみ、
  * 追加ページを取得して介入有無を確定させる（1件でも介入が見つかれば即打ち切る）。
+ * 上限到達やカーソル欠落により全件走査を完了できない場合は「未介入」と誤確定せず例外をスローする。
  */
 export async function resolvePrInterventionWithPaging<TNode extends GraphQLPullRequestNode>(
   graphqlFn: GraphQLInvoker,
   owner: string,
   name: string,
   prNode: TNode,
-  maxExtraPages = 10,
+  maxExtraPages = DEFAULT_MAX_INTERVENTION_EXTRA_PAGES,
 ): Promise<{ node: TNode; summary: PrInterventionSummary }> {
   let currentSummary = classifyPrIntervention(prNode);
   if (currentSummary.Intervened || !prNode.number) {
     return { node: prNode, summary: currentSummary };
   }
 
+  const prNumber = prNode.number;
   let reviewNodes = [...(prNode.reviews?.nodes ?? [])];
-  let reviewHasNext = Boolean(prNode.reviews?.pageInfo?.hasNextPage);
-  let reviewCursor = prNode.reviews?.pageInfo?.endCursor ?? null;
-  let reviewPages = 0;
-
-  while (
-    !currentSummary.Intervened &&
-    reviewHasNext &&
-    reviewCursor &&
-    reviewPages < maxExtraPages
-  ) {
-    reviewPages++;
-    const pageData = await graphqlFn<GraphQLReviewsPageResponse>(
-      GET_PULL_REQUEST_REVIEWS_PAGE_QUERY,
-      {
-        owner,
-        name,
-        number: prNode.number,
-        after: reviewCursor,
-      },
-    );
-    const conn = pageData?.repository?.pullRequest?.reviews;
-    if (Array.isArray(conn?.nodes)) {
-      reviewNodes = [...reviewNodes, ...conn.nodes];
-    }
-    reviewHasNext = Boolean(conn?.pageInfo?.hasNextPage);
-    reviewCursor = conn?.pageInfo?.endCursor ?? null;
-    currentSummary = classifyPrIntervention({
-      author: prNode.author,
-      assignees: prNode.assignees,
-      reviews: reviewNodes,
-      comments: prNode.comments,
-    });
-  }
-
   let commentNodes = [...(prNode.comments?.nodes ?? [])];
-  let commentHasNext = Boolean(prNode.comments?.pageInfo?.hasNextPage);
-  let commentCursor = prNode.comments?.pageInfo?.endCursor ?? null;
-  let commentPages = 0;
 
-  while (
-    !currentSummary.Intervened &&
-    commentHasNext &&
-    commentCursor &&
-    commentPages < maxExtraPages
-  ) {
-    commentPages++;
-    const pageData = await graphqlFn<GraphQLCommentsPageResponse>(
-      GET_PULL_REQUEST_COMMENTS_PAGE_QUERY,
-      {
-        owner,
-        name,
-        number: prNode.number,
-        after: commentCursor,
-      },
-    );
-    const conn = pageData?.repository?.pullRequest?.comments;
-    if (Array.isArray(conn?.nodes)) {
-      commentNodes = [...commentNodes, ...conn.nodes];
-    }
-    commentHasNext = Boolean(conn?.pageInfo?.hasNextPage);
-    commentCursor = conn?.pageInfo?.endCursor ?? null;
+  const recomputeSummary = (): boolean => {
     currentSummary = classifyPrIntervention({
       author: prNode.author,
       assignees: prNode.assignees,
       reviews: reviewNodes,
       comments: commentNodes,
+    });
+    return currentSummary.Intervened;
+  };
+
+  await fetchRemainingInterventionConnection({
+    label: "reviews",
+    prNumber,
+    maxExtraPages,
+    initialHasNext: Boolean(prNode.reviews?.pageInfo?.hasNextPage),
+    initialCursor: prNode.reviews?.pageInfo?.endCursor ?? null,
+    fetchPage: async (after) => {
+      const pageData = await graphqlFn<GraphQLReviewsPageResponse>(
+        GET_PULL_REQUEST_REVIEWS_PAGE_QUERY,
+        { owner, name, number: prNumber, after },
+      );
+      const conn = pageData?.repository?.pullRequest?.reviews;
+      return {
+        hasNextPage: Boolean(conn?.pageInfo?.hasNextPage),
+        endCursor: conn?.pageInfo?.endCursor ?? null,
+        nodes: Array.isArray(conn?.nodes) ? conn.nodes : [],
+      };
+    },
+    onPageNodes: (nodes) => {
+      reviewNodes = [...reviewNodes, ...nodes];
+      return recomputeSummary();
+    },
+  });
+
+  if (!currentSummary.Intervened) {
+    await fetchRemainingInterventionConnection({
+      label: "comments",
+      prNumber,
+      maxExtraPages,
+      initialHasNext: Boolean(prNode.comments?.pageInfo?.hasNextPage),
+      initialCursor: prNode.comments?.pageInfo?.endCursor ?? null,
+      fetchPage: async (after) => {
+        const pageData = await graphqlFn<GraphQLCommentsPageResponse>(
+          GET_PULL_REQUEST_COMMENTS_PAGE_QUERY,
+          { owner, name, number: prNumber, after },
+        );
+        const conn = pageData?.repository?.pullRequest?.comments;
+        return {
+          hasNextPage: Boolean(conn?.pageInfo?.hasNextPage),
+          endCursor: conn?.pageInfo?.endCursor ?? null,
+          nodes: Array.isArray(conn?.nodes) ? conn.nodes : [],
+        };
+      },
+      onPageNodes: (nodes) => {
+        commentNodes = [...commentNodes, ...nodes];
+        return recomputeSummary();
+      },
     });
   }
 

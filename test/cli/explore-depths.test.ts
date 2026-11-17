@@ -1167,6 +1167,63 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     expect(result.unreviewedBottom.map((r) => r.Number)).toEqual([603]);
   });
 
+  test("追加ページング上限に達して介入有無を確定できない PR は未レビューとして採用せず例外を送出する", async () => {
+    const botOverflowSpec = createInterventionNode({
+      number: 604,
+      createdAt: "2026-10-04T00:00:00Z",
+      author: "u4",
+      comments: {
+        totalCount: 3000,
+        hasNextPage: true,
+        endCursor: "c-0",
+        nodes: [
+          { author: { __typename: "Bot", login: "microsoft-github-policy-service" }, body: "CLA" },
+        ],
+      },
+    });
+
+    let pageCounter = 0;
+    const mockClient = {
+      graphql: async <T>(query: string): Promise<T> => {
+        if (query.includes("SearchPrNumbers")) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ number: 604 }],
+            },
+          } as unknown as T;
+        }
+        if (query.includes("GetPullRequestInterventionBatch")) {
+          return { repository: { pr0: botOverflowSpec } } as unknown as T;
+        }
+        if (query.includes("GetPullRequestCommentsPage")) {
+          pageCounter++;
+          return {
+            repository: {
+              pullRequest: {
+                comments: {
+                  totalCount: 3000,
+                  pageInfo: { hasNextPage: true, endCursor: `c-${pageCounter}` },
+                  nodes: [
+                    {
+                      author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+                      body: "CLA",
+                    },
+                  ],
+                },
+              },
+            },
+          } as unknown as T;
+        }
+        throw new Error(`想定外のクエリ: ${query}`);
+      },
+    } as unknown as GitHubApiClient;
+
+    await expect(
+      fetchInterventionFrontiers(mockClient, "repo:microsoft/winget-pkgs", 10, 1000),
+    ).rejects.toThrow("追加ページング上限 (50 ページ) に達したため、未介入と確定できません");
+  });
+
   test("fetchInterventionFrontiers は GraphQL 失敗時にコンテキスト付き例外をスローする", async () => {
     const mockClient = {
       graphql: async () => {
