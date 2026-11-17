@@ -5,6 +5,7 @@ import {
   DAY_MS,
   formatDateTimeWithDay,
   formatMonthDay,
+  JST_OFFSET_MS,
   round1,
 } from "../../../src/domain/formatters";
 import { getPercentile } from "../../../src/domain/progress";
@@ -326,7 +327,11 @@ export function formatSamplePackageName(title: string | undefined): {
   };
 }
 
-/** `MM/DD → MM/DD` 形式の起票・マージ範囲と、基準 PR 起票日との日差表記を算出する */
+function toJstEpochDay(timeMs: number): number {
+  return Math.floor((timeMs + JST_OFFSET_MS) / DAY_MS);
+}
+
+/** `MM/DD → MM/DD` 形式の起票・マージ範囲と、基準 PR 起票日との JST 暦日差表記を算出する */
 export function formatCreatedToMergedRange(
   createdAt: string | undefined,
   mergedAt: string,
@@ -350,7 +355,7 @@ export function formatCreatedToMergedRange(
     return { rangeText, diffText: "", isOvertakenByCreated: null };
   }
 
-  const diffDays = Math.round((createdMs - targetCreatedAtMs) / DAY_MS);
+  const diffDays = toJstEpochDay(createdMs) - toJstEpochDay(targetCreatedAtMs);
   const diffText =
     diffDays === 0
       ? "基準と同日"

@@ -108,9 +108,39 @@ describe("Pages: 直近サンプル集計・整形ヘルパー", () => {
     expect(formatSamplePackageName(input)).toEqual(expected);
   });
 
-  test("formatCreatedToMergedRange は JST の MM/DD → MM/DD と基準 PR 起票日との差を計算する", () => {
+  test("formatCreatedToMergedRange は JST 暦日境界で基準 PR 起票日との日差を計算する（同日内時刻差・日跨ぎ短時間差）", () => {
+    // 基準 10/29 23:50 JST (2026-10-29T14:50:00Z) vs サンプル 10/30 00:10 JST (2026-10-29T15:10:00Z) -> 20分差でも翌日 +1日
+    const nextDay = formatCreatedToMergedRange(
+      "2026-10-29T15:10:00Z",
+      "2026-11-16T20:00:00Z",
+      Date.parse("2026-10-29T14:50:00Z"),
+    );
+    expect(nextDay.rangeText).toBe("10/30 → 11/17");
+    expect(nextDay.diffText).toBe("基準より +1日");
+    expect(nextDay.isOvertakenByCreated).toBeTrue();
+
+    // 逆方向: 基準 10/30 00:10 JST vs サンプル 10/29 23:50 JST -> 20分差でも前日 -1日
+    const prevDay = formatCreatedToMergedRange(
+      "2026-10-29T14:50:00Z",
+      "2026-11-16T20:00:00Z",
+      Date.parse("2026-10-29T15:10:00Z"),
+    );
+    expect(prevDay.rangeText).toBe("10/29 → 11/17");
+    expect(prevDay.diffText).toBe("基準より -1日");
+    expect(prevDay.isOvertakenByCreated).toBeFalse();
+
+    // 同日内の時刻差: 基準 10/29 00:10 JST (2026-10-28T15:10:00Z) vs サンプル 10/29 23:50 JST (2026-10-29T14:50:00Z) -> 23時間40分差でも基準と同日
+    const sameJstDay = formatCreatedToMergedRange(
+      "2026-10-29T14:50:00Z",
+      "2026-11-16T20:00:00Z",
+      Date.parse("2026-10-28T15:10:00Z"),
+    );
+    expect(sameJstDay.rangeText).toBe("10/29 → 11/17");
+    expect(sameJstDay.diffText).toBe("基準と同日");
+    expect(sameJstDay.isOvertakenByCreated).toBeTrue();
+
+    // 日差が大きいケース（09/23 vs 10/29 -> -36日）
     const targetCreatedMs = Date.parse("2026-10-28T21:47:38Z"); // 10/29 06:47 JST
-    // 2026-09-22T20:00:00Z = 09/23 05:00 JST, 2026-11-16T20:00:00Z = 11/17 05:00 JST
     const earlier = formatCreatedToMergedRange(
       "2026-09-22T20:00:00Z",
       "2026-11-16T20:00:00Z",
@@ -119,15 +149,6 @@ describe("Pages: 直近サンプル集計・整形ヘルパー", () => {
     expect(earlier.rangeText).toBe("09/23 → 11/17");
     expect(earlier.diffText).toBe("基準より -36日");
     expect(earlier.isOvertakenByCreated).toBeFalse();
-
-    const later = formatCreatedToMergedRange(
-      "2026-11-02T21:47:38Z",
-      "2026-11-16T20:00:00Z",
-      targetCreatedMs,
-    );
-    expect(later.rangeText).toBe("11/03 → 11/17");
-    expect(later.diffText).toBe("基準より +5日");
-    expect(later.isOvertakenByCreated).toBeTrue();
 
     const missingTarget = formatCreatedToMergedRange(
       "2026-09-22T20:00:00Z",
@@ -240,29 +261,43 @@ describe("Pages: enrichProgressSamplesWithCache & renderSamplesSection", () => {
         ReadyDays: 1.5,
         IsFirstTimer: false,
       }),
+      makeSample({
+        Number: 464303,
+        Title: "SameDay.FirstTimer",
+        Relation: "newer",
+        CommitCount: 2,
+        CreatedAt: "2026-10-29T00:00:00Z", // 10/29 09:00 JST (基準と同日)
+        MergedAt: "2026-11-16T20:00:00Z",
+        TotalDays: 18.0,
+        TurnDays: 3.0,
+        ReadyDays: 2.0,
+        IsFirstTimer: true,
+      }),
     ];
 
     const html = renderSamplesSection(
-      { SampleCount: 2, Samples: samples },
+      { SampleCount: 3, Samples: samples },
       "microsoft/winget-pkgs",
       targetCreatedAtMs,
     );
 
     // サマリーカード
     expect(html).toContain("🌱 初回のみ（直近出口 P50）");
-    expect(html).toContain("54.9 日");
+    expect(html).toContain("36.5 日");
     expect(html).toContain("🎯 同条件（初回 × 1 コミット）P50");
+    expect(html).toContain("54.9 日");
     expect(html).toContain("✏️ 手直し有無の比較（直近サンプル内）");
-    expect(html).toContain("1コミット完走率: 50%");
+    expect(html).toContain("1コミット完走率: 33%");
 
     // フィルタボタン & 空状態
     expect(html).toContain('data-sample-filter="all" aria-pressed="true">すべて');
-    expect(html).toContain("(2)");
+    expect(html).toContain("(3)");
     expect(html).toContain('data-sample-filter="first-timer" aria-pressed="false">🌱 初回のみ');
-    expect(html).toContain("(1)");
+    expect(html).toContain("(2)");
     expect(html).toContain(
       'data-sample-filter="first-timer-single" aria-pressed="false">🎯 同条件: 初回×1コミット',
     );
+    expect(html).toContain("(1)");
     expect(html).toContain("該当するサンプルはありません");
 
     // 列構造（作成順列は廃止、新 6 列 + nowrap）
@@ -280,23 +315,37 @@ describe("Pages: enrichProgressSamplesWithCache & renderSamplesSection", () => {
     expect(html).not.toContain("<script> version");
     expect(html).toContain("Fast.Runner version 2.0");
 
-    // 同条件行の強調と後発バッジ
+    // 同条件行・初回行の強調と後発バッジ・暦日差
     expect(html).toContain('class="sample-row-same-condition"');
+    expect(html).toContain('class="sample-row-first-timer"');
     expect(html).toContain("1回");
     expect(html).toContain("3回");
     expect(html).toContain("09/23 → 11/17");
     expect(html).toContain("基準より -36日");
     expect(html).toContain("11/03 → 11/17");
     expect(html).toContain("基準より +5日");
+    expect(html).toContain("基準と同日");
     expect(html).toContain("⚡後発");
     // 基準より前の PR 439519 の行には ⚡後発 を付けない
     const row439519 = html.slice(html.indexOf("#439519"), html.indexOf("#465000"));
     expect(row439519).not.toContain("⚡後発");
 
-    // インラインスクリプトの構文チェック
+    // インラインスクリプトの構文チェックおよびフィルタ動作検証
     const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
     expect(scriptMatch).not.toBeNull();
     expect(() => new vm.Script(scriptMatch?.[1] ?? "")).not.toThrow();
+
+    // 該当 0 件時に空状態表示になることも確認
+    const zeroSingleHtml = renderSamplesSection(
+      {
+        SampleCount: 1,
+        Samples: [makeSample({ Number: 500, IsFirstTimer: false, CommitCount: 2 })],
+      },
+      "microsoft/winget-pkgs",
+      targetCreatedAtMs,
+    );
+    expect(zeroSingleHtml).toContain("🎯 同条件: 初回×1コミット");
+    expect(zeroSingleHtml).toContain("(0)");
   });
 
   test("buildDashboard は Title / CreatedAt 欠落サンプルを merged-samples.jsonl から補完して描画する", () => {
