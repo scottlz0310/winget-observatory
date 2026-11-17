@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-17
+
 ### Changed
 
 - 未アサイン／アサイン済み前線を「未レビュー（完全未着手）前線 vs レビュー・介入済み前線」へ差し替え:
@@ -256,7 +258,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/scottlz0310/winget-observatory/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.1.0...v0.2.0
