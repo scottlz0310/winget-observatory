@@ -10,15 +10,19 @@ import type {
   FirstTimerFrontierSample,
   ForecastUnavailableReason,
   LifetimeForecast,
+  MainstreamFrontierSample,
   StaleFrontierForecast,
   StaleFrontierSample,
   UnreviewedFrontierSample,
 } from "../models/forecast";
-import { CURRENT_DEPTHS_VERSION } from "./depths";
 import { DAY_MS, HOUR_MS, round1 } from "./formatters";
+import { FIRST_REVIEW_MAINSTREAM_MODE } from "./intervention";
 
-/** 優等生の底・初回提出者の底の定義が現行と互換な最小バージョン（v2 と v3 で定義不変） */
+/** 優等生の底・初回提出者の底の定義が現行と互換な最小バージョン（v2 以降で定義不変） */
 export const MIN_STALE_DEPTHS_VERSION = 2;
+
+/** 主戦場ライン（初回介入コホート中央値）の最小定義バージョン */
+export const MIN_MAINSTREAM_DEPTHS_VERSION = 4;
 
 /** 速度を測るために必要な最小の観測間隔（これ未満は誤差が大きいため測らない） */
 export const MIN_WINDOW_HOURS = 6;
@@ -106,12 +110,11 @@ export function extractFirstTimerFrontierSamples(
 
 /**
  * スナップショット列から、未レビュー（完全未着手）前線の先頭（人間レビュー・手動コメント・第三者アサインなし・起票が最古の健康な PR）の
- * 観測列を時刻昇順で取り出す。
- * 観測定義が異なる旧履歴（DepthsVersion 2 以前・未設定）、未記録・空の観測、日時が不正な観測は除く。
+ * 観測列を時刻昇順で取り出す（v3 互換用）。
  */
 export function extractUnreviewedFrontierSamples(
   snapshots: DepthsSnapshot[],
-  minDefinitionVersion = CURRENT_DEPTHS_VERSION,
+  minDefinitionVersion = 3,
 ): UnreviewedFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
@@ -120,6 +123,36 @@ export function extractUnreviewedFrontierSamples(
     (head) => head.CreatedAt,
     (timestampMs, pr, createdMs) => ({ timestampMs, pr, createdMs }),
   );
+}
+
+/**
+ * スナップショット列から、主戦場ライン方式（Mode === "cohort-median-7d" かつ DepthsVersion >= 4）の
+ * 観測列を時刻昇順で抽出する。
+ * 旧定義（未着手の底 / UnreviewedBottom）しか持たない履歴行は完全に除外し、指標切り替え直後の速度スパイクを防ぐ。
+ */
+export function extractMainstreamFrontierSamples(
+  snapshots: DepthsSnapshot[],
+  minDefinitionVersion = MIN_MAINSTREAM_DEPTHS_VERSION,
+): MainstreamFrontierSample[] {
+  const samples: MainstreamFrontierSample[] = [];
+  for (const snapshot of snapshots) {
+    if ((snapshot.DepthsVersion ?? 0) < minDefinitionVersion) continue;
+    const frontier = snapshot.FirstReviewFrontier;
+    if (!frontier || frontier.Mode !== FIRST_REVIEW_MAINSTREAM_MODE) continue;
+    if (frontier.CohortCount <= 0 || !frontier.MedianCreatedAt) continue;
+    const timestampMs = Date.parse(snapshot.Timestamp);
+    const createdMs = Date.parse(frontier.MedianCreatedAt);
+    if (!Number.isFinite(timestampMs) || !Number.isFinite(createdMs)) continue;
+    samples.push({
+      timestampMs,
+      createdMs,
+      cohortCount: frontier.CohortCount,
+      openCount: frontier.OpenCount,
+      mergedCount: frontier.MergedCount,
+      mode: frontier.Mode,
+    });
+  }
+  return samples.sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
 interface FrontierVelocityMeasurement {
@@ -288,11 +321,12 @@ function resolveTargetIntervention(
 }
 
 /**
- * 未レビュー（完全未着手）前線の進みから、
+ * 主戦場ライン（直近 7 日間初回人間介入コホートの起票日時中央値）の進みから、
  * 基準 PR へ初回レビュー（メンテナの最初の介入）が到達する見込み日を予想する。
+ * モード識別子が異なる混入サンプルは除外して速度スパイクを防ぐ。
  */
 export function calculateFirstReviewForecast(
-  samples: UnreviewedFrontierSample[],
+  samples: MainstreamFrontierSample[],
   targetCreatedMs: number | null,
   options: FirstReviewForecastOptions = {},
 ): FirstReviewForecast {
@@ -301,7 +335,17 @@ export function calculateFirstReviewForecast(
   const targetAssignees = targetIntervention?.ThirdPartyAssignees ?? [];
   const hasTargetIntervention = Boolean(targetIntervention?.Intervened);
 
-  const latest = samples[samples.length - 1];
+  const validSamples = samples
+    .filter(
+      (s) =>
+        s.mode === FIRST_REVIEW_MAINSTREAM_MODE &&
+        s.cohortCount > 0 &&
+        Number.isFinite(s.timestampMs) &&
+        Number.isFinite(s.createdMs),
+    )
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+
+  const latest = validSamples[validSamples.length - 1];
   if (!latest) {
     return {
       status: hasTargetIntervention ? "target-intervened" : "no-samples",
@@ -320,9 +364,15 @@ export function calculateFirstReviewForecast(
     };
   }
 
-  const frontier = { pr: latest.pr, createdMs: latest.createdMs, observedMs: latest.timestampMs };
+  const frontier = {
+    createdMs: latest.createdMs,
+    observedMs: latest.timestampMs,
+    cohortCount: latest.cohortCount,
+    openCount: latest.openCount,
+    mergedCount: latest.mergedCount,
+  };
   const lagDays = round1((latest.timestampMs - latest.createdMs) / DAY_MS);
-  const velocity = measureFrontierVelocity(samples, (s) => s.createdMs, windowHours);
+  const velocity = measureFrontierVelocity(validSamples, (s) => s.createdMs, windowHours);
 
   if (targetCreatedMs === null || Number.isNaN(targetCreatedMs)) {
     return {

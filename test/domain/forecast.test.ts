@@ -5,12 +5,14 @@ import {
   calculateLifetimeForecast,
   calculateStaleFrontierForecast,
   extractFirstTimerFrontierSamples,
+  extractMainstreamFrontierSamples,
   extractStaleFrontierSamples,
   extractUnreviewedFrontierSamples,
   parseDepthsHistory,
 } from "../../src/domain/forecast";
-import type { DepthsRow, DepthsSnapshot } from "../../src/models/depths";
-import type { StaleFrontierSample, UnreviewedFrontierSample } from "../../src/models/forecast";
+import { FIRST_REVIEW_MAINSTREAM_MODE } from "../../src/domain/intervention";
+import type { DepthsRow, DepthsSnapshot, FirstReviewFrontier } from "../../src/models/depths";
+import type { MainstreamFrontierSample, StaleFrontierSample } from "../../src/models/forecast";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -279,15 +281,63 @@ describe("Domain: extractUnreviewedFrontierSamples", () => {
   });
 });
 
+describe("Domain: extractMainstreamFrontierSamples", () => {
+  const mainstreamSnap = (
+    timestamp: string,
+    medianCreatedAt: string | null,
+    cohortCount: number,
+    depthsVersion = CURRENT_DEPTHS_VERSION,
+    mode: FirstReviewFrontier["Mode"] = FIRST_REVIEW_MAINSTREAM_MODE,
+  ): DepthsSnapshot => ({
+    ...snapshot(timestamp, [], depthsVersion),
+    UnreviewedBottom: [row(999, "2026-09-01T00:00:00Z", "2026-09-01T00:00:00Z")],
+    FirstReviewFrontier: {
+      Mode: mode,
+      WindowDays: 7,
+      CohortCount: cohortCount,
+      OpenCount: Math.ceil(cohortCount / 2),
+      MergedCount: Math.floor(cohortCount / 2),
+      MedianCreatedAt: medianCreatedAt,
+      LagDays: medianCreatedAt ? 30 : null,
+    },
+  });
+
+  test("DepthsVersion >= 4・Mode=cohort-median-7d・CohortCount > 0 の行だけを時刻昇順で抽出し、旧 v3 未着手底履歴を混ぜない", () => {
+    const oldV3Unreviewed = snapshot("2026-11-12T00:00:00Z", [], 3);
+    oldV3Unreviewed.UnreviewedBottom = [row(100, "2026-09-01T00:00:00Z", "2026-09-01T00:00:00Z")];
+
+    const emptyCohortV4 = mainstreamSnap("2026-11-13T00:00:00Z", null, 0);
+    const s2 = mainstreamSnap("2026-11-15T00:00:00Z", "2026-10-12T00:00:00Z", 50);
+    const s1 = mainstreamSnap("2026-11-14T00:00:00Z", "2026-10-11T00:00:00Z", 48);
+
+    const samples = extractMainstreamFrontierSamples([oldV3Unreviewed, emptyCohortV4, s2, s1]);
+    expect(samples).toHaveLength(2);
+    expect(samples.map((s) => s.cohortCount)).toEqual([48, 50]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-10-11T00:00:00Z"));
+    expect(samples[1].createdMs).toBe(Date.parse("2026-10-12T00:00:00Z"));
+
+    // 旧 v3 履歴と混在しても旧値 (09-01) から偽の高速速度が算出されないこと
+    const forecast = calculateFirstReviewForecast(
+      samples.slice(0, 1),
+      Date.parse("2026-10-20T00:00:00Z"),
+    );
+    expect(forecast.status).toBe("insufficient-window");
+    expect(forecast.observedSpeed).toBeNull();
+  });
+});
+
 describe("Domain: calculateFirstReviewForecast", () => {
-  const unreviewedSample = (
+  const mainstreamSample = (
     hoursFromT0: number,
     frontierDaysBeforeT0: number,
-    pr = 1,
-  ): UnreviewedFrontierSample => ({
+    cohortCount = 40,
+  ): MainstreamFrontierSample => ({
     timestampMs: T0 + hoursFromT0 * HOUR,
-    pr,
     createdMs: T0 - frontierDaysBeforeT0 * DAY,
+    cohortCount,
+    openCount: Math.ceil(cohortCount / 2),
+    mergedCount: Math.floor(cohortCount / 2),
+    mode: FIRST_REVIEW_MAINSTREAM_MODE,
   });
   const targetCreated = T0 - 10 * DAY;
 
@@ -299,15 +349,16 @@ describe("Domain: calculateFirstReviewForecast", () => {
   });
 
   test("基準 PR の起票時刻が不明なら no-target と現在位置を返す", () => {
-    const result = calculateFirstReviewForecast([unreviewedSample(0, 20)], null);
+    const result = calculateFirstReviewForecast([mainstreamSample(0, 20, 42)], null);
     expect(result.status).toBe("no-target");
     expect(result.lagDays).toBe(20);
+    expect(result.frontier?.cohortCount).toBe(42);
     expect(result.observedEtaDays).toBeNull();
   });
 
   test("最小間隔（6 時間）未満の観測だけでは insufficient-window となり定常目安を返す", () => {
     const result = calculateFirstReviewForecast(
-      [unreviewedSample(0, 20.1), unreviewedSample(5, 20)],
+      [mainstreamSample(0, 20.1), mainstreamSample(5, 20)],
       targetCreated,
     );
     expect(result.status).toBe("insufficient-window");
@@ -317,9 +368,9 @@ describe("Domain: calculateFirstReviewForecast", () => {
   });
 
   test.each([
-    ["実時間と同じ速度（1 日/日）", [unreviewedSample(0, 21), unreviewedSample(24, 20)], 1, 10],
-    ["実時間の半分の速度", [unreviewedSample(0, 20.5), unreviewedSample(24, 20)], 0.5, 20],
-    ["実時間の 2 倍の速度", [unreviewedSample(0, 22), unreviewedSample(24, 20)], 2, 5],
+    ["実時間と同じ速度（1 日/日）", [mainstreamSample(0, 21), mainstreamSample(24, 20)], 1, 10],
+    ["実時間の半分の速度", [mainstreamSample(0, 20.5), mainstreamSample(24, 20)], 0.5, 20],
+    ["実時間の 2 倍の速度", [mainstreamSample(0, 22), mainstreamSample(24, 20)], 2, 5],
   ])("実測進行速度に基づく到達予想: %s", (_name, samples, speed, eta) => {
     const result = calculateFirstReviewForecast(samples, targetCreated);
     expect(result.status).toBe("forecasted");
@@ -330,8 +381,8 @@ describe("Domain: calculateFirstReviewForecast", () => {
   });
 
   test.each([
-    ["停滞（進みなし）", [unreviewedSample(0, 20, 5), unreviewedSample(24, 20, 5)]],
-    ["後退", [unreviewedSample(0, 20), unreviewedSample(24, 21)]],
+    ["停滞（進みなし）", [mainstreamSample(0, 20), mainstreamSample(24, 20)]],
+    ["後退", [mainstreamSample(0, 20), mainstreamSample(24, 21)]],
   ])("観測期間内に進みが無ければ no-progress を返す: %s", (_name, samples) => {
     const result = calculateFirstReviewForecast(samples, targetCreated);
     expect(result.status).toBe("no-progress");
@@ -339,9 +390,9 @@ describe("Domain: calculateFirstReviewForecast", () => {
     expect(result.steadyEtaDays).toBeGreaterThan(0);
   });
 
-  test("未レビュー前線が基準 PR の起票日時に到達済みなら reached（残り 0 日）を返す", () => {
+  test("主戦場ラインが基準 PR の起票日時に到達済み（gap <= 0）なら reached（残り 0 日）を返す", () => {
     const result = calculateFirstReviewForecast(
-      [unreviewedSample(0, 11), unreviewedSample(24, 9)],
+      [mainstreamSample(0, 11), mainstreamSample(24, 9)],
       targetCreated,
     );
     expect(result.status).toBe("reached");
@@ -352,7 +403,7 @@ describe("Domain: calculateFirstReviewForecast", () => {
 
   test("基準 PR 自身が介入済み（コメント/レビュー/第三者アサイン）の場合は target-intervened を返す", () => {
     const resultByComment = calculateFirstReviewForecast(
-      [unreviewedSample(0, 21), unreviewedSample(24, 20)],
+      [mainstreamSample(0, 21), mainstreamSample(24, 20)],
       targetCreated,
       {
         targetIntervention: {

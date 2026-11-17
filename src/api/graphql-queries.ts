@@ -93,6 +93,8 @@ query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
             login
           }
           state
+          submittedAt
+          createdAt
         }
       }
       comments(first: 20) {
@@ -107,6 +109,28 @@ query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
             login
           }
           body
+          createdAt
+        }
+      }
+      timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          __typename
+          ... on AssignedEvent {
+            createdAt
+            actor {
+              __typename
+              login
+            }
+            assignee {
+              ... on User {
+                login
+              }
+            }
+          }
         }
       }
     }
@@ -322,6 +346,8 @@ query GetPullRequestReviewsPage($owner: String!, $name: String!, $number: Int!, 
             login
           }
           state
+          submittedAt
+          createdAt
         }
       }
     }
@@ -345,6 +371,96 @@ query GetPullRequestCommentsPage($owner: String!, $name: String!, $number: Int!,
             login
           }
           body
+          createdAt
+        }
+      }
+    }
+  }
+}
+`;
+
+export const SEARCH_INTERVENTION_CANDIDATES_QUERY = `
+query SearchInterventionCandidates($query: String!, $first: Int!, $after: String) {
+  search(query: $query, type: ISSUE, first: $first, after: $after) {
+    issueCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        number
+        title
+        url
+        state
+        createdAt
+        updatedAt
+        mergedAt
+        author {
+          __typename
+          login
+        }
+        authorAssociation
+        commits {
+          totalCount
+        }
+        assignees(first: 10) {
+          nodes {
+            __typename
+            login
+          }
+        }
+        reviews(first: 20) {
+          totalCount
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            author {
+              __typename
+              login
+            }
+            state
+            submittedAt
+            createdAt
+          }
+        }
+        comments(first: 20) {
+          totalCount
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            author {
+              __typename
+              login
+            }
+            body
+            createdAt
+          }
+        }
+        timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            __typename
+            ... on AssignedEvent {
+              createdAt
+              actor {
+                __typename
+                login
+              }
+              assignee {
+                ... on User {
+                  login
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -353,7 +469,7 @@ query GetPullRequestCommentsPage($owner: String!, $name: String!, $number: Int!,
 `;
 
 /**
- * 複数 PR の介入判定用メタデータ・reviews・comments・assignees を 1 リクエストで取得する alias クエリを構築する。
+ * 複数 PR の介入判定用メタデータ・reviews・comments・assignees・AssignedEvent を 1 リクエストで取得する alias クエリを構築する。
  */
 export function buildPullRequestBatchInterventionQuery(numbers: readonly number[]): string {
   const fields = numbers
@@ -366,8 +482,10 @@ export function buildPullRequestBatchInterventionQuery(numbers: readonly number[
       number
       title
       url
+      state
       createdAt
       updatedAt
+      mergedAt
       author {
         __typename
         login
@@ -394,6 +512,8 @@ export function buildPullRequestBatchInterventionQuery(numbers: readonly number[
             login
           }
           state
+          submittedAt
+          createdAt
         }
       }
       comments(first: 20) {
@@ -408,6 +528,28 @@ export function buildPullRequestBatchInterventionQuery(numbers: readonly number[
             login
           }
           body
+          createdAt
+        }
+      }
+      timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          __typename
+          ... on AssignedEvent {
+            createdAt
+            actor {
+              __typename
+              login
+            }
+            assignee {
+              ... on User {
+                login
+              }
+            }
+          }
         }
       }
     }`;

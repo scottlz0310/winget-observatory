@@ -1,13 +1,16 @@
 /**
- * マージ時期を 3 つの仮説で予想し、比較するための型定義。
+ * マージ時期を 2 つの仮説（順位消化・作成順）で予想し、比較するための型定義。
  */
 
-/** マージ時期を予想する 3 つの仮説 */
-export type HypothesisId = "rank-velocity" | "update-order" | "creation-order";
+/** マージ時期を予想する現行 2 つの仮説 */
+export type HypothesisId = "rank-velocity" | "creation-order";
+
+/** 過去履歴互換用を含む仮説識別子（旧 update-order 行の読み込み用） */
+export type LegacyHypothesisId = HypothesisId | "update-order";
 
 /** ある仮説・モデルが出した予想日 1 件 */
 export interface ForecastEstimate {
-  /** 履歴・採点で個別に追えるキー（例: "update-order:steady"） */
+  /** 履歴・採点で個別に追えるキー（例: "rank-velocity", "creation-order:median"） */
   key: string;
   /** 画面に出す説明（どの前提・どの統計で出した予想か） */
   label: string;

@@ -1,6 +1,6 @@
 import { extractThirdPartyAssignees } from "../domain/depths";
 import { classifyPrIntervention } from "../domain/intervention";
-import type { GitHubPrView, GitHubSearchItem } from "../models/depths";
+import type { GitHubPrView, GitHubSearchItem, PrInterventionInput } from "../models/depths";
 import type {
   GitHubDetailedSearchItem,
   GitHubDetailedSearchResult,
@@ -73,7 +73,9 @@ export function adaptGraphQLToDetailedSearchResult(
  */
 export function adaptGraphQLToPrView(node: GraphQLPullRequestNode): GitHubPrView {
   const hasInterventionEdges = node.reviews !== undefined || node.comments !== undefined;
-  const intervention = hasInterventionEdges ? classifyPrIntervention(node) : undefined;
+  const intervention = hasInterventionEdges
+    ? classifyPrIntervention(node as PrInterventionInput)
+    : undefined;
 
   return {
     number: Number(node.number),

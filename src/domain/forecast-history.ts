@@ -13,14 +13,8 @@ import type {
 } from "../models/forecast-history";
 import { DAY_MS, round1 } from "./formatters";
 
-/** 仮説・モデルの表示順（採点表の並び） */
-const KEY_ORDER = [
-  "rank-velocity",
-  "update-order:steady",
-  "update-order:observed",
-  "creation-order:median",
-  "creation-order:p75",
-];
+/** 現行 2 仮説・モデルの表示順（採点表の並び）。廃止された update-order は採点対象外 */
+const KEY_ORDER = ["rank-velocity", "creation-order:median", "creation-order:p75"];
 
 /**
  * 比較結果を、履歴に追記する 1 件の記録にする。
@@ -133,6 +127,9 @@ export function scoreForecasts(history: ForecastHistoryLine[]): ForecastScore[] 
     >();
     for (const forecast of forecasts) {
       for (const e of forecast.Estimates) {
+        if (e.Hypothesis === "update-order" || e.Key.startsWith("update-order")) {
+          continue;
+        }
         const entry = byKey.get(e.Key) ?? { hypothesis: e.Hypothesis, errors: [] };
         entry.errors.push((Date.parse(e.Date) - mergedAtMs) / DAY_MS);
         byKey.set(e.Key, entry);

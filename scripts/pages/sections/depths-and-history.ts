@@ -1,16 +1,20 @@
-// キュー境界探索テーブル・待機列の底の比較・仮説②根拠・予想答え合わせ・離脱内訳・直近10回履歴テーブルの描画セクション
+// キュー境界探索テーブル・待機列の底の比較・未レビュー介入分離・予想答え合わせ・離脱内訳・直近10回履歴テーブルの描画セクション
 
 import { formatDeltaBadge } from "../../../src/domain/dashboard";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
 import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
 import { summarizeInterventionFrontier } from "../../../src/domain/intervention";
 import type { HistoryRowWithDelta } from "../../../src/models/dashboard";
-import type { DepthsRow, InterventionKind } from "../../../src/models/depths";
+import type {
+  DepthsRow,
+  FirstReviewCohortItem,
+  FirstReviewFrontier,
+  InterventionKind,
+} from "../../../src/models/depths";
 import type {
   ExitBreakdownResult,
   ExitBreakdownUnavailableReason,
 } from "../../../src/models/exit-breakdown";
-import type { StaleFrontierSample } from "../../../src/models/forecast";
 import type { ForecastHistoryLine, ForecastScore } from "../../../src/models/forecast-history";
 import { escapeHtml, formatErrorDays, formatNumber, renderBadgeHtml } from "../formatters";
 import type { LatestDepths } from "../types";
@@ -276,129 +280,124 @@ function renderInterventionFrontierCard(params: {
       </div>`;
 }
 
-/** 未レビュー・介入分離（未レビュー前線 vs レビュー・介入済み前線）比較セクションを描画する */
+const COHORT_INTERVENTION_LABELS: Record<InterventionKind, string> = {
+  review: "レビュー",
+  comment: "コメント",
+  assignee: "アサイン",
+};
+
+function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): string {
+  const items = frontier?.Items ?? [];
+  const badgeText = frontier
+    ? `計 ${frontier.CohortCount} 件 (Open ${frontier.OpenCount} / Merged ${frontier.MergedCount})`
+    : "未観測";
+  const oldestDateText =
+    frontier?.OldestCreatedAt && Number.isFinite(Date.parse(frontier.OldestCreatedAt))
+      ? formatJstDate(Date.parse(frontier.OldestCreatedAt))
+      : "-";
+  const newestDateText =
+    frontier?.NewestCreatedAt && Number.isFinite(Date.parse(frontier.NewestCreatedAt))
+      ? formatJstDate(Date.parse(frontier.NewestCreatedAt))
+      : "-";
+  const medianMeta =
+    frontier && frontier.CohortCount > 0 && frontier.MedianCreatedAt
+      ? `中央値起票: ${formatJstDateTime(frontier.MedianCreatedAt, false)}（経過 ${frontier.LagDays ?? "-"} 日） / 起票範囲: ${oldestDateText} 〜 ${newestDateText}`
+      : "";
+
+  const renderRow = (item: FirstReviewCohortItem): string => {
+    const stateBadge =
+      item.State === "MERGED"
+        ? `<span class="badge" style="background: #dcfce7; color: #15803d; font-size: 0.7rem;">MERGED</span>`
+        : `<span class="badge" style="background: #e0f2fe; color: #0369a1; font-size: 0.7rem;">OPEN</span>`;
+    const kindLabel = item.InterventionKind
+      ? COHORT_INTERVENTION_LABELS[item.InterventionKind]
+      : "介入";
+    const interventionBadge = item.InterventionKind
+      ? `<span class="badge" style="${INTERVENTION_BADGE_COLORS[item.InterventionKind]} font-size: 0.7rem; margin-left: 0.25rem;">${escapeHtml(kindLabel)}${item.InterventionActor ? `: ${escapeHtml(item.InterventionActor)}` : ""}</span>`
+      : "";
+    return `
+      <tr>
+        <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a> ${stateBadge}</td>
+        <td>${escapeHtml(item.Author ?? "-")}</td>
+        <td>${item.CommitCount !== undefined ? escapeHtml(item.CommitCount) : "-"}</td>
+        <td>${escapeHtml(formatJstDateTime(item.CreatedAt, false))}</td>
+        <td>${escapeHtml(formatJstDateTime(item.FirstHumanInterventionAt, false))}${interventionBadge}</td>
+        <td>${escapeHtml(item.Title)}</td>
+      </tr>`;
+  };
+
+  const body =
+    items.length > 0
+      ? `<table>
+          <thead>
+            <tr>
+              <th>PR / 状態</th>
+              <th>作者</th>
+              <th>コミット数</th>
+              <th>起票日時 (JST)</th>
+              <th>初回人間介入 (JST)</th>
+              <th>タイトル</th>
+            </tr>
+          </thead>
+          <tbody>${items.map(renderRow).join("")}
+          </tbody>
+        </table>`
+      : `<p style="color: var(--text-muted); font-size: 0.875rem;">${escapeHtml(
+          frontier
+            ? "データ不足: 直近 7 日間に初回人間介入が入った初回提出 PR コホートは 0 件です。"
+            : "主戦場ラインのデータはまだありません（次回の定期観測から記録されます）。",
+        )}</p>`;
+
+  return `<div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #0ea5e9;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 600; color: #0284c7;">🎯 主戦場ライン内訳（直近7日・初回介入コホート）</h3>
+          <span class="badge" style="background: #e0f2fe; color: #0369a1; font-weight: 600;">${escapeHtml(badgeText)}</span>
+        </div>
+        <p class="section-note" style="margin-bottom: 0.5rem;">
+          直近 7 日間に初めて人間介入が入った初回提出者 PR（オープン中 ＋ 直近マージ済み）の初回介入新しい順内訳です。この母集団全体の起票日時中央値を主戦場ラインとします。
+        </p>
+        ${medianMeta ? `<p class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(medianMeta)}</p>` : ""}
+        ${body}
+      </div>`;
+}
+
+/** 未レビュー・介入分離（主戦場ライン初回介入コホート vs 未レビュー前線）比較セクションを描画する */
 export function renderInterventionFrontierComparisonSection(depths: LatestDepths | null): string {
   const timestamp = depths?.Timestamp ?? "";
   const unreviewedItems = depths?.UnreviewedBottom ?? [];
-  const intervenedItems = depths?.IntervenedBottom ?? [];
   const unreviewedTruncated = Boolean(depths?.UnreviewedTruncated);
-  const intervenedTruncated = Boolean(depths?.IntervenedTruncated);
-  const hasRecordedIntervention =
-    depths?.UnreviewedBottom !== undefined ||
-    depths?.IntervenedBottom !== undefined ||
-    unreviewedTruncated ||
-    intervenedTruncated;
+  const hasRecordedUnreviewed = depths?.UnreviewedBottom !== undefined || unreviewedTruncated;
 
-  const intervenedSummary = summarizeInterventionFrontier(intervenedItems, timestamp);
-  const kindParts: string[] = [];
-  if (intervenedSummary.kindCounts.review > 0) {
-    kindParts.push(`レビュー(${intervenedSummary.kindCounts.review})`);
-  }
-  if (intervenedSummary.kindCounts.comment > 0) {
-    kindParts.push(`コメント(${intervenedSummary.kindCounts.comment})`);
-  }
-  if (intervenedSummary.kindCounts.assignee > 0) {
-    kindParts.push(`アサイン(${intervenedSummary.kindCounts.assignee})`);
-  }
-  const actorPart =
-    intervenedSummary.actorCounts.length > 0
-      ? ` [${intervenedSummary.actorCounts.map((a) => `${a.login}(${a.count})`).join(", ")}]`
-      : "";
-  const intervenedBreakdown =
-    kindParts.length > 0 ? ` / 内訳: ${kindParts.join(", ")}${actorPart}` : "";
-
-  return `<h2 class="section-title">👀 未レビュー・介入分離（未レビュー前線 vs レビュー・介入済み前線）</h2>
+  return `<h2 class="section-title">👀 未レビュー・介入分離（主戦場ライン 7日初回介入コホート vs 未レビュー前線）</h2>
     <p class="section-note">
-      健康な待機 PR（New-Package・起票順）から、ボット・作成者本人・自動検証ログ（(Deterministic automation）を除いた「人間レビュー」「手動コメント」「第三者 Assignees」の有無で分離しています。未レビュー前線は誰にも触れられていない完全未着手キュー、レビュー・介入済み前線は何らかの人間介入が入った案件です。
+      ボット・作成者本人・自動検証ログ（(Deterministic automation）を除いた人間介入の有無・初回日時をもとに、「主戦場ライン（直近 7 日に初めて人間介入が入ったオープン中＋マージ済み初回 PR コホート）」の内訳と、参考指標としての完全未着手キュー（未レビュー前線）を示します。
     </p>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+      ${renderMainstreamCohortCard(depths?.FirstReviewFrontier)}
+
       ${renderInterventionFrontierCard({
-        title: "🟦 未レビュー前線（完全未着手）",
+        title: "🟦 未レビュー前線（参考: 完全未着手キュー）",
         description:
           "人間レビュー・手動コメント・第三者 Assignees すべて無し（ボット・本人・自動ログ除く）。起票日時の古い順です。",
         items: unreviewedItems,
         timestamp,
         truncated: unreviewedTruncated,
-        hasRecorded: hasRecordedIntervention,
+        hasRecorded: hasRecordedUnreviewed,
         emptyConfirmedText: "現在、完全未着手の健康な待機 PR はありません。",
         emptyLegacyText:
           "未レビュー前線のデータはまだありません（次回の定期観測から記録されます）。",
         highlightInterventions: false,
-        borderColor: "#0ea5e9",
-        titleColor: "#0284c7",
-        badgeStyle: "background: #e0f2fe; color: #0369a1; font-weight: 600;",
-      })}
-
-      ${renderInterventionFrontierCard({
-        title: "🟧 レビュー・介入済み前線（何らかの人間介入あり）",
-        description:
-          "人間レビュー・手動コメント・第三者 Assignees のいずれかがある健康な待機 PR。起票日時の古い順です。",
-        items: intervenedItems,
-        timestamp,
-        truncated: intervenedTruncated,
-        hasRecorded: hasRecordedIntervention,
-        emptyConfirmedText: "現在、レビュー・介入済みの健康な待機 PR はありません。",
-        emptyLegacyText:
-          "レビュー・介入済み前線のデータはまだありません（次回の定期観測から記録されます）。",
-        highlightInterventions: true,
-        borderColor: "var(--warning)",
-        titleColor: "var(--warning)",
-        badgeStyle: "background: #fef3c7; color: #b45309; font-weight: 600;",
-        extraMeta: intervenedBreakdown,
+        borderColor: "#64748b",
+        titleColor: "#475569",
+        badgeStyle: "background: var(--code-bg); color: var(--text-muted); font-weight: 600;",
       })}
     </div>`;
 }
 
-const FORECAST_RECENT_TABLE_LIMIT = 5;
-
-/** 仮説② の根拠: 優等生の底の先頭の遅れの推移と直近の観測 */
-export function renderForecastSection(samples: StaleFrontierSample[]): string {
-  const recent = samples.slice(-FORECAST_RECENT_TABLE_LIMIT).reverse();
-  const rows = recent
-    .map((sample) => {
-      const lag = round1((sample.timestampMs - sample.updatedMs) / DAY_MS);
-      return `
-        <tr>
-          <td>${escapeHtml(formatJstDateTime(sample.timestampMs))}</td>
-          <td>#${escapeHtml(sample.pr)}</td>
-          <td>${escapeHtml(formatJstDate(sample.updatedMs))}</td>
-          <td>${lag} 日</td>
-        </tr>`;
-    })
-    .join("");
-
-  return `
-    <h2 class="section-title">🔮 仮説② の根拠（優等生の底の推移・最新 ${FORECAST_RECENT_TABLE_LIMIT} 件）</h2>
-    <p class="section-note">
-      仮説②「更新の古い順に処理される」の根拠です。優等生の底の先頭の更新時刻が、基準 PR の更新時刻に届いた時点を予想します（予想日は最上部の比較、推移は上部の統合時系列チャートを参照）。
-    </p>
-    <p class="section-note">
-      先頭の遅れが横ばいなら先頭は進んでいません。実時間と同じ速度（1 日/日）で先頭が進むと、遅れは一定のままです。右下がりなら先頭が実時間より速く進んでいます。
-    </p>
-    ${
-      recent.length >= 2
-        ? `<table>
-      <thead>
-        <tr>
-          <th>観測日時 (JST)</th>
-          <th>優等生の底の先頭</th>
-          <th>先頭の最終更新</th>
-          <th>先頭の遅れ</th>
-        </tr>
-      </thead>
-      <tbody>${rows}
-      </tbody>
-    </table>`
-        : `<div class="card-subtext">観測が 2 件以上たまると推移を表示します</div>`
-    }`;
-}
-
 const SCORE_KEY_LABELS: Record<string, string> = {
   "rank-velocity": "① 順位消化",
-  "update-order:steady": "② 更新順（定常待ち時間）",
-  "update-order:observed": "② 更新順（実測の進み）",
-  "creation-order:median": "③ 作成順（中央値）",
-  "creation-order:p75": "③ 作成順（75%点）",
+  "creation-order:median": "② 作成順（中央値）",
+  "creation-order:p75": "② 作成順（75%点）",
 };
 
 /** 予想の答え合わせ: 基準 PR のマージ後に、仮説・モデルごとの予想誤差を示す */
@@ -409,7 +408,7 @@ export function renderForecastScoreSection(
   const recorded = history.filter((line) => line.Type === "forecast").length;
   const note = `
     <p class="section-note">
-      観測のたびに 3 つの仮説の予想日を記録し、基準 PR がマージされたら実際のマージ日との誤差を採点します。誤差は「予想日 − 実際のマージ日」で、+ は予想が遅すぎ、− は早すぎです。
+      観測のたびに 2 つの仮説（順位消化・作成順）の予想日を記録し、基準 PR がマージされたら実際のマージ日との誤差を採点します。誤差は「予想日 − 実際のマージ日」で、+ は予想が遅すぎ、− は早すぎです。
     </p>`;
   if (scores.length === 0) {
     return `

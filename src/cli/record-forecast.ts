@@ -1,11 +1,10 @@
-// 観測のたびに、3 つの仮説の予想日を forecast-history.jsonl へ追記する CLI。
+// 観測のたびに、2 つの仮説の予想日を forecast-history.jsonl へ追記する CLI。
 // 基準 PR がマージされていれば、予想ではなくマージ結果を 1 回だけ記録する（答え合わせの材料）。
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { GitHubApiClient } from "../api/github";
 import { selectComparableHistory } from "../domain/dashboard";
-import { extractStaleFrontierSamples, parseDepthsHistory } from "../domain/forecast";
 import { buildForecastSource, calculateForecastComparison } from "../domain/forecast-comparison";
 import {
   findOutcome,
@@ -151,19 +150,12 @@ export async function runRecordForecast(
     join(dataDir, "latest-depths.json"),
   );
   const csvRows = readText("履歴 CSV", join(dataDir, "progress-history.csv"), parseCsvRows, []);
-  const frontierSamples = readText(
-    "キュー境界履歴",
-    join(dataDir, "depths-history.jsonl"),
-    (text) => extractStaleFrontierSamples(parseDepthsHistory(text)),
-    [],
-  );
 
   const comparison = calculateForecastComparison(
     buildForecastSource({
       progress,
       depths,
       history: selectComparableHistory(csvRows, targetPr),
-      frontierSamples,
     }),
   );
   const record = toForecastRecord(comparison, {

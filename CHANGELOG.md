@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - テーブル上部に直近サンプルの通過ペースサマリー（初回のみ P50、同条件: 初回×1コミット P50、1コミット完走率・手直し有無の P50 比較）を追加
     - 外部依存なしの軽量インライン JS による 3 種ワンクリック切り替えフィルタ（`すべて` / `🌱 初回のみ` / `🎯 同条件: 初回×1コミット`）と 0 件時空状態表示を追加
     - 独立 `作成順` 列を廃止して `PR / パッケージ`（プレフィックス整理＋ホバー全タイトル＋`⚡後発` バッジ）、`コホート / コミット`、`起票 → マージ（起票日差）`（`MM/DD → MM/DD`＋基準 PR 起票日差）、3 日数列の 6 列へ再編し、`white-space: nowrap` および同条件行強調を適用
+- 単一 PR への依存を排除するため予想モデルを 2 仮説比較（順位消化・作成順）へ簡素化し、「👀 初回レビュー到達予想」を 7 日間初回介入コホートの中央値による「主戦場ライン方式」へ移行:
+  - `src/models/forecast-comparison.ts`, `src/domain/forecast-comparison.ts`, `src/domain/forecast-history.ts`, `src/cli/record-forecast.ts`, `scripts/pages/`: 仮説②（更新順／優等生の底）を予想サマリー・比較タイムライン・答え合わせから除外し、2 仮説比較（`① 順位消化`・`② 作成順`）へ整理（`🔮 仮説② の根拠` を削除、`forecast-history.jsonl` の旧 `update-order` 履歴読み込み互換および `🧗 待機列の底の比較` は維持）
+  - `src/domain/intervention.ts`, `src/api/graphql-*`, `src/cli/explore-depths.ts`, `src/domain/forecast.ts`, `scripts/pages/`: レビュー・手動コメント・第三者 Assignees（ボット／本人／自動ログ除く）から `FirstHumanInterventionAt` を特定し、直近 7 日間に初回人間介入が入った初回提出 PR（オープン中 ＋ `merged-samples.jsonl` 等による直近マージ済み）の起票日時中央値（`FirstReviewFrontier`・`DepthsVersion = 4`・`Mode = "cohort-median-7d"`）で主戦場ラインと進行速度を算出（旧 v3 未着手底履歴との混在防止および 0 件時「データ不足」フォールバック対応）
 
 ## [0.4.0] - 2026-11-17
 

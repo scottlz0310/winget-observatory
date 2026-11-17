@@ -38,6 +38,12 @@ export interface PrInterventionSummary {
   ManualCommentCount: number;
   /** 最も強い介入種別に基づく代表バッジ（未介入時は undefined） */
   PrimaryBadge?: PrInterventionBadge;
+  /** 最初の人間介入日時（ISO 8601, UTC。タイムスタンプ付き介入が観測できた場合のみ） */
+  FirstHumanInterventionAt?: string;
+  /** 最初の人間介入種別 */
+  FirstInterventionKind?: InterventionKind;
+  /** 最初の人間介入アクター */
+  FirstInterventionActor?: string;
 }
 
 /**
@@ -54,6 +60,8 @@ export interface PrInterventionActor {
 export interface PrInterventionReviewInput {
   author?: PrInterventionActor | null;
   state?: string | null;
+  submittedAt?: string | null;
+  createdAt?: string | null;
 }
 
 /**
@@ -62,6 +70,17 @@ export interface PrInterventionReviewInput {
 export interface PrInterventionCommentInput {
   author?: PrInterventionActor | null;
   body?: string | null;
+  createdAt?: string | null;
+}
+
+/**
+ * 介入判定の入力となる第三者アサインイベント項目（AssignedEvent）
+ */
+export interface PrInterventionAssignedEventInput {
+  __typename?: string | null;
+  createdAt?: string | null;
+  actor?: PrInterventionActor | null;
+  assignee?: PrInterventionActor | null;
 }
 
 /**
@@ -80,6 +99,10 @@ export interface PrInterventionInput {
   comments?:
     | ReadonlyArray<PrInterventionCommentInput | null | undefined>
     | { nodes?: ReadonlyArray<PrInterventionCommentInput | null> | null }
+    | null;
+  timelineItems?:
+    | ReadonlyArray<PrInterventionAssignedEventInput | null | undefined>
+    | { nodes?: ReadonlyArray<PrInterventionAssignedEventInput | null> | null }
     | null;
 }
 
@@ -150,6 +173,8 @@ export interface GraphQLPrNode {
     nodes?: Array<{
       author?: PrInterventionActor | null;
       state?: string | null;
+      submittedAt?: string | null;
+      createdAt?: string | null;
     } | null> | null;
   } | null;
   comments?: {
@@ -161,8 +186,54 @@ export interface GraphQLPrNode {
     nodes?: Array<{
       author?: PrInterventionActor | null;
       body?: string | null;
+      createdAt?: string | null;
     } | null> | null;
   } | null;
+  timelineItems?: {
+    pageInfo?: {
+      hasNextPage: boolean;
+      endCursor: string | null;
+    } | null;
+    nodes?: Array<PrInterventionAssignedEventInput | null> | null;
+  } | null;
+}
+
+/**
+ * 初回レビュー到達予想の算出方式識別子（旧未着手底との分離・速度算出ガード用）
+ */
+export type FirstReviewFrontierMode = "cohort-median-7d";
+
+/**
+ * 主戦場ライン（7日間初回人間介入コホート）の内訳 1 行
+ */
+export interface FirstReviewCohortItem {
+  Number: number;
+  Title: string;
+  Url: string;
+  State: "OPEN" | "MERGED";
+  Author?: string;
+  CommitCount?: number;
+  CreatedAt: string;
+  FirstHumanInterventionAt: string;
+  InterventionKind?: InterventionKind;
+  InterventionActor?: string;
+  MergedAt?: string | null;
+}
+
+/**
+ * 直近 7 日間に初めて人間介入が入った初回提出 PR コホートの主戦場ライン集計（v4 以降）
+ */
+export interface FirstReviewFrontier {
+  Mode: FirstReviewFrontierMode;
+  WindowDays: number;
+  CohortCount: number;
+  OpenCount: number;
+  MergedCount: number;
+  MedianCreatedAt: string | null;
+  LagDays: number | null;
+  OldestCreatedAt?: string | null;
+  NewestCreatedAt?: string | null;
+  Items?: FirstReviewCohortItem[];
 }
 
 /**
@@ -199,6 +270,7 @@ export interface DepthsSnapshot {
    * - 未設定 / 1: 旧定義（StaleBottom=全コミット、FirstTimerBottom=updatedAt順・生涯マージ未検証）
    * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み、Unassigned/Assigned）
    * - 3: 介入判定分離版（UnreviewedBottom / IntervenedBottom: 人間レビュー・手動コメント・第三者アサイン OR 分離）
+   * - 4: 主戦場ライン版（FirstReviewFrontier: 直近7日間初回人間介入コホートの createdAt 中央値・オープン＋マージ済み）
    */
   DepthsVersion?: number;
   Timestamp: string;
@@ -227,6 +299,8 @@ export interface DepthsSnapshot {
   UnassignedTruncated?: boolean;
   /** @deprecated v2 互換用（v3 以降は IntervenedTruncated を使用） */
   AssignedTruncated?: boolean;
+  /** 直近 7 日間の初回人間介入コホートによる主戦場ライン集計（v4 以降） */
+  FirstReviewFrontier?: FirstReviewFrontier;
   ExpressLane: DepthsRow[];
 }
 
@@ -238,6 +312,7 @@ export interface ExploreDepthsOptions {
   repository: string;
   outputPath?: string;
   historyPath?: string;
+  samplesPath?: string;
   noTargetPr: boolean;
   noHistory: boolean;
   asJson: boolean;

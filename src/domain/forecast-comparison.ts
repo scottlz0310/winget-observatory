@@ -1,11 +1,10 @@
 /**
- * マージ時期の 3 つの仮説（順位消化・更新順・作成順）による予想を 1 つに束ねる純粋関数群。
+ * マージ時期の 2 つの仮説（順位消化・作成順）による予想を 1 つに束ねる純粋関数群。
  * 外部 I/O を行わず、src/models の型定義と同一ドメイン内のモジュールだけに依存する。
  */
 
 import type { HistoryRecord } from "../models/dashboard";
 import type { DepthsSnapshot } from "../models/depths";
-import type { StaleFrontierForecast, StaleFrontierSample } from "../models/forecast";
 import type {
   ForecastComparison,
   ForecastEstimate,
@@ -13,7 +12,7 @@ import type {
 } from "../models/forecast-comparison";
 import type { ProgressSnapshot } from "../models/progress";
 import { calculateVelocityMetrics } from "./dashboard";
-import { calculateLifetimeForecast, calculateStaleFrontierForecast } from "./forecast";
+import { calculateLifetimeForecast } from "./forecast";
 import { DAY_MS, round1 } from "./formatters";
 
 const DEFAULT_LOOKBACK_DAYS = 30;
@@ -21,30 +20,18 @@ const DEFAULT_FIRST_TIMER_LOOKBACK_DAYS = 90;
 const positiveDays = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 
-/** 観測速度モデルが算出できない理由の説明 */
-export const FORECAST_UNAVAILABLE_TEXT: Record<string, string> = {
-  "no-samples": "優等生の底の観測がありません",
-  "no-target": "基準 PR の更新時刻が未記録です（次回の観測から記録されます）",
-  "insufficient-window": "速度を測る観測期間が足りません（6 時間以上の間隔が必要）",
-  "no-progress": "観測期間内に先頭が進んでいないため算出できません",
-};
-
 export interface ForecastComparisonSource {
   /** 観測時刻（UTC ミリ秒）。不明なら NaN */
   nowMs: number;
   /** 基準 PR の起票時刻（UTC ミリ秒）。不明なら NaN */
   targetCreatedMs: number;
-  /** 基準 PR の最終更新時刻（UTC ミリ秒）。不明なら null */
-  targetUpdatedMs: number | null;
   /** 現在の実質待ち件数（更新順の順位） */
   activeAhead: number;
   /** 通算所要日数の中央値・75%点（旧スナップショットでは無い） */
   totalMedianDays?: number | null;
-  /** 現在の定義（更新順）で記録された履歴 */
   totalP75Days?: number | null;
+  /** 現在の定義（更新順）で記録された履歴 */
   history: HistoryRecord[];
-  /** 優等生の底の先頭の観測列 */
-  frontierSamples: StaleFrontierSample[];
   /** 全体マージ実績の集計期間（日）。省略時は 30 */
   lookbackDays?: number;
   /** 初回提出者コホートの集計期間（日）。省略時は lookbackDays または 90 */
@@ -104,58 +91,6 @@ function summarizeRankVelocity(source: ForecastComparisonSource, nowMs: number):
   };
 }
 
-function summarizeUpdateOrder(stale: StaleFrontierForecast, nowMs: number): HypothesisSummary {
-  const estimates: ForecastEstimate[] = [];
-  const parts: string[] = [];
-
-  if (stale.frontier === null) {
-    parts.push(FORECAST_UNAVAILABLE_TEXT["no-samples"]);
-  } else {
-    const base = stale.frontier.observedMs;
-    parts.push(
-      `先頭 #${stale.frontier.pr} の遅れ ${stale.lagDays ?? "-"} 日 / 基準 PR との更新差 ${stale.gapDays ?? "-"} 日`,
-    );
-    if (stale.steadyEtaDays !== null) {
-      estimates.push(
-        estimate(
-          nowMs,
-          "update-order:steady",
-          "先頭が実時間と同じ速度（1 日/日）で進む場合",
-          base + stale.steadyEtaDays * DAY_MS,
-          true,
-        ),
-      );
-    }
-    if (stale.observedEtaDays !== null) {
-      estimates.push(
-        estimate(
-          nowMs,
-          "update-order:observed",
-          "実測した先頭の進みが続く場合",
-          base + stale.observedEtaDays * DAY_MS,
-          true,
-        ),
-      );
-    }
-    parts.push(
-      stale.observedUnavailable
-        ? `実測の進み: ${FORECAST_UNAVAILABLE_TEXT[stale.observedUnavailable] ?? stale.observedUnavailable}`
-        : `実測の進み: ${stale.observedSpeed} 日/日（直近 ${stale.windowHours} 時間）`,
-    );
-  }
-
-  return {
-    id: "update-order",
-    title: "② 更新順",
-    premise:
-      "更新の古い順に処理され、優等生の底の先頭が基準 PR の更新時刻に届いた時点でマージされる",
-    progressText: parts.join("。"),
-    progressRatio: null,
-    estimates,
-    note: null,
-  };
-}
-
 function summarizeCreationOrder(
   source: ForecastComparisonSource,
   nowMs: number,
@@ -204,7 +139,7 @@ function summarizeCreationOrder(
 
   return {
     id: "creation-order",
-    title: "③ 作成順",
+    title: "② 作成順",
     premise: `直近（${lookbackDays}日間）の全体マージ実績（常連・特急含む）の通算所要日数が基準 PR にも当てはまる（作成順に近く消化される）`,
     progressText,
     progressRatio,
@@ -214,18 +149,13 @@ function summarizeCreationOrder(
 }
 
 /**
- * 3 つの仮説（順位消化・更新順・作成順）による予想日を束ね、主な予想日の範囲を求める。
+ * 2 つの仮説（順位消化・作成順）による予想日を束ね、主な予想日の範囲を求める。
  * 観測時刻が不明なときは、日付の基準が無いため、どの仮説も予想日を出さない。
  */
 export function calculateForecastComparison(source: ForecastComparisonSource): ForecastComparison {
-  const stale = calculateStaleFrontierForecast(source.frontierSamples, source.targetUpdatedMs);
   const nowMs = source.nowMs;
 
-  const hypotheses = [
-    summarizeRankVelocity(source, nowMs),
-    summarizeUpdateOrder(stale, nowMs),
-    summarizeCreationOrder(source, nowMs),
-  ];
+  const hypotheses = [summarizeRankVelocity(source, nowMs), summarizeCreationOrder(source, nowMs)];
 
   if (!Number.isFinite(nowMs)) {
     return {
@@ -259,31 +189,28 @@ export function calculateForecastComparison(source: ForecastComparisonSource): F
  * ダッシュボードの表示と、予想日の履歴への記録で、同じ入力になるようここに集約する。
  *
  * 観測時刻は進捗スナップショットの Timestamp を優先し、無ければ履歴の最新観測、
- * 遭難の底の最新観測の順に使う。
+ * 境界探索スナップショットの順に使う。
  */
 export function buildForecastSource(input: {
   progress: Partial<ProgressSnapshot> | null;
   depths: Partial<DepthsSnapshot> | null;
   /** 現在の定義（更新順）で記録された履歴 */
   history: HistoryRecord[];
-  frontierSamples: StaleFrontierSample[];
 }): ForecastComparisonSource {
-  const { progress, depths, history, frontierSamples } = input;
+  const { progress, depths, history } = input;
   const lookbackDays = positiveDays(progress?.LookbackDays);
   const firstTimerLookbackDays = positiveDays(progress?.FirstTimerLookbackDays) ?? lookbackDays;
+  const parsedDepthsTimestampMs = depths?.Timestamp ? Date.parse(depths.Timestamp) : Number.NaN;
   return {
     nowMs:
       Date.parse(progress?.Timestamp ?? "") ||
       history[history.length - 1]?.timestampMs ||
-      frontierSamples[frontierSamples.length - 1]?.timestampMs ||
-      Number.NaN,
+      (Number.isFinite(parsedDepthsTimestampMs) ? parsedDepthsTimestampMs : Number.NaN),
     targetCreatedMs: Date.parse(depths?.TargetPr?.CreatedAt ?? ""),
-    targetUpdatedMs: depths?.TargetPr?.UpdatedAt ? Date.parse(depths.TargetPr.UpdatedAt) : null,
     activeAhead: Number(progress?.ActiveAhead) || 0,
     totalMedianDays: progress?.TotalMedianDays,
     totalP75Days: progress?.TotalP75Days,
     history,
-    frontierSamples,
     lookbackDays,
     firstTimerLookbackDays,
   };

@@ -5,8 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { join, resolve } from "node:path";
 import {
   extractFirstTimerFrontierSamples,
-  extractStaleFrontierSamples,
-  extractUnreviewedFrontierSamples,
+  extractMainstreamFrontierSamples,
   parseDepthsHistory,
 } from "../src/domain/forecast";
 import { parseForecastHistory } from "../src/domain/forecast-history";
@@ -16,11 +15,7 @@ import {
   indexSampleCache,
   parseSampleCache,
 } from "../src/domain/sample-cache";
-import type {
-  FirstTimerFrontierSample,
-  StaleFrontierSample,
-  UnreviewedFrontierSample,
-} from "../src/models/forecast";
+import type { FirstTimerFrontierSample, MainstreamFrontierSample } from "../src/models/forecast";
 import type { ForecastHistoryLine } from "../src/models/forecast-history";
 import type { ProgressHistoryRow } from "../src/models/progress";
 import type { SampleCacheEntry } from "../src/models/sample-cache";
@@ -130,24 +125,21 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     [],
   );
 
-  const { frontierSamples, firstTimerFrontierSamples, unreviewedFrontierSamples } =
-    readOptionalParsed<{
-      frontierSamples: StaleFrontierSample[];
-      firstTimerFrontierSamples: FirstTimerFrontierSample[];
-      unreviewedFrontierSamples: UnreviewedFrontierSample[];
-    }>(
-      join(dataDir, "depths-history.jsonl"),
-      "キュー境界履歴",
-      (raw) => {
-        const depthsHistory = parseDepthsHistory(raw);
-        return {
-          frontierSamples: extractStaleFrontierSamples(depthsHistory),
-          firstTimerFrontierSamples: extractFirstTimerFrontierSamples(depthsHistory),
-          unreviewedFrontierSamples: extractUnreviewedFrontierSamples(depthsHistory),
-        };
-      },
-      { frontierSamples: [], firstTimerFrontierSamples: [], unreviewedFrontierSamples: [] },
-    );
+  const { firstTimerFrontierSamples, mainstreamFrontierSamples } = readOptionalParsed<{
+    firstTimerFrontierSamples: FirstTimerFrontierSample[];
+    mainstreamFrontierSamples: MainstreamFrontierSample[];
+  }>(
+    join(dataDir, "depths-history.jsonl"),
+    "キュー境界履歴",
+    (raw) => {
+      const depthsHistory = parseDepthsHistory(raw);
+      return {
+        firstTimerFrontierSamples: extractFirstTimerFrontierSamples(depthsHistory),
+        mainstreamFrontierSamples: extractMainstreamFrontierSamples(depthsHistory),
+      };
+    },
+    { firstTimerFrontierSamples: [], mainstreamFrontierSamples: [] },
+  );
 
   const forecastHistory = readOptionalParsed<ForecastHistoryLine[]>(
     join(dataDir, "forecast-history.jsonl"),
@@ -169,10 +161,9 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     progress,
     depths,
     csvRows,
-    frontierSamples,
     forecastHistory,
     firstTimerFrontierSamples,
-    unreviewedFrontierSamples,
+    mainstreamFrontierSamples,
     firstTimerFastestRanking,
   });
   const htmlPath = join(outputDir, "index.html");
