@@ -50,11 +50,11 @@ export function renderFirstTimerCohortBlock(progress: LatestProgress | null): st
   return `
     <div class="card" style="border-left: 5px solid var(--success); margin-bottom: 1.5rem; background: var(--card-bg);">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
-        <div class="card-title" style="font-size: 1rem; font-weight: 700; color: var(--success); margin-bottom: 0;">🌱 初回提出者コホート実績（純粋FIFO待機列）</div>
+        <div class="card-title" style="font-size: 1rem; font-weight: 700; color: var(--success); margin-bottom: 0;">🌱 初回提出者コホート実績（生涯マージ1件）</div>
         <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間・採用 ${count} 件</span>
       </div>
       <p class="section-note" style="margin-bottom: 0.75rem;">
-        常連の大量まとめマージや特急レーンを除外した「初回提出者（生涯マージ1件・阻害ラベルや Draft 履歴のない初期健康体）」の実績です。手直しコミットを含む初回提出者全体の「通算所要日数（起票→マージ）」と「最終コミット後所要日数（Turn Latency）」の両方を集計しています。
+        常連の大量まとめマージや特急レーンを除外した「生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）」の実績です。初回提出者全体の「通算所要日数（起票→マージ）」と「最終コミット後所要日数（Turn Latency）」の両方を集計しています。
       </p>
       <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: baseline;">
         <div>

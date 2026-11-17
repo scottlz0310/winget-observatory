@@ -4,11 +4,11 @@ import {
   CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
-  hasBlockingOrDraftHistory,
   isCandidateEligibleForFirstTimerDetail,
-  isFirstTimerSampleCandidate,
+  MIN_WAIVED_READY_VERSION,
   parseAuthorMergedCounts,
   resolveAuthorMergedCounts,
+  shouldReevaluateAuthorFirstTimer,
   shouldReevaluateCachedSample,
   shouldReevaluateSkippedCandidate,
 } from "../../src/domain/first-timer";
@@ -44,107 +44,6 @@ describe("Domain: countCandidateAuthors & isCandidateEligibleForFirstTimerDetail
   test("author が未定義（不明）の場合は除外せず後続の判定に委ねる", () => {
     const authorCounts = new Map([["alice", 1]]);
     expect(isCandidateEligibleForFirstTimerDetail({ author: undefined }, authorCounts)).toBe(true);
-  });
-});
-
-describe("Domain: hasBlockingOrDraftHistory", () => {
-  test("クリーンなタイムライン（阻害ラベルやDraft化なし）は false", () => {
-    const timeline = [
-      { event: "labeled", label: { name: "New-Package" } },
-      { event: "labeled", label: { name: "Azure-Pipeline-Passed" } },
-    ];
-    expect(hasBlockingOrDraftHistory(timeline, false)).toBe(false);
-  });
-
-  test("最初から Draft の場合は true", () => {
-    expect(hasBlockingOrDraftHistory([], true)).toBe(true);
-  });
-
-  test("途中で converted_to_draft (または convert_to_draft) された場合は true", () => {
-    expect(hasBlockingOrDraftHistory([{ event: "converted_to_draft" }], false)).toBe(true);
-    expect(hasBlockingOrDraftHistory([{ event: "convert_to_draft" }], false)).toBe(true);
-  });
-
-  test("最初から Draft で後に ready_for_review された場合は true", () => {
-    const timeline = [
-      { event: "labeled", label: { name: "New-Package" } },
-      { event: "ready_for_review" },
-    ];
-    expect(hasBlockingOrDraftHistory(timeline, false)).toBe(true);
-  });
-
-  test("途中で阻害ラベル（BLOCKED_LABELS, INVESTIGATION_LABELS, BLOCKED_PATTERNS）が付与された場合は true", () => {
-    const timelineWithBlocked = [
-      { event: "labeled", label: { name: "New-Package" } },
-      { event: "labeled", label: { name: "Needs-Author-Feedback" } },
-      { event: "unlabeled", label: { name: "Needs-Author-Feedback" } },
-    ];
-    expect(hasBlockingOrDraftHistory(timelineWithBlocked, false)).toBe(true);
-
-    const timelineWithPattern = [{ event: "labeled", label: { name: "Error-TestFailure" } }];
-    expect(hasBlockingOrDraftHistory(timelineWithPattern, false)).toBe(true);
-  });
-});
-
-describe("Domain: isFirstTimerSampleCandidate", () => {
-  test("1 コミットかつタイムライン阻害なしなら true", () => {
-    expect(
-      isFirstTimerSampleCandidate({
-        commitCount: 1,
-        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
-      }),
-    ).toBe(true);
-  });
-
-  test("コミット数が 2 以上（手直しあり）でもタイムライン阻害なしなら true", () => {
-    expect(
-      isFirstTimerSampleCandidate({
-        commitCount: 2,
-        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
-      }),
-    ).toBe(true);
-    expect(
-      isFirstTimerSampleCandidate({
-        commitCount: 5,
-        timeline: [{ event: "labeled", label: { name: "New-Package" } }],
-      }),
-    ).toBe(true);
-  });
-
-  test("タイムラインに阻害ラベル履歴があれば解除されていても false", () => {
-    expect(
-      isFirstTimerSampleCandidate({
-        commitCount: 1,
-        timeline: [
-          { event: "labeled", label: { name: "Error-TestFailure" } },
-          { event: "unlabeled", label: { name: "Error-TestFailure" } },
-        ],
-      }),
-    ).toBe(false);
-  });
-
-  test("converted_to_draft や ready_for_review の履歴があれば false", () => {
-    expect(
-      isFirstTimerSampleCandidate({
-        commitCount: 1,
-        timeline: [{ event: "converted_to_draft" }],
-      }),
-    ).toBe(false);
-    expect(
-      isFirstTimerSampleCandidate({
-        commitCount: 1,
-        timeline: [{ event: "ready_for_review" }],
-      }),
-    ).toBe(false);
-  });
-
-  test("Draft だった履歴があれば false", () => {
-    expect(
-      isFirstTimerSampleCandidate({
-        commitCount: 1,
-        isDraft: true,
-      }),
-    ).toBe(false);
   });
 });
 
@@ -247,7 +146,7 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     ).toBe(false);
   });
 
-  test("すでに新版バージョン（firstTimerVersion >= 3）で判定済みの場合は再評価不要", () => {
+  test("すでに新版バージョン（firstTimerVersion >= 4）で判定済みの場合は再評価不要", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
@@ -258,19 +157,36 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     ).toBe(false);
   });
 
-  test("すでに新版バージョン（firstTimerVersion >= 3）でタイムライン阻害履歴理由（timeline-blocking）が確定している場合は再評価不要", () => {
+  test("v3 の timeline-blocking でも Author が保存済みならタイムライン再取得は不要（Author 判定のみ対象）", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
         firstTimerReason: "timeline-blocking",
-        firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+        firstTimerVersion: MIN_WAIVED_READY_VERSION,
         commitCount: 3,
         authorCountInCandidates: 1,
+        author: "tamakichi23",
       }),
     ).toBe(false);
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        author: "tamakichi23",
+      }),
+    ).toBe(true);
   });
 
-  test("旧版バージョン（firstTimerVersion < 3 または未設定）の timeline-blocking は Waived-* 免除ラベル由来で阻害判定・ReadyAt 変動していた可能性があるため再評価対象", () => {
+  test("Author が未保存の timeline-blocking、または v3 未満の timeline-blocking はタイムライン再取得対象", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerReason: "timeline-blocking",
+        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        commitCount: 1,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(true);
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
@@ -278,6 +194,7 @@ describe("Domain: shouldReevaluateCachedSample", () => {
         firstTimerVersion: 2,
         commitCount: 1,
         authorCountInCandidates: 2,
+        author: "old-user",
       }),
     ).toBe(true);
     expect(
@@ -288,6 +205,36 @@ describe("Domain: shouldReevaluateCachedSample", () => {
         authorCountInCandidates: 1,
       }),
     ).toBe(true);
+  });
+
+  test("v3 未満（v2 / 未設定）や v4 以降のレコードは shouldReevaluateAuthorFirstTimer が false を返す", () => {
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        firstTimerVersion: 2,
+        author: "old-user",
+      }),
+    ).toBe(false);
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        author: "old-user",
+      }),
+    ).toBe(false);
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+        author: "tamakichi23",
+      }),
+    ).toBe(false);
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "lifetime-merged",
+        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        author: "repeat-user",
+      }),
+    ).toBe(false);
   });
 
   test("すでに累計マージ数理由（lifetime-merged）が確定している場合は再評価不要", () => {
@@ -366,6 +313,14 @@ describe("Domain: shouldReevaluateSkippedCandidate", () => {
         isEligibleForDetail: false,
       }),
     ).toBe(true);
+    expect(
+      shouldReevaluateSkippedCandidate({
+        reason: "no-ready",
+        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        isWithinOverallWindow: true,
+        isEligibleForDetail: true,
+      }),
+    ).toBe(false);
     expect(
       shouldReevaluateSkippedCandidate({
         reason: "no-ready",

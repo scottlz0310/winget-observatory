@@ -157,11 +157,13 @@ export function parseSampleCache(text: string): SampleCacheEntry[] {
   return entries;
 }
 
-/** PR 番号で引けるようにする。同じ番号が複数あれば、先に記録されたものを正とする */
-export function indexSampleCache(entries: SampleCacheEntry[]): Map<number, SampleCacheEntry> {
+/** PR 番号で引けるようにする。同じ番号が複数あれば、後続に記録されたものを正とする */
+export function indexSampleCache(
+  entries: readonly SampleCacheEntry[],
+): Map<number, SampleCacheEntry> {
   const index = new Map<number, SampleCacheEntry>();
   for (const entry of entries) {
-    if (!index.has(entry.Number)) index.set(entry.Number, entry);
+    index.set(entry.Number, entry);
   }
   return index;
 }
@@ -185,13 +187,11 @@ export function extractFirstTimerFastestRanking(
   entries: readonly SampleCacheEntry[],
   limit = FIRST_TIMER_FASTEST_RANKING_LIMIT,
 ): FirstTimerFastestRanking {
-  const latestByNumber = new Map<number, CachedSampleEntry>();
-  for (const entry of entries) {
-    if (entry.Type !== "sample") continue;
-    latestByNumber.set(entry.Number, entry);
-  }
+  const latestByNumber = indexSampleCache(entries);
 
-  const firstTimers = [...latestByNumber.values()].filter((entry) => entry.IsFirstTimer === true);
+  const firstTimers = [...latestByNumber.values()].filter(
+    (entry): entry is CachedSampleEntry => entry.Type === "sample" && entry.IsFirstTimer === true,
+  );
   firstTimers.sort(
     (a, b) =>
       a.TotalDays - b.TotalDays ||

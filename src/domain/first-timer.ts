@@ -3,44 +3,11 @@
  * 外部 I/O を行わず、src/models の型定義のみに依存する。
  */
 
-import { isBlockedLabel } from "./labels";
+/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版） */
+export const CURRENT_FIRST_TIMER_VERSION = 4;
 
-/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版） */
-export const CURRENT_FIRST_TIMER_VERSION = 3;
-
-export interface TimelineEventLike {
-  event: string;
-  created_at?: string;
-  label?: { name: string };
-}
-
-/**
- * タイムライン履歴および Draft 状態を検査し、阻害要因（阻害ラベル付与・Draft化・Draft公開復帰）が
- * 過去に一度でも発生した履歴があるか判定する。
- * 一度でも阻害や Draft 状態（最初から Draft、途中で Draft 化）が発生した PR は、
- * 途中で解除・公開されたとしても「初期健康体」とはみなさない。
- */
-export function hasBlockingOrDraftHistory(
-  timeline: TimelineEventLike[],
-  isDraft?: boolean,
-): boolean {
-  if (isDraft) return true;
-  for (const ev of timeline) {
-    if (
-      ev.event === "converted_to_draft" ||
-      ev.event === "convert_to_draft" ||
-      ev.event === "ready_for_review"
-    ) {
-      return true;
-    }
-    if (ev.event === "labeled" && ev.label?.name) {
-      if (isBlockedLabel(ev.label.name)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
+/** Waived-* 免除ラベルを健康体扱いとして ReadyAt / no-ready を評価した最低バージョン */
+export const MIN_WAIVED_READY_VERSION = 3;
 
 /**
  * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定するための入力。
@@ -78,24 +45,6 @@ export function isCandidateEligibleForFirstTimerDetail(
   authorCounts: Map<string, number>,
 ): boolean {
   if (candidate.author && (authorCounts.get(candidate.author) ?? 0) > 1) {
-    return false;
-  }
-  return true;
-}
-
-/**
- * サンプルが初回提出者（初期健康体）の前提条件を満たすか判定する。
- * コミット数は手直しを含む初回提出者全体を対象とするため制限しない。
- */
-export function isFirstTimerSampleCandidate(sample: {
-  commitCount?: number;
-  timeline?: TimelineEventLike[];
-  isDraft?: boolean;
-}): boolean {
-  if (sample.isDraft) {
-    return false;
-  }
-  if (sample.timeline && hasBlockingOrDraftHistory(sample.timeline, sample.isDraft)) {
     return false;
   }
   return true;
@@ -226,12 +175,13 @@ export async function resolveAuthorMergedCounts(
 }
 
 /**
- * キャッシュ済みのサンプルが、判定ロジックの改定（v2: コミット数制限撤廃 / v3: Waived-* 免除ラベルの健康体扱い）に伴い
- * 再評価（タイムライン・詳細の再取得）を必要とするか判定する純粋関数。
+ * キャッシュ済みのサンプルが、判定ロジックの改定に伴い再評価（タイムライン・詳細の再取得）を必要とするか判定する純粋関数。
  *
- * - FirstTimerVersion >= CURRENT_FIRST_TIMER_VERSION (3) のエントリは最新ルールで計測済みのため再評価不要。
- * - 旧版（FirstTimerVersion < 3 または未設定）で FirstTimerReason: "timeline-blocking" のエントリは、
- *   `Waived-*-Error` 等の免除ラベルにより阻害扱いになっていた、または ReadyAt が後ろ倒しされていた可能性があるため再評価する。
+ * - FirstTimerVersion >= CURRENT_FIRST_TIMER_VERSION (4) のエントリは最新ルールで計測済みのため再評価不要。
+ * - 旧版（FirstTimerVersion < MIN_WAIVED_READY_VERSION (3) または未設定）で FirstTimerReason: "timeline-blocking" のエントリ、
+ *   または Author が未保存の timeline-blocking エントリは、ReadyAt 修正および Author 取得のため再評価する。
+ * - v3 で Author がすでに保存済みの timeline-blocking エントリは、タイムライン再取得は不要とし
+ *   shouldReevaluateAuthorFirstTimer に委ねる。
  * - 旧版で FirstTimerReason が未設定かつ IsFirstTimer: false の複数コミット（commitCount > 1）サンプルも、
  *   単発 author（authorCountInCandidates <= 1）であれば再評価する。
  * - 一方、累計マージ数が2件以上と確定している場合（FirstTimerReason: "lifetime-merged"）や
@@ -244,6 +194,7 @@ export function shouldReevaluateCachedSample(params: {
   firstTimerVersion?: number;
   commitCount: number;
   authorCountInCandidates: number;
+  author?: string;
 }): boolean {
   if (
     params.firstTimerVersion !== undefined &&
@@ -252,8 +203,13 @@ export function shouldReevaluateCachedSample(params: {
     return false;
   }
 
-  // 旧版の timeline-blocking は Waived-*-Error 等の免除ラベル由来で阻害判定・ReadyAt 変動していた可能性があるため再評価
   if (params.firstTimerReason === "timeline-blocking") {
+    const hasWaivedReady =
+      params.firstTimerVersion !== undefined &&
+      params.firstTimerVersion >= MIN_WAIVED_READY_VERSION;
+    if (hasWaivedReady && params.author) {
+      return false;
+    }
     return true;
   }
 
@@ -273,9 +229,30 @@ export function shouldReevaluateCachedSample(params: {
 }
 
 /**
+ * タイムライン・詳細の再取得を行わず、保存済み Author を用いた初回提出者判定の再評価のみ行うべきか判定する純粋関数。
+ * v4 で timeline-blocking 除外を廃止したため、ReadyAt 再計測済みの v3（MIN_WAIVED_READY_VERSION 以上）かつ
+ * Author が既に保存されている timeline-blocking エントリのみ、最小限の API コール（累計マージ数照会のみ）で再判定する。
+ * v3 未満（Waived-* による ReadyAt 後ろ倒しの可能性あり）は shouldReevaluateCachedSample 側でタイムラインごと再取得する。
+ */
+export function shouldReevaluateAuthorFirstTimer(params: {
+  firstTimerReason?: string;
+  firstTimerVersion?: number;
+  author?: string;
+}): boolean {
+  if (
+    params.firstTimerVersion === undefined ||
+    params.firstTimerVersion < MIN_WAIVED_READY_VERSION ||
+    params.firstTimerVersion >= CURRENT_FIRST_TIMER_VERSION
+  ) {
+    return false;
+  }
+  return params.firstTimerReason === "timeline-blocking" && Boolean(params.author);
+}
+
+/**
  * キャッシュ済みのスキップ済み PR が、再評価（詳細取得）を必要とするか判定する純粋関数。
- * - Reason === "no-ready": 旧版（firstTimerVersion < 3 または未設定）では Waived-*-Error が残ったままマージされた PR が
- *   no-ready として保存されていた可能性があるため、予算内で再評価する。
+ * - Reason === "no-ready": 旧版（firstTimerVersion < MIN_WAIVED_READY_VERSION または未設定）では
+ *   Waived-*-Error が残ったままマージされた PR が no-ready として保存されていた可能性があるため、予算内で再評価する。
  * - Reason === "not-first-timer-candidate": 全体集計窓内に入った場合、または初回詳細適格になった場合に再評価する。
  */
 export function shouldReevaluateSkippedCandidate(params: {
@@ -286,8 +263,7 @@ export function shouldReevaluateSkippedCandidate(params: {
 }): boolean {
   if (params.reason === "no-ready") {
     return (
-      params.firstTimerVersion === undefined ||
-      params.firstTimerVersion < CURRENT_FIRST_TIMER_VERSION
+      params.firstTimerVersion === undefined || params.firstTimerVersion < MIN_WAIVED_READY_VERSION
     );
   }
   if (params.reason !== undefined && params.reason !== "not-first-timer-candidate") {

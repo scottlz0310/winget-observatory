@@ -36,7 +36,7 @@ function formatCohortForecastTarget(
 }
 
 /**
- * ページ最上部に置く初回提出者（純粋FIFO）サマリー
+ * ページ最上部に置く初回提出者サマリー
  * スクロールなしで P50/P75 予想マージ日、残り目安日数、追い越し実態の内訳を把握できる
  */
 export function renderFirstTimerHeroSummary(
@@ -113,9 +113,9 @@ export function renderFirstTimerHeroSummary(
     <section class="card first-timer-hero" style="border: 2px solid var(--success); margin-bottom: 1.5rem; background: linear-gradient(to bottom right, var(--card-bg), rgba(22, 163, 74, 0.04));">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
         <div class="card-title" style="color: var(--success); font-weight: 700; font-size: 1.05rem; margin-bottom: 0;">
-          🎯 初回提出者（純粋FIFO）サマリー
+          🎯 初回提出者サマリー
         </div>
-        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間の純粋FIFO待機列 準拠</span>
+        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間の初回提出者コホート 準拠</span>
       </div>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 0.5rem;">
         <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
@@ -148,7 +148,7 @@ export function renderFirstTimerHeroSummary(
         </div>
       </div>
       <div class="card-subtext" style="margin-top: 0.5rem;">
-        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、初回提出者（生涯マージ1件・阻害ラベルや Draft 履歴のない初期健康体）の観測値に基づきます。手直しを含む初回全体の通算所要日数および最終コミット後の所要日数（Turn Latency）を測定しています。
+        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）の観測値に基づきます。通算所要日数および最終コミット後の所要日数（Turn Latency）を測定しています。
       </div>
     </section>`;
 }

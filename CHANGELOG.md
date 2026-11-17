@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `src/models/sample-cache.ts`, `src/domain/sample-cache.ts`: `Type === "sample"` を `Number` キーで後続行優先の重複排除し、`IsFirstTimer === true` の全件数と `TotalDays` 昇順上位 10 件を抽出する `extractFirstTimerFastestRanking` を追加
   - `scripts/build-pages.ts`, `scripts/pages/types.ts`, `scripts/pages/sections/stats-and-samples.ts`, `scripts/pages/template.ts`: `🧪 比較に使ったサンプル` セクション直前に `🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）`（9 列・0 件時代替メッセージ・該当全件数表示）を追加
 
+### Changed
+
+- 初回提出者（`IsFirstTimer`）判定から `timeline-blocking`（過去の阻害ラベル・Draft 履歴）除外を廃止し、生涯マージ実績ベースへ統一:
+  - `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`, `src/models/sample-cache.ts`: `hasBlockingOrDraftHistory` / `isFirstTimerSampleCandidate` による事前除外を廃止し、`CURRENT_FIRST_TIMER_VERSION = 4` へ更新（`no-ready` / `ReadyAt` 再評価の閾値は `MIN_WAIVED_READY_VERSION = 3` を維持）
+  - `src/domain/sample-collector.ts`: `Author` が保存済みの既存 `timeline-blocking` レコードはタイムラインを再取得せず GraphQL 累計マージ数バッチ照会のみで昇格・更新するよう最適化し、走査窓外に残存する `timeline-blocking` レコードも対象化（昇格時に古い `FirstTimerReason` を削除）
+  - `src/domain/sample-cache.ts`: `indexSampleCache` を後続行優先の重複排除へ統一し、`extractFirstTimerFastestRanking` と共有
+  - `scripts/pages/sections/hero-and-kpi.ts`, `scripts/pages/sections/stats-and-samples.ts`: 見出し・注釈文言を「生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）」に更新
+
 ## [0.4.0] - 2026-11-17
 
 ### Changed

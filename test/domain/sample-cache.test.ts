@@ -175,14 +175,22 @@ describe("Domain: parseSampleCache", () => {
 });
 
 describe("Domain: indexSampleCache", () => {
-  test("PR 番号で引け、同じ番号が複数あれば先に記録されたものを正とする", () => {
-    const first = entry({ Title: "first" });
-    const later = entry({ Title: "later" });
+  test("PR 番号で引け、同じ番号が複数あれば後続に記録されたものを正とする", () => {
+    const first = entry({
+      Title: "first",
+      IsFirstTimer: false,
+      FirstTimerReason: "timeline-blocking",
+    });
+    const later = entry({ Title: "later", IsFirstTimer: true, FirstTimerVersion: 4 });
     const other = entry({ Number: 43 });
     const index = indexSampleCache([first, other, later]);
 
     expect(index.size).toBe(2);
-    expect((index.get(42) as CachedSampleEntry).Title).toBe("first");
+    const resolved = index.get(42) as CachedSampleEntry;
+    expect(resolved.Title).toBe("later");
+    expect(resolved.IsFirstTimer).toBe(true);
+    expect(resolved.FirstTimerReason).toBeUndefined();
+    expect(resolved.FirstTimerVersion).toBe(4);
     expect(index.get(43)).toBe(other);
     expect(index.get(99)).toBeUndefined();
   });

@@ -1053,7 +1053,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
-  test("1コミット・累計マージ1件でも途中で阻害ラベル履歴があるPRは初期健康体から除外され isFirstTimer: false となる", async () => {
+  test("1コミット・累計マージ1件であれば途中で阻害ラベル履歴があるPRも初回提出者として採用され isFirstTimer: true となる", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-blocked-history-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");
 
@@ -1061,6 +1061,26 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       let graphqlCalled = false;
       const client = {
         ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged")) {
+            return {
+              totalCount: 1,
+              items: [
+                {
+                  number: 600,
+                  title: "Merged 600",
+                  html_url: "https://github.com/test/repo/pull/600",
+                  created_at: "2026-10-01T00:00:00Z",
+                  updated_at: "2026-11-01T00:00:00Z",
+                  pull_request: { merged_at: "2026-11-01T00:00:00Z" },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
         getIssueTimeline: async (_repo: string, num: number) => {
           if (num === 500) {
             return [
@@ -1155,17 +1175,17 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         logs.push(m),
       );
 
-      // 阻害履歴があるため候補から除外され、GraphQL 一括照会も行われない
-      expect(graphqlCalled).toBeFalse();
-      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+      // 阻害履歴があっても作者累計マージ判定に進み、累計マージ 1 件なら初回として採用される
+      expect(graphqlCalled).toBeTrue();
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
       const s600 = snapshot?.Samples.find((s) => s.Number === 600);
-      expect(s600?.IsFirstTimer).toBeFalse();
+      expect(s600?.IsFirstTimer).toBeTrue();
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("1コミット・累計マージ1件でもDraft履歴（converted_to_draft や ready_for_review）があるPRは初期健康体から除外される", async () => {
+  test("1コミット・累計マージ1件であればDraft履歴（converted_to_draft や ready_for_review）があるPRも初回提出者として採用される", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-draft-history-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");
 
@@ -1297,7 +1317,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         },
         graphql: async () => {
           graphqlCalled = true;
-          return { u_0: { issueCount: 1 } };
+          return { u_0: { issueCount: 1 }, u_1: { issueCount: 1 } };
         },
       } as unknown as GitHubApiClient;
 
@@ -1306,13 +1326,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         logs.push(m),
       );
 
-      // Draft 履歴があるため候補から除外され、GraphQL 一括照会も行われない
-      expect(graphqlCalled).toBeFalse();
-      expect(snapshot?.FirstTimerSampleCount).toBe(0);
+      // Draft 履歴があっても累計マージ 1 件なら初回提出者として採用される
+      expect(graphqlCalled).toBeTrue();
+      expect(snapshot?.FirstTimerSampleCount).toBe(2);
       const s600 = snapshot?.Samples.find((s) => s.Number === 600);
-      expect(s600?.IsFirstTimer).toBeFalse();
+      expect(s600?.IsFirstTimer).toBeTrue();
       const s601 = snapshot?.Samples.find((s) => s.Number === 601);
-      expect(s601?.IsFirstTimer).toBeFalse();
+      expect(s601?.IsFirstTimer).toBeTrue();
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -2643,20 +2663,20 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(15.0);
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(5.0);
 
-      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 3 で更新されたこと
+      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 4 で更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached801 = savedCache.find((e) => e.Number === 801);
       expect(cached801?.Type).toBe("sample");
       if (cached801?.Type === "sample") {
         expect(cached801.IsFirstTimer).toBe(true);
-        expect(cached801.FirstTimerVersion).toBe(3);
+        expect(cached801.FirstTimerVersion).toBe(4);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("旧版キャッシュの再評価: sample/IsFirstTimer:false（阻害履歴あり）は再評価されても除外が正当に保持される", async () => {
+  test("旧版キャッシュの再評価: sample/IsFirstTimer:false（阻害履歴あり・累計マージ1件）は再評価されて初回提出者に昇格する", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-blocked-"));
     try {
       const cachePath = join(tmpDir, "merged-samples.jsonl");
@@ -2789,7 +2809,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         },
         graphql: async () => {
           graphqlCalled = true;
-          return {};
+          return { u_0: { issueCount: 1 } };
         },
       } as unknown as GitHubApiClient;
 
@@ -2806,18 +2826,18 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         (m) => logs.push(m),
       );
 
-      // 阻害履歴があるためコホートから除外されたままであること
-      expect(snapshot?.FirstTimerSampleCount).toBe(0);
-      expect(graphqlCalled).toBe(false); // 阻害確定のため GraphQL 照会は呼ばれない
+      // 阻害履歴があっても累計マージ 1 件であれば初回提出者として採用される
+      expect(graphqlCalled).toBe(true);
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
 
-      // キャッシュファイルで FirstTimerReason: "timeline-blocking", FirstTimerVersion: 3 で更新されたこと
+      // キャッシュファイルで IsFirstTimer: true, FirstTimerVersion: 4 に更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached802 = savedCache.find((e) => e.Number === 802);
       expect(cached802?.Type).toBe("sample");
       if (cached802?.Type === "sample") {
-        expect(cached802.IsFirstTimer).toBe(false);
-        expect(cached802.FirstTimerReason).toBe("timeline-blocking");
-        expect(cached802.FirstTimerVersion).toBe(3);
+        expect(cached802.IsFirstTimer).toBe(true);
+        expect(cached802.FirstTimerReason).toBeUndefined();
+        expect(cached802.FirstTimerVersion).toBe(4);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -2942,13 +2962,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(10.0); // 通算 10日
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(3.0); // Turn Latency 3日
 
-      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 3 で記録されたこと
+      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 4 で記録されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached803 = savedCache.find((e) => e.Number === 803);
       expect(cached803?.Type).toBe("sample");
       if (cached803?.Type === "sample") {
         expect(cached803.IsFirstTimer).toBe(true);
-        expect(cached803.FirstTimerVersion).toBe(3);
+        expect(cached803.FirstTimerVersion).toBe(4);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });

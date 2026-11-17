@@ -6,7 +6,7 @@
  * 1 行 1 JSON。
  */
 
-/** 初回提出者判定から除外された理由、または判定由来 */
+/** 初回提出者判定から除外された理由、または判定由来（multi-commit / timeline-blocking は旧版キャッシュ互換用） */
 export type FirstTimerDisqualificationReason =
   | "multi-commit"
   | "timeline-blocking"
@@ -30,7 +30,7 @@ export interface CachedSampleEntry {
   IsFirstTimer?: boolean;
   /** 初回判定の除外理由（旧版キャッシュとの区別および再評価の判断用） */
   FirstTimerReason?: FirstTimerDisqualificationReason;
-  /** 初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版） */
+  /** 初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版） */
   FirstTimerVersion?: number;
 }
 
