@@ -166,6 +166,11 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     : depths?.TargetPr?.CreatedAtJst
       ? parseTimestampToMs(depths.TargetPr.CreatedAtJst)
       : Number.NaN;
+  const targetCreatedMsForSamples = !Number.isNaN(parsedTargetCreatedMs)
+    ? parsedTargetCreatedMs
+    : progress?.Timestamp && typeof progress.TotalLifetimeDays === "number"
+      ? Date.parse(progress.Timestamp) - progress.TotalLifetimeDays * DAY_MS
+      : null;
   const firstReviewForecast = calculateFirstReviewForecast(
     unreviewedFrontierSamples,
     Number.isNaN(parsedTargetCreatedMs) ? null : parsedTargetCreatedMs,
@@ -262,7 +267,7 @@ ${DASHBOARD_CSS}
 
     ${renderFirstTimerFastestRankingSection(firstTimerFastestRanking, repo)}
 
-    ${renderSamplesSection(progress, repo)}
+    ${renderSamplesSection(progress, repo, targetCreatedMsForSamples)}
 
     <footer>
       <p>Winget Observatory - Automated with GitHub Actions &amp; GitHub Pages</p>
