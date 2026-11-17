@@ -214,8 +214,8 @@ export function renderForecastPanel(
 
 const FIRST_REVIEW_BADGE_MAP: Record<FirstReviewForecastStatus, { label: string; style: string }> =
   {
-    "target-assigned": {
-      label: "基準PRアサイン済み",
+    "target-intervened": {
+      label: "基準PR介入済み",
       style: "background: #dcfce7; color: #15803d;",
     },
     reached: { label: "到達済み", style: "background: #dcfce7; color: #15803d;" },
@@ -235,22 +235,34 @@ const FIRST_REVIEW_BADGE_MAP: Record<FirstReviewForecastStatus, { label: string;
     },
   };
 
+function formatTargetInterventionLabel(forecast: FirstReviewForecast): string {
+  if (forecast.targetIntervention?.PrimaryBadge?.Label) {
+    return forecast.targetIntervention.PrimaryBadge.Label;
+  }
+  if (forecast.targetAssignees.length > 0) {
+    return `アサイン済: ${forecast.targetAssignees.join(", ")}`;
+  }
+  return "介入あり";
+}
+
 function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
   headlineHtml: string;
   detailText: string;
 } {
   switch (forecast.status) {
-    case "target-assigned":
+    case "target-intervened": {
+      const badgeLabel = formatTargetInterventionLabel(forecast);
       return {
-        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（第三者アサイン済み: ${escapeHtml(forecast.targetAssignees.join(", "))}）</span>`,
+        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（${escapeHtml(badgeLabel)}）</span>`,
         detailText:
-          "基準 PR にはすでに作成者以外の第三者 Assignees が付与されているため、初回レビュー・介入は到達済みと判定しています。",
+          "基準 PR にはすでに人間レビュー・手動コメント・第三者 Assignees のいずれかが記録されているため、初回レビュー・介入は到達済みと判定しています。",
       };
+    }
     case "reached":
       return {
-        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（未アサイン前線が基準 PR 起票日を通過）</span>`,
+        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（未レビュー前線が基準 PR 起票日を通過）</span>`,
         detailText:
-          "未アサイン前線の先頭起票日時が基準 PR の起票日時に追いついています（定常・実測ベースともに残り 0 日）。",
+          "未レビュー前線の先頭起票日時が基準 PR の起票日時に追いついています（定常・実測ベースともに残り 0 日）。",
       };
     case "forecasted": {
       const dateStr =
@@ -263,7 +275,7 @@ function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
           : "";
       return {
         headlineHtml: `${escapeHtml(dateStr)} <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">${escapeHtml(etaStr)}</span>`,
-        detailText: `直近 ${forecast.windowHours} 時間の未アサイン前線進行速度（${forecast.observedSpeed} 日/日）に基づく見込みです${steadyRef}。`,
+        detailText: `直近 ${forecast.windowHours} 時間の未レビュー前線進行速度（${forecast.observedSpeed} 日/日）に基づく見込みです${steadyRef}。`,
       };
     }
     case "insufficient-window": {
@@ -283,20 +295,20 @@ function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
           : "";
       return {
         headlineHtml: `<span style="color: var(--warning);">停滞中（実測算出不能）</span>`,
-        detailText: `直近 ${forecast.windowHours} 時間で未アサイン前線が進んでいないため実測予想日を出せません。${steadyNote}`,
+        detailText: `直近 ${forecast.windowHours} 時間で未レビュー前線が進んでいないため実測予想日を出せません。${steadyNote}`,
       };
     }
     case "no-target":
       return {
         headlineHtml: `<span style="color: var(--text-muted);">基準 PR 起票日時が不明</span>`,
         detailText:
-          "基準 PR の起票日時が記録されていないため、到達予想日を算出できません（未アサイン前線の現在位置のみ表示）。",
+          "基準 PR の起票日時が記録されていないため、到達予想日を算出できません（未レビュー前線の現在位置のみ表示）。",
       };
     case "no-samples":
       return {
         headlineHtml: `<span style="color: var(--text-muted);">未観測</span>`,
         detailText:
-          "未アサイン前線の観測データがありません（次回の定期観測から記録・算出されます）。",
+          "未レビュー前線の観測データがありません（次回の定期観測から記録・算出されます）。",
       };
   }
 }
@@ -319,20 +331,19 @@ export function renderFirstReviewForecastPanel(
     ? `起票: ${escapeHtml(formatJstDateTime(frontier.createdMs, false))}（経過 ${forecast.lagDays ?? "-"} 日）`
     : "未観測";
 
-  const gapValueHtml =
-    forecast.targetAssignees.length > 0
-      ? `アサイン済み`
-      : forecast.gapDays !== null
-        ? `差 ${forecast.gapDays} 日`
-        : `<span style="color: var(--text-muted);">-</span>`;
-  const gapSubHtml =
-    forecast.targetAssignees.length > 0
-      ? `第三者: ${escapeHtml(forecast.targetAssignees.join(", "))}`
-      : forecast.gapDays !== null
-        ? forecast.gapDays <= 0
-          ? "未アサイン前線が基準 PR の起票日に到達済み"
-          : "基準 PR の起票日 − 前線先頭の起票日"
-        : "基準 PR の起票日時が不明";
+  const hasTargetIntervention = Boolean(forecast.targetIntervention?.Intervened);
+  const gapValueHtml = hasTargetIntervention
+    ? `介入済み`
+    : forecast.gapDays !== null
+      ? `差 ${forecast.gapDays} 日`
+      : `<span style="color: var(--text-muted);">-</span>`;
+  const gapSubHtml = hasTargetIntervention
+    ? escapeHtml(formatTargetInterventionLabel(forecast))
+    : forecast.gapDays !== null
+      ? forecast.gapDays <= 0
+        ? "未レビュー前線が基準 PR の起票日に到達済み"
+        : "基準 PR の起票日 − 前線先頭の起票日"
+      : "基準 PR の起票日時が不明";
 
   const speedValueHtml =
     forecast.observedSpeed !== null
@@ -351,7 +362,7 @@ export function renderFirstReviewForecastPanel(
     <section class="card forecast-panel" style="border-left: 4px solid #0ea5e9; margin-top: 1rem; margin-bottom: 0.5rem;" aria-label="初回レビュー到達予想">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.4rem;">
         <div class="card-title" style="margin-bottom: 0; font-weight: 600; color: var(--text-color);">
-          👀 初回レビュー到達予想（未アサイン前線・起票順）
+          👀 初回レビュー到達予想（未レビュー前線・起票順）
         </div>
         <span class="badge" style="${badge.style}">${escapeHtml(badge.label)}</span>
       </div>
@@ -359,7 +370,7 @@ export function renderFirstReviewForecastPanel(
       <div class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(detailText)}</div>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 0.5rem;">
         <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">未アサイン前線の現在位置</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">未レビュー前線の現在位置</div>
           <div style="font-size: 1.1rem; font-weight: 700;">${frontierValueHtml}</div>
           <div class="card-subtext">${frontierSubHtml}</div>
         </div>
@@ -369,13 +380,13 @@ export function renderFirstReviewForecastPanel(
           <div class="card-subtext">${gapSubHtml}</div>
         </div>
         <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">未アサイン前線の進行速度</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">未レビュー前線の進行速度</div>
           <div style="font-size: 1.1rem; font-weight: 700;">${speedValueHtml}</div>
           <div class="card-subtext">${escapeHtml(speedSubHtml)}</div>
         </div>
       </div>
       <div class="card-subtext">
-        ※ 作成者のセルフアサインを除き、第三者 Assignees が付いていない健康な New-Package PR を起票順（createdAt）で追跡しています。既存の「予想マージ日（3 仮説）」とは独立した初回介入の目安です。
+        ※ 純粋ボット・作成者本人・自動検証ログを除き、人間レビュー・手動コメント・第三者 Assignees がすべて無い健康な New-Package PR を起票順（createdAt）で追跡しています。既存の「予想マージ日（3 仮説）」とは独立した初回介入の目安です。
       </div>
     </section>`;
 }

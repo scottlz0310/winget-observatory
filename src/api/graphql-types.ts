@@ -4,15 +4,45 @@
  */
 
 export interface GraphQLAuthor {
+  __typename?: string | null;
   login: string;
 }
 
 export interface GraphQLAssigneeNode {
+  __typename?: string | null;
   login?: string | null;
 }
 
 export interface GraphQLAssigneeConnection {
   nodes?: Array<GraphQLAssigneeNode | null> | null;
+}
+
+export interface GraphQLReviewNode {
+  author?: {
+    __typename?: string | null;
+    login?: string | null;
+  } | null;
+  state?: string | null;
+}
+
+export interface GraphQLReviewConnection {
+  totalCount?: number;
+  pageInfo?: GraphQLPageInfo | null;
+  nodes?: Array<GraphQLReviewNode | null> | null;
+}
+
+export interface GraphQLCommentNode {
+  author?: {
+    __typename?: string | null;
+    login?: string | null;
+  } | null;
+  body?: string | null;
+}
+
+export interface GraphQLCommentConnection {
+  totalCount?: number;
+  pageInfo?: GraphQLPageInfo | null;
+  nodes?: Array<GraphQLCommentNode | null> | null;
 }
 
 export interface GraphQLLabelNode {
@@ -88,6 +118,8 @@ export interface GraphQLPullRequestNode {
   labels?: GraphQLLabelConnection | null;
   commits?: GraphQLCommitConnection | null;
   assignees?: GraphQLAssigneeConnection | null;
+  reviews?: GraphQLReviewConnection | null;
+  comments?: GraphQLCommentConnection | null;
   timelineItems?: GraphQLTimelineConnection | null;
 }
 

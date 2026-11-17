@@ -1,4 +1,5 @@
-import type { GitHubPrView, GitHubSearchItem } from "../models/depths";
+import { classifyPrIntervention } from "../domain/intervention";
+import type { GitHubPrView, GitHubSearchItem, PrInterventionSummary } from "../models/depths";
 import type {
   GitHubDetailedSearchItem,
   GitHubDetailedSearchResult,
@@ -20,7 +21,9 @@ import {
   buildGraphQLSearchQuery,
 } from "./graphql-adapters";
 import {
+  GET_PULL_REQUEST_COMMENTS_PAGE_QUERY,
   GET_PULL_REQUEST_DETAILS_QUERY,
+  GET_PULL_REQUEST_REVIEWS_PAGE_QUERY,
   GET_PULL_REQUEST_SAMPLE_QUERY,
   GET_PULL_REQUEST_STATE_QUERY,
   GET_PULL_REQUEST_TIMELINE_QUERY,
@@ -33,9 +36,11 @@ import {
 import type {
   GitHubRateLimit,
   GitHubRateLimitBucket,
+  GraphQLCommentConnection,
   GraphQLPullRequestNode,
   GraphQLRateLimitBucket,
   GraphQLRateLimitData,
+  GraphQLReviewConnection,
   GraphQLSearchConnection,
   GraphQLTimelineConnection,
 } from "./graphql-types";
@@ -122,6 +127,124 @@ export interface GitHubApiClientOptions {
   baseUrl?: string;
   fetch?: FetchLike;
   retry?: GraphQLRetryOptions;
+}
+
+export type GraphQLInvoker = <T = unknown>(
+  query: string,
+  variables?: Record<string, unknown>,
+) => Promise<T>;
+
+interface GraphQLReviewsPageResponse {
+  repository?: {
+    pullRequest?: {
+      reviews?: GraphQLReviewConnection | null;
+    } | null;
+  } | null;
+}
+
+interface GraphQLCommentsPageResponse {
+  repository?: {
+    pullRequest?: {
+      comments?: GraphQLCommentConnection | null;
+    } | null;
+  } | null;
+}
+
+/**
+ * 1 回目の PR 取得ノード（reviews/comments 20件）で未介入のまま後続ページが残っている場合のみ、
+ * 追加ページを取得して介入有無を確定させる（1件でも介入が見つかれば即打ち切る）。
+ */
+export async function resolvePrInterventionWithPaging<TNode extends GraphQLPullRequestNode>(
+  graphqlFn: GraphQLInvoker,
+  owner: string,
+  name: string,
+  prNode: TNode,
+  maxExtraPages = 10,
+): Promise<{ node: TNode; summary: PrInterventionSummary }> {
+  let currentSummary = classifyPrIntervention(prNode);
+  if (currentSummary.Intervened || !prNode.number) {
+    return { node: prNode, summary: currentSummary };
+  }
+
+  let reviewNodes = [...(prNode.reviews?.nodes ?? [])];
+  let reviewHasNext = Boolean(prNode.reviews?.pageInfo?.hasNextPage);
+  let reviewCursor = prNode.reviews?.pageInfo?.endCursor ?? null;
+  let reviewPages = 0;
+
+  while (
+    !currentSummary.Intervened &&
+    reviewHasNext &&
+    reviewCursor &&
+    reviewPages < maxExtraPages
+  ) {
+    reviewPages++;
+    const pageData = await graphqlFn<GraphQLReviewsPageResponse>(
+      GET_PULL_REQUEST_REVIEWS_PAGE_QUERY,
+      {
+        owner,
+        name,
+        number: prNode.number,
+        after: reviewCursor,
+      },
+    );
+    const conn = pageData?.repository?.pullRequest?.reviews;
+    if (Array.isArray(conn?.nodes)) {
+      reviewNodes = [...reviewNodes, ...conn.nodes];
+    }
+    reviewHasNext = Boolean(conn?.pageInfo?.hasNextPage);
+    reviewCursor = conn?.pageInfo?.endCursor ?? null;
+    currentSummary = classifyPrIntervention({
+      author: prNode.author,
+      assignees: prNode.assignees,
+      reviews: reviewNodes,
+      comments: prNode.comments,
+    });
+  }
+
+  let commentNodes = [...(prNode.comments?.nodes ?? [])];
+  let commentHasNext = Boolean(prNode.comments?.pageInfo?.hasNextPage);
+  let commentCursor = prNode.comments?.pageInfo?.endCursor ?? null;
+  let commentPages = 0;
+
+  while (
+    !currentSummary.Intervened &&
+    commentHasNext &&
+    commentCursor &&
+    commentPages < maxExtraPages
+  ) {
+    commentPages++;
+    const pageData = await graphqlFn<GraphQLCommentsPageResponse>(
+      GET_PULL_REQUEST_COMMENTS_PAGE_QUERY,
+      {
+        owner,
+        name,
+        number: prNode.number,
+        after: commentCursor,
+      },
+    );
+    const conn = pageData?.repository?.pullRequest?.comments;
+    if (Array.isArray(conn?.nodes)) {
+      commentNodes = [...commentNodes, ...conn.nodes];
+    }
+    commentHasNext = Boolean(conn?.pageInfo?.hasNextPage);
+    commentCursor = conn?.pageInfo?.endCursor ?? null;
+    currentSummary = classifyPrIntervention({
+      author: prNode.author,
+      assignees: prNode.assignees,
+      reviews: reviewNodes,
+      comments: commentNodes,
+    });
+  }
+
+  const mergedNode: TNode = {
+    ...prNode,
+    ...(prNode.reviews !== undefined ? { reviews: { ...prNode.reviews, nodes: reviewNodes } } : {}),
+    ...(prNode.comments !== undefined
+      ? { comments: { ...prNode.comments, nodes: commentNodes } }
+      : {}),
+  };
+
+  return { node: mergedNode, summary: currentSummary };
 }
 
 /**
@@ -283,7 +406,14 @@ export class GitHubApiClient {
         throw this.createNotFoundError("Pull Request", prNumber);
       }
 
-      return adaptGraphQLToPrView(prNode);
+      const { node: resolvedNode } = await resolvePrInterventionWithPaging(
+        (query, variables) => this.graphql(query, variables),
+        owner,
+        name,
+        prNode,
+      );
+
+      return adaptGraphQLToPrView(resolvedNode);
     } catch (err: unknown) {
       if (isPrNotFoundGraphQLError(err)) {
         throw this.createNotFoundError("Pull Request", prNumber);

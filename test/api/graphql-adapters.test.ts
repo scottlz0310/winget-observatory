@@ -164,6 +164,48 @@ describe("GraphQL Adapters", () => {
         thirdPartyAssignees: ["stephengillie"],
       });
     });
+
+    test("reviews / comments を含む場合は intervention を判定して付与する", () => {
+      const node: GraphQLPullRequestNode = {
+        number: 202,
+        title: "View PR with Comments",
+        url: "https://github.com/repo/pull/202",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-02T00:00:00Z",
+        author: { __typename: "User", login: "pr-author" },
+        assignees: { nodes: [] },
+        reviews: {
+          nodes: [
+            {
+              author: { __typename: "Bot", login: "copilot-pull-request-reviewer" },
+              state: "COMMENTED",
+            },
+          ],
+        },
+        comments: {
+          nodes: [
+            {
+              author: { __typename: "User", login: "stephengillie" },
+              body: "Does this app have a privacy policy?",
+            },
+          ],
+        },
+      };
+
+      const result = adaptGraphQLToPrView(node);
+      expect(result.thirdPartyAssignees).toEqual([]);
+      expect(result.intervention).toEqual({
+        Intervened: true,
+        ThirdPartyAssignees: [],
+        HumanReviewCount: 0,
+        ManualCommentCount: 1,
+        PrimaryBadge: {
+          Kind: "comment",
+          Actor: "stephengillie",
+          Label: "コメント済: stephengillie",
+        },
+      });
+    });
   });
 
   describe("adaptGraphQLToPrDetail & adaptGraphQLToPrState & adaptGraphQLToPrSampleData", () => {

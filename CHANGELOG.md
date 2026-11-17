@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 未アサイン／アサイン済み前線を「未レビュー（完全未着手）前線 vs レビュー・介入済み前線」へ差し替え:
+  - `src/domain/intervention.ts`, `src/models/depths.ts`, `src/domain/depths.ts`: 純粋ボット（`__typename === "Bot"`, `[bot]` 接尾辞, `wingetbot`）・作成者本人・自動検証ログ（`(Deterministic automation` 含有）を除外した「人間レビュー」「手動コメント」「第三者 Assignees」の OR 条件による介入判定 `classifyPrIntervention`（代表バッジ優先順: レビュー ＞ コメント ＞ アサイン）およびサマリー集計 `summarizeInterventionFrontier` を新設し、`CURRENT_DEPTHS_VERSION = 3`（`UnreviewedBottom` / `IntervenedBottom` / `UnreviewedTruncated` / `IntervenedTruncated`）へ更新
+  - `src/api/graphql-queries.ts`, `src/api/graphql-types.ts`, `src/api/graphql-adapters.ts`, `src/api/github.ts`: 2 段階パイプライン用の軽量検索クエリ `SEARCH_PR_NUMBERS_QUERY`・エイリアスバッチクエリ `buildPullRequestBatchInterventionQuery`・未介入時のみ追加走査する `resolvePrInterventionWithPaging` を追加し、`getPullRequest`（基準 PR 取得）でも同じ介入判定・追加ページングを適用
+  - `src/cli/explore-depths.ts`: `fetchAssigneeFrontiers` を 2 段階パイプライン `fetchInterventionFrontiers`（両区分 10 件揃った時点で即打ち切り）へ差し替え、CLI 出力を `5A. 未レビュー（完全未着手）前線` / `5B. レビュー・介入済み前線` へ更新
+  - `src/models/forecast.ts`, `src/domain/forecast.ts`: 初回レビュー到達予想を v3 の `UnreviewedBottom` ベース（`extractUnreviewedFrontierSamples`, `target-intervened`）へ差し替えつつ、`StaleBottom` / `FirstTimerBottom` は `MIN_STALE_DEPTHS_VERSION = 2` により v2 履歴を継続利用できるよう維持
+  - `scripts/build-pages.ts`, `scripts/pages/`: ダッシュボードの初回レビュー到達予想パネル・統合時系列チャート（`👀 未レビュー前線 起票経過`）・2 テーブル比較セクション（`🟦 未レビュー前線` vs `🟧 レビュー・介入済み前線`、種別カラーバッジ表示）を新指標へ差し替え
 - 除外条件の GitHub Search クエリ押し込みと GraphQL 取得フィールド削ぎ落とし・サンプル計測クエリ統合（#100）:
   - `src/domain/labels.ts`, `src/models/sample-cache.ts`, `src/domain/sample-cache.ts`, `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`: `microsoft/winget-pkgs` 実在のパターン一致阻害ラベル 46 件を `PATTERN_BLOCKED_LABELS` として定義し、`buildHealthyQueryParts` および `buildMergedCandidateQueryParts`（新設）で全 77 件の `-label:"..."` をサーバー側 Search クエリに押し込み。モデレーター免除ラベル `Waived-*`（`Waived-Validation-*-Error` 4 件を含む）を `isBlockedLabel` の阻害判定および `-label:` 除外対象から外して健康体扱いに統一し、旧版の `no-ready` スキップキャッシュおよび `timeline-blocking` サンプルキャッシュを再評価・移行するよう `CURRENT_FIRST_TIMER_VERSION = 3` に更新
   - `src/domain/exit-breakdown.ts`: 離脱内訳クエリ `buildExitCountQueries` に `draft:false` を追加し、`EffectiveAhead` 母集団と条件を整合

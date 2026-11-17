@@ -172,6 +172,87 @@ describe("API: GitHubApiClient", () => {
     expect(pr.thirdPartyAssignees).toEqual(["stephengillie"]);
   });
 
+  test("getPullRequest は 1 ページ目で未介入かつ comments に次ページがある場合のみ追加ページングして介入を検出する", async () => {
+    const calledOperations: string[] = [];
+    const mockFetch = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const parsed = JSON.parse(String(init?.body ?? "{}")) as {
+        query?: string;
+        variables?: Record<string, unknown>;
+      };
+      const q = parsed.query ?? "";
+      if (q.includes("GetPullRequestView")) {
+        calledOperations.push("view");
+        return new Response(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  number: 464302,
+                  title: "New package: sample",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/464302",
+                  createdAt: "2026-10-28T21:47:38Z",
+                  updatedAt: "2026-11-02T03:00:00Z",
+                  author: { __typename: "User", login: "scottlz0310" },
+                  assignees: { nodes: [] },
+                  reviews: {
+                    totalCount: 0,
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [],
+                  },
+                  comments: {
+                    totalCount: 22,
+                    pageInfo: { hasNextPage: true, endCursor: "c-page1" },
+                    nodes: [
+                      {
+                        author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+                        body: "CLA",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (q.includes("GetPullRequestCommentsPage")) {
+        calledOperations.push("comments-page");
+        return new Response(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    totalCount: 22,
+                    pageInfo: { hasNextPage: true, endCursor: "c-page2" },
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "stephengillie" },
+                        body: "Need privacy policy",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`想定外のクエリ呼び出し: ${q}`);
+    };
+
+    const client = new GitHubApiClient({ token: "sample-token", fetch: mockFetch });
+    const pr = await client.getPullRequest("microsoft/winget-pkgs", 464302);
+    expect(calledOperations).toEqual(["view", "comments-page"]);
+    expect(pr.intervention?.Intervened).toBe(true);
+    expect(pr.intervention?.PrimaryBadge?.Label).toBe("コメント済: stephengillie");
+  });
+
   test("getPullRequest は PR が存在しない場合（実 API の NOT_FOUND errors 応答）404 GitHubApiError をスローする", async () => {
     const mockFetch = async (): Promise<Response> => {
       return new Response(

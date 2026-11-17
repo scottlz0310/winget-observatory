@@ -1,4 +1,5 @@
 import { extractThirdPartyAssignees } from "../domain/depths";
+import { classifyPrIntervention } from "../domain/intervention";
 import type { GitHubPrView, GitHubSearchItem } from "../models/depths";
 import type {
   GitHubDetailedSearchItem,
@@ -71,6 +72,9 @@ export function adaptGraphQLToDetailedSearchResult(
  * GraphQL の PullRequest ノードを GitHubPrView に変換する。
  */
 export function adaptGraphQLToPrView(node: GraphQLPullRequestNode): GitHubPrView {
+  const hasInterventionEdges = node.reviews !== undefined || node.comments !== undefined;
+  const intervention = hasInterventionEdges ? classifyPrIntervention(node) : undefined;
+
   return {
     number: Number(node.number),
     title: String(node.title),
@@ -78,14 +82,19 @@ export function adaptGraphQLToPrView(node: GraphQLPullRequestNode): GitHubPrView
     createdAt: String(node.createdAt),
     updatedAt: String(node.updatedAt),
     ...(node.author?.login ? { author: node.author.login } : {}),
-    ...(node.assignees !== undefined
+    ...(intervention !== undefined
       ? {
-          thirdPartyAssignees: extractThirdPartyAssignees(
-            node.assignees?.nodes,
-            node.author?.login,
-          ),
+          thirdPartyAssignees: intervention.ThirdPartyAssignees,
+          intervention,
         }
-      : {}),
+      : node.assignees !== undefined
+        ? {
+            thirdPartyAssignees: extractThirdPartyAssignees(
+              node.assignees?.nodes,
+              node.author?.login,
+            ),
+          }
+        : {}),
   };
 }
 
