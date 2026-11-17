@@ -18,7 +18,6 @@ import type {
   GraphQLSearchConnection,
   GraphQLTimelineItemNode,
 } from "../../src/api/graphql-types";
-import { hasBlockingOrDraftHistory } from "../../src/domain/first-timer";
 import { simulateReadySince } from "../../src/domain/progress";
 
 describe("GraphQL Adapters", () => {
@@ -374,37 +373,6 @@ describe("GraphQL Adapters", () => {
           created_at: "2026-10-04T10:00:00Z",
         },
       ]);
-    });
-
-    test("変換後のイベント列が hasBlockingOrDraftHistory で正しく判定される", () => {
-      const healthyItems: GraphQLTimelineItemNode[] = [
-        {
-          __typename: "LabeledEvent",
-          createdAt: "2026-10-01T10:00:00Z",
-          label: { name: "Area-Package" },
-        },
-      ];
-      const healthyAdapted = adaptGraphQLTimelineItems(healthyItems);
-      expect(hasBlockingOrDraftHistory(healthyAdapted, false)).toBeFalse();
-
-      const blockedItems: GraphQLTimelineItemNode[] = [
-        {
-          __typename: "LabeledEvent",
-          createdAt: "2026-10-01T10:00:00Z",
-          label: { name: "Error-TestFailure" },
-        },
-      ];
-      const blockedAdapted = adaptGraphQLTimelineItems(blockedItems);
-      expect(hasBlockingOrDraftHistory(blockedAdapted, false)).toBeTrue();
-
-      const draftItems: GraphQLTimelineItemNode[] = [
-        {
-          __typename: "ReadyForReviewEvent",
-          createdAt: "2026-10-02T10:00:00Z",
-        },
-      ];
-      const draftAdapted = adaptGraphQLTimelineItems(draftItems);
-      expect(hasBlockingOrDraftHistory(draftAdapted, false)).toBeTrue();
     });
 
     test("変換後のイベント列が simulateReadySince で正しくシミュレートされる", () => {

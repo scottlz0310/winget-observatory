@@ -106,7 +106,9 @@ describe("buildDashboard", () => {
       expect(html).toContain("+50"); // 前線番号増加（進行）
 
       // ファーストビューのサマリー
-      expect(html).toContain("🎯 初回提出者（純粋FIFO）サマリー");
+      expect(html).toContain("🎯 初回提出者サマリー");
+      expect(html).toContain("初回提出者コホート 準拠");
+      expect(html).toContain("生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）");
       expect(html).toContain("予想マージ日 (P50 中央値)");
       expect(html).toContain("予想マージ日 (P75 75%点)");
       expect(html).toContain("追い越し実態の分離内訳");
@@ -827,8 +829,9 @@ describe("buildDashboard: 過去実績との比較", () => {
       const html = readFileSync(htmlPath, "utf-8");
 
       // 1. ファーストビューサマリー
-      expect(html).toContain("🎯 初回提出者（純粋FIFO）サマリー");
-      expect(html).toContain("純粋FIFO待機列 準拠");
+      expect(html).toContain("🎯 初回提出者サマリー");
+      expect(html).toContain("初回提出者コホート 準拠");
+      expect(html).toContain("生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）");
       expect(html).toContain("予想マージ日 (P50 中央値)");
       expect(html).toContain("残り約 2.5 日");
       expect(html).toContain("予想マージ日 (P75 75%点)");
@@ -848,7 +851,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html.match(/<polyline /g)?.length).toBe(4);
 
       // 3. マージ実績統計カードの分離
-      expect(html).toContain("🌱 初回提出者コホート実績（純粋FIFO待機列）");
+      expect(html).toContain("🌱 初回提出者コホート実績（生涯マージ1件）");
       expect(html).toContain("採用 12 件");
       expect(html).toContain("👥 全体実績（常連・特急レーンを含む全サンプル）");
 
@@ -1130,7 +1133,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       "utf-8",
     );
     let html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-    expect(html).toContain("過去 90 日間の純粋FIFO待機列 準拠");
+    expect(html).toContain("過去 90 日間の初回提出者コホート 準拠");
     expect(html).toContain("（過去 90 日間 / サンプル 8 件）");
     expect(html).toContain("過去 90 日間・採用 8 件");
 
@@ -1147,7 +1150,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       "utf-8",
     );
     html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-    expect(html).toContain("過去 45 日間の純粋FIFO待機列 準拠");
+    expect(html).toContain("過去 45 日間の初回提出者コホート 準拠");
     expect(html).toContain("（過去 45 日間 / サンプル 4 件）");
     expect(html).toContain("過去 45 日間・採用 4 件");
 
@@ -1229,7 +1232,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain("直近最大 120 観測点を表示");
       expect(html).toContain("比較対象は直近約 7 日間 / 168 時間窓基準");
       expect(html).toContain("除外件数は、タイムライン上で Ready 条件");
-      expect(html).toContain("阻害ラベルや Draft 履歴のない初期健康体");
+      expect(html).toContain("生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）");
       expect(html).toContain("🔮 仮説② の根拠（優等生の底の推移・最新 5 件）");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -1271,7 +1274,7 @@ describe("buildDashboard: 過去実績との比較", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
-      expect(html).toContain("過去 60 日間の純粋FIFO待機列 準拠");
+      expect(html).toContain("過去 60 日間の初回提出者コホート 準拠");
       expect(html).toContain("過去 60 日間・採用 5 件");
       expect(html).toContain("集計対象: 直近 14 日間の全体採用サンプル（55 件）内");
       expect(html).toContain("マージ実績の所要日数統計 (直近 14 日間");

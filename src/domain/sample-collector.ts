@@ -8,14 +8,18 @@ import type {
   MergedCandidateSample,
   ProgressPrSampleData,
 } from "../models/progress";
-import type { CachedSkippedEntry, SampleCacheEntry } from "../models/sample-cache";
+import type {
+  CachedSampleEntry,
+  CachedSkippedEntry,
+  SampleCacheEntry,
+} from "../models/sample-cache";
 import {
   CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
-  isFirstTimerSampleCandidate,
   resolveAuthorMergedCounts,
+  shouldReevaluateAuthorFirstTimer,
   shouldReevaluateCachedSample,
   shouldReevaluateSkippedCandidate,
 } from "./first-timer";
@@ -54,6 +58,7 @@ type FetchCandidateOutcome =
 
 interface CachedCandidateResolution {
   needsReevaluation: boolean;
+  needsAuthorReevaluation?: boolean;
   updatedEntry?: SampleCacheEntry;
 }
 
@@ -111,10 +116,21 @@ function resolveCachedCandidate(params: {
       firstTimerVersion: cached.FirstTimerVersion,
       commitCount: cached.CommitCount,
       authorCountInCandidates: candAuthorCount,
+      author: cached.Author,
     });
 
     if (shouldReevaluate) {
       return { needsReevaluation: canFetchMore };
+    }
+
+    if (
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: cached.FirstTimerReason,
+        firstTimerVersion: cached.FirstTimerVersion,
+        author: cached.Author,
+      })
+    ) {
+      return { needsReevaluation: false, needsAuthorReevaluation: true };
     }
 
     if (
@@ -193,12 +209,6 @@ async function fetchUncachedCandidateSample(
     const totalDays = (mergedAt.getTime() - candCreatedAt.getTime()) / DAY_MS;
     const turnDays = (mergedAt.getTime() - candLatestCommittedDate.getTime()) / DAY_MS;
 
-    const isCandidate = isFirstTimerSampleCandidate({
-      commitCount,
-      timeline: candTimeline,
-      isDraft: false,
-    });
-
     const sample: MergedCandidateSample = {
       number: cand.number,
       title: cand.title,
@@ -212,12 +222,6 @@ async function fetchUncachedCandidateSample(
       days: round2(readyDays),
       author: sampleData.author ?? cand.author,
       firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
-      ...(!isCandidate
-        ? {
-            isFirstTimer: false,
-            firstTimerReason: "timeline-blocking",
-          }
-        : {}),
     };
 
     return { kind: "sample", sample, cacheEntry: toCachedSample(sample) };
@@ -237,11 +241,17 @@ function syncFirstTimerMetadataToCache(
   if (cached?.Type !== "sample") {
     return false;
   }
-  cached.IsFirstTimer = sample.isFirstTimer;
-  cached.FirstTimerVersion = sample.firstTimerVersion;
+  const updated: CachedSampleEntry = {
+    ...cached,
+    IsFirstTimer: sample.isFirstTimer,
+    FirstTimerVersion: sample.firstTimerVersion,
+  };
   if (sample.firstTimerReason !== undefined) {
-    cached.FirstTimerReason = sample.firstTimerReason;
+    updated.FirstTimerReason = sample.firstTimerReason;
+  } else {
+    delete updated.FirstTimerReason;
   }
+  cacheIndex.set(sample.number, updated);
   return true;
 }
 
@@ -286,8 +296,9 @@ async function resolveSingleHitAuthorMergedCounts(params: {
   cacheIndex: Map<number, SampleCacheEntry>;
   client: SampleCollectorClient;
   repository: string;
+  authorCountCache: Map<string, number>;
 }): Promise<boolean> {
-  const { samples, cacheIndex, client, repository } = params;
+  const { samples, cacheIndex, client, repository, authorCountCache } = params;
   const candidateAuthors = extractSingleHitCandidateLogins(samples);
   if (candidateAuthors.length === 0) {
     return false;
@@ -297,7 +308,7 @@ async function resolveSingleHitAuthorMergedCounts(params: {
     repository,
     candidateAuthors,
     (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query),
-    { batchSize: 30 },
+    { batchSize: 30, cache: authorCountCache },
   );
 
   let modified = false;
@@ -310,10 +321,78 @@ async function resolveSingleHitAuthorMergedCounts(params: {
     s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
     if (count !== 1) {
       s.firstTimerReason = "lifetime-merged";
+    } else {
+      delete s.firstTimerReason;
     }
     if (syncFirstTimerMetadataToCache(cacheIndex, s)) {
       modified = true;
     }
+  }
+
+  return modified;
+}
+
+/**
+ * 走査窓外のキャッシュ等に残存する旧版 timeline-blocking レコード（Author 保存済み）について、
+ * タイムラインを再取得せず累計マージ実績のみで初回提出者判定を再評価・更新する。
+ */
+async function resolveRemainingTimelineBlockingCacheEntries(params: {
+  cacheIndex: Map<number, SampleCacheEntry>;
+  candidateNumbers: ReadonlySet<number>;
+  client: SampleCollectorClient;
+  repository: string;
+  authorCountCache: Map<string, number>;
+}): Promise<boolean> {
+  const { cacheIndex, candidateNumbers, client, repository, authorCountCache } = params;
+  const pendingEntries: CachedSampleEntry[] = [];
+  const pendingAuthors: string[] = [];
+
+  for (const entry of cacheIndex.values()) {
+    if (entry.Type !== "sample" || candidateNumbers.has(entry.Number)) continue;
+    if (
+      !shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: entry.FirstTimerReason,
+        firstTimerVersion: entry.FirstTimerVersion,
+        author: entry.Author,
+      })
+    ) {
+      continue;
+    }
+    pendingEntries.push(entry);
+    if (entry.Author) {
+      pendingAuthors.push(entry.Author);
+    }
+  }
+
+  if (pendingEntries.length === 0) {
+    return false;
+  }
+
+  const authorMergedCounts = await resolveAuthorMergedCounts(
+    repository,
+    pendingAuthors,
+    (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query),
+    { batchSize: 30, cache: authorCountCache },
+  );
+
+  let modified = false;
+  for (const entry of pendingEntries) {
+    if (!entry.Author) continue;
+    const count = authorMergedCounts.get(entry.Author);
+    if (count === undefined) continue;
+
+    const updated: CachedSampleEntry = {
+      ...entry,
+      IsFirstTimer: count === 1,
+      FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+    };
+    if (count !== 1) {
+      updated.FirstTimerReason = "lifetime-merged";
+    } else {
+      delete updated.FirstTimerReason;
+    }
+    cacheIndex.set(entry.Number, updated);
+    modified = true;
   }
 
   return modified;
@@ -366,7 +445,13 @@ export async function orchestrateSampleCollection(
             cacheModified = true;
           }
           if (entry.Type === "sample") {
-            samples.push(fromCachedSample(entry));
+            const sample = fromCachedSample(entry);
+            if (resolution.needsAuthorReevaluation) {
+              sample.isFirstTimer = undefined;
+              sample.firstTimerReason = undefined;
+              sample.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+            }
+            samples.push(sample);
           } else {
             recordSkipped(cand.number, new Date(entry.MergedAt));
           }
@@ -401,6 +486,7 @@ export async function orchestrateSampleCollection(
       }
     }
 
+    const authorCountCache = new Map<string, number>();
     if (markRecurringBatchAuthors(samples, candidateAuthorCounts, cacheIndex)) {
       cacheModified = true;
     }
@@ -410,6 +496,19 @@ export async function orchestrateSampleCollection(
         cacheIndex,
         client,
         repository,
+        authorCountCache,
+      })
+    ) {
+      cacheModified = true;
+    }
+    const candidateNumbers = new Set(candidates.map((c) => c.number));
+    if (
+      await resolveRemainingTimelineBlockingCacheEntries({
+        cacheIndex,
+        candidateNumbers,
+        client,
+        repository,
+        authorCountCache,
       })
     ) {
       cacheModified = true;

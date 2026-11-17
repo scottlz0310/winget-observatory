@@ -325,7 +325,7 @@ describe("orchestrateSampleCollection", () => {
     expect(result.cacheModified).toBeTrue();
     const updated901 = result.finalCache.find((c) => c.Number === 901 && c.Type === "sample");
     expect(updated901?.Type === "sample" && updated901.FirstTimerReason).toBe("recurring-author");
-    expect(updated901?.Type === "sample" && updated901.FirstTimerVersion).toBe(3);
+    expect(updated901?.Type === "sample" && updated901.FirstTimerVersion).toBe(4);
   });
 
   it("旧版 no-ready スキップキャッシュ（Waived-*-Error 付き PR）を再評価し、空キャッシュ時と同一のサンプル・ReadyAt・初回判定を得る", async () => {
@@ -486,7 +486,7 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples[0]?.days).toBe(4);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(3);
+    expect(result.samples[0]?.firstTimerVersion).toBe(4);
   });
 
   it("新版（FirstTimerVersion: 3）で記録済みの no-ready キャッシュは再取得せずスキップを維持する", async () => {
@@ -640,5 +640,183 @@ describe("orchestrateSampleCollection", () => {
     expect(saved1001?.Type === "sample" && saved1001.FirstTimerReason).toBe("recurring-author");
     expect(saved1002?.Type === "sample" && saved1002.IsFirstTimer).toBeFalse();
     expect(saved1002?.Type === "sample" && saved1002.FirstTimerReason).toBe("recurring-author");
+  });
+
+  it("過去の阻害ラベル履歴（needsCLA 等）・Draft 履歴・複数コミットがあっても、生涯マージ 1 件なら IsFirstTimer: true になる", async () => {
+    const client: SampleCollectorClient = {
+      getPullRequestSampleData: async () => ({
+        createdAt: "2026-10-01T00:00:00Z",
+        commitCount: 4,
+        latestCommittedDate: "2026-10-03T00:00:00Z",
+        author: "first-timer-with-cla",
+        timeline: [
+          {
+            event: "labeled",
+            created_at: "2026-10-01T00:05:00Z",
+            label: { name: "needsCLA" },
+          },
+          {
+            event: "unlabeled",
+            created_at: "2026-10-01T01:00:00Z",
+            label: { name: "needsCLA" },
+          },
+          {
+            event: "converted_to_draft",
+            created_at: "2026-10-01T02:00:00Z",
+          },
+          {
+            event: "ready_for_review",
+            created_at: "2026-10-02T00:00:00Z",
+          },
+          {
+            event: "labeled",
+            created_at: "2026-10-03T01:00:00Z",
+            label: { name: "New-Package" },
+          },
+          {
+            event: "labeled",
+            created_at: "2026-10-03T01:00:00Z",
+            label: { name: "Azure-Pipeline-Passed" },
+          },
+          {
+            event: "labeled",
+            created_at: "2026-10-03T01:00:00Z",
+            label: { name: "Validation-Completed" },
+          },
+        ],
+      }),
+      graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
+    };
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [createSearchItem(449315, "2026-10-10T00:00:00Z", "first-timer-with-cla")],
+      overallSinceDate: new Date("2026-09-01T00:00:00Z"),
+      fetchBudget: 5,
+      initialCache: [],
+    });
+
+    expect(result.samples).toHaveLength(1);
+    expect(result.samples[0]?.isFirstTimer).toBeTrue();
+    expect(result.samples[0]?.firstTimerReason).toBeUndefined();
+    expect(result.samples[0]?.firstTimerVersion).toBe(4);
+    const saved = result.finalCache.find((e) => e.Number === 449315);
+    expect(saved?.Type === "sample" && saved.IsFirstTimer).toBeTrue();
+    expect(saved?.Type === "sample" && saved.FirstTimerReason).toBeUndefined();
+    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(4);
+  });
+
+  it("Author 保存済みの既存 timeline-blocking レコードはタイムラインを再取得せず GraphQL 累計マージ判定のみで IsFirstTimer: true 等へ昇格・更新される", async () => {
+    const initialCache: SampleCacheEntry[] = [
+      {
+        Type: "sample",
+        Number: 449315,
+        Title: "New package: FirstTimer",
+        CreatedAt: "2026-10-09T04:14:06Z",
+        LatestCommittedDate: "2026-10-09T04:13:31.000Z",
+        CommitCount: 2,
+        ReadyAt: "2026-10-09T05:06:26.000Z",
+        MergedAt: "2026-11-16T15:59:28.000Z",
+        TotalDays: 38.49,
+        TurnDays: 38.49,
+        ReadyDays: 38.45,
+        Author: "tamakichi23",
+        IsFirstTimer: false,
+        FirstTimerReason: "timeline-blocking",
+        FirstTimerVersion: 3,
+      },
+      {
+        Type: "sample",
+        Number: 449375,
+        Title: "New package: RepeatContributor",
+        CreatedAt: "2026-10-09T07:15:41Z",
+        LatestCommittedDate: "2026-10-09T07:15:37.000Z",
+        CommitCount: 1,
+        ReadyAt: "2026-10-10T01:16:01.000Z",
+        MergedAt: "2026-11-16T19:44:14.000Z",
+        TotalDays: 38.52,
+        TurnDays: 38.52,
+        ReadyDays: 37.77,
+        Author: "repeat-author",
+        IsFirstTimer: false,
+        FirstTimerReason: "timeline-blocking",
+        FirstTimerVersion: 3,
+      },
+      // 走査窓外の古いキャッシュ（candidates に含まれない）も Author 照会で救済される
+      {
+        Type: "sample",
+        Number: 411138,
+        Title: "Older FirstTimer",
+        CreatedAt: "2026-06-01T00:00:00Z",
+        LatestCommittedDate: "2026-06-01T00:00:00Z",
+        CommitCount: 1,
+        ReadyAt: "2026-06-02T00:00:00Z",
+        MergedAt: "2026-07-01T00:00:00Z",
+        TotalDays: 30,
+        TurnDays: 30,
+        ReadyDays: 29,
+        Author: "older-first-timer",
+        IsFirstTimer: false,
+        FirstTimerReason: "timeline-blocking",
+        FirstTimerVersion: 3,
+      },
+    ];
+
+    let sampleDataCalled = 0;
+    const graphqlQueries: string[] = [];
+    const client: SampleCollectorClient = {
+      getPullRequestSampleData: async () => {
+        sampleDataCalled++;
+        return {} as ProgressPrSampleData;
+      },
+      graphql: async <T = unknown>(query: string) => {
+        graphqlQueries.push(query);
+        if (query.includes("author:older-first-timer")) {
+          return { u_0: { issueCount: 1 } } as T;
+        }
+        return {
+          u_0: { issueCount: 1 }, // tamakichi23
+          u_1: { issueCount: 4 }, // repeat-author
+        } as T;
+      },
+    };
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [
+        createSearchItem(449315, "2026-11-16T15:59:28.000Z", "tamakichi23"),
+        createSearchItem(449375, "2026-11-16T19:44:14.000Z", "repeat-author"),
+      ],
+      overallSinceDate: new Date("2026-10-18T00:00:00Z"),
+      fetchBudget: 10,
+      initialCache,
+    });
+
+    expect(sampleDataCalled).toBe(0);
+    expect(result.fetchedCount).toBe(0);
+    expect(graphqlQueries).toHaveLength(2);
+    expect(result.cacheModified).toBeTrue();
+
+    const s449315 = result.samples.find((s) => s.number === 449315);
+    expect(s449315?.isFirstTimer).toBeTrue();
+    expect(s449315?.firstTimerReason).toBeUndefined();
+    expect(s449315?.firstTimerVersion).toBe(4);
+
+    const s449375 = result.samples.find((s) => s.number === 449375);
+    expect(s449375?.isFirstTimer).toBeFalse();
+    expect(s449375?.firstTimerReason).toBe("lifetime-merged");
+    expect(s449375?.firstTimerVersion).toBe(4);
+
+    const c449315 = result.finalCache.find((e) => e.Number === 449315);
+    expect(c449315?.Type === "sample" && c449315.IsFirstTimer).toBeTrue();
+    expect(c449315?.Type === "sample" && c449315.FirstTimerReason).toBeUndefined();
+    expect(c449315?.Type === "sample" && c449315.FirstTimerVersion).toBe(4);
+
+    const c411138 = result.finalCache.find((e) => e.Number === 411138);
+    expect(c411138?.Type === "sample" && c411138.IsFirstTimer).toBeTrue();
+    expect(c411138?.Type === "sample" && c411138.FirstTimerReason).toBeUndefined();
+    expect(c411138?.Type === "sample" && c411138.FirstTimerVersion).toBe(4);
   });
 });
