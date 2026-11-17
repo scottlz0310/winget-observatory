@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  extractFirstTimerFastestRanking,
   fromCachedSample,
   indexSampleCache,
   parseSampleCache,
@@ -184,5 +185,58 @@ describe("Domain: indexSampleCache", () => {
     expect((index.get(42) as CachedSampleEntry).Title).toBe("first");
     expect(index.get(43)).toBe(other);
     expect(index.get(99)).toBeUndefined();
+  });
+});
+
+describe("Domain: extractFirstTimerFastestRanking", () => {
+  test("Type=sample のみ対象・Number重複は後続行優先・IsFirstTimer=true のみを TotalDays 昇順 TOP 10 で抽出する", () => {
+    const firstTimerEntries: CachedSampleEntry[] = Array.from({ length: 12 }, (_, idx) =>
+      entry({
+        Number: 100 + idx,
+        Title: `FT #${100 + idx}`,
+        TotalDays: 20 - idx, // 20, 19, ..., 9 -> 昇順では 111(9日), 110(10日), ..., 102(18日) が上位10件
+        TurnDays: 1.5,
+        ReadyDays: 1.0,
+        IsFirstTimer: true,
+        MergedAt: "2026-08-01T00:00:00.000Z", // 30日超の古いデータも含める
+      }),
+    );
+
+    const mixedEntries: SampleCacheEntry[] = [
+      // 先に IsFirstTimer=true で記録されたが、後続行で false に再評価された -> 除外されること
+      entry({ Number: 201, Title: "Disqualified later", TotalDays: 0.1, IsFirstTimer: true }),
+      // 先に IsFirstTimer=false だったが、後続行で true かつ TotalDays=0.5 に更新 -> 採用され1位になること
+      entry({ Number: 202, Title: "Promoted later old", TotalDays: 50, IsFirstTimer: false }),
+      // skipped 行、IsFirstTimer=false、IsFirstTimer 未設定 -> 除外
+      { Type: "skipped", Number: 203, MergedAt: "2026-10-01T00:00:00Z", Reason: "no-ready" },
+      entry({ Number: 204, TotalDays: 0.2, IsFirstTimer: false }),
+      entry({ Number: 205, TotalDays: 0.3 }), // IsFirstTimer undefined
+      ...firstTimerEntries,
+      // 後続行の上書き
+      entry({ Number: 201, Title: "Disqualified now", TotalDays: 0.1, IsFirstTimer: false }),
+      entry({ Number: 202, Title: "Promoted later new", TotalDays: 0.5, IsFirstTimer: true }),
+    ];
+
+    const ranking = extractFirstTimerFastestRanking(mixedEntries);
+    expect(ranking.totalCount).toBe(13); // firstTimerEntries 12件 + #202 1件
+    expect(ranking.items).toHaveLength(10);
+    expect(ranking.items.map((item) => item.Number)).toEqual([
+      202, 111, 110, 109, 108, 107, 106, 105, 104, 103,
+    ]);
+    expect(ranking.items[0].Title).toBe("Promoted later new");
+    expect(ranking.items[0].TotalDays).toBe(0.5);
+  });
+
+  test("同点の TotalDays は TurnDays / ReadyDays / Number の順で安定ソートし、空入力時は 0 件を返す", () => {
+    const tied: SampleCacheEntry[] = [
+      entry({ Number: 302, TotalDays: 2.0, TurnDays: 1.5, ReadyDays: 1.0, IsFirstTimer: true }),
+      entry({ Number: 301, TotalDays: 2.0, TurnDays: 1.5, ReadyDays: 1.0, IsFirstTimer: true }),
+      entry({ Number: 303, TotalDays: 2.0, TurnDays: 1.0, ReadyDays: 1.0, IsFirstTimer: true }),
+    ];
+
+    const ranking = extractFirstTimerFastestRanking(tied);
+    expect(ranking.totalCount).toBe(3);
+    expect(ranking.items.map((i) => i.Number)).toEqual([303, 301, 302]);
+    expect(extractFirstTimerFastestRanking([])).toEqual({ totalCount: 0, items: [] });
   });
 });

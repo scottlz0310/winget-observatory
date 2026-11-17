@@ -4,7 +4,11 @@
  */
 
 import type { MergedCandidateSample } from "../models/progress";
-import type { CachedSampleEntry, SampleCacheEntry } from "../models/sample-cache";
+import type {
+  CachedSampleEntry,
+  FirstTimerFastestRanking,
+  SampleCacheEntry,
+} from "../models/sample-cache";
 
 /** 統計に採用したサンプルを、キャッシュの 1 件にする */
 export function toCachedSample(sample: MergedCandidateSample): CachedSampleEntry {
@@ -165,4 +169,40 @@ export function indexSampleCache(entries: SampleCacheEntry[]): Map<number, Sampl
 /** 追記用の JSONL（各行の末尾に改行）にする。空配列なら空文字列 */
 export function serializeSampleCacheEntries(entries: SampleCacheEntry[]): string {
   return entries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+}
+
+/** 初回提出者 最速マージランキングの既定表示上限件数 */
+export const FIRST_TIMER_FASTEST_RANKING_LIMIT = 10;
+
+/**
+ * 蓄積済みサンプルキャッシュから、初回提出者（IsFirstTimer === true）の
+ * 最速マージランキング（TotalDays 昇順・上位 limit 件）を抽出する。
+ *
+ * - Type === "sample" のみを対象に Number キーで重複排除する（後続行優先）
+ * - 期間フィルタは行わず蓄積全件を対象とし、該当全件数（totalCount）も返す
+ */
+export function extractFirstTimerFastestRanking(
+  entries: readonly SampleCacheEntry[],
+  limit = FIRST_TIMER_FASTEST_RANKING_LIMIT,
+): FirstTimerFastestRanking {
+  const latestByNumber = new Map<number, CachedSampleEntry>();
+  for (const entry of entries) {
+    if (entry.Type !== "sample") continue;
+    latestByNumber.set(entry.Number, entry);
+  }
+
+  const firstTimers = [...latestByNumber.values()].filter((entry) => entry.IsFirstTimer === true);
+  firstTimers.sort(
+    (a, b) =>
+      a.TotalDays - b.TotalDays ||
+      a.TurnDays - b.TurnDays ||
+      a.ReadyDays - b.ReadyDays ||
+      a.Number - b.Number,
+  );
+
+  const safeLimit = Math.max(0, limit);
+  return {
+    totalCount: firstTimers.length,
+    items: firstTimers.slice(0, safeLimit),
+  };
 }
