@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   calculateBackoffDelay,
+  computeRetryMinDelayMs,
   GET_PULL_REQUEST_DETAILS_QUERY,
   GET_PULL_REQUEST_TIMELINE_QUERY,
   GET_PULL_REQUEST_VIEW_QUERY,
@@ -9,7 +10,9 @@ import {
   GitHubApiError,
   GitHubGraphQLError,
   isPrNotFoundGraphQLError,
+  isRetryableHttpResponse,
   isRetryableStatusCode,
+  isSecondaryRateLimitResponse,
   parseRepository,
   parseRetryAfterMs,
   RETRYABLE_STATUS_CODES,
@@ -1529,6 +1532,138 @@ describe("API: GitHubApiClient", () => {
       expect(sleepDelays).toEqual([2000]);
     });
 
+    test("403 セカンダリレート制限（Retry-After なし）をリトライ対象として 60 秒以上待機し回復する", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts === 1) {
+          return new Response(
+            JSON.stringify({
+              documentation_url:
+                "https://docs.github.com/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api#secondary-rate-limits",
+              message:
+                "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+            }),
+            { status: 403 },
+          );
+        }
+        return new Response(JSON.stringify({ data: { test: "recovered-403" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 2000,
+          maxJitterMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      const result = await client.graphql<{ test: string }>("query { test }");
+      expect(result).toEqual({ test: "recovered-403" });
+      expect(attempts).toBe(2);
+      expect(sleepDelays).toEqual([60000]);
+      expect(warnLogs[0]).toContain("セカンダリレート制限");
+      expect(warnLogs[0]).toContain("status: 403");
+    });
+
+    test("403 セカンダリレート制限の Retry-After ヘッダーと secondaryRateLimitDelayMs / maxRetryDelayMs 上限を尊重する", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts === 1) {
+          return new Response("You have exceeded a secondary rate limit.", {
+            status: 403,
+            headers: { "Retry-After": "45" },
+          });
+        }
+        if (attempts === 2) {
+          return new Response("You have exceeded a secondary rate limit.", {
+            status: 403,
+            headers: { "Retry-After": "999" },
+          });
+        }
+        return new Response(JSON.stringify({ data: { test: "ok" } }), { status: 200 });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 1000,
+          maxJitterMs: 0,
+          maxRetryDelayMs: 120000,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: () => {},
+        },
+      });
+
+      const result = await client.graphql<{ test: string }>("query { test }");
+      expect(result).toEqual({ test: "ok" });
+      expect(attempts).toBe(3);
+      expect(sleepDelays).toEqual([45000, 120000]);
+    });
+
+    test("適応的クールダウン: 正常時は 0ms で通過し、一時エラー発生後のみ指定回数だけ後続リクエストを冷却する", async () => {
+      let callCount = 0;
+      const sleepDelays: number[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        callCount++;
+        // 2 回目（リトライ対象 502）だけ失敗し、3 回目（リトライ）以降は成功
+        if (callCount === 2) {
+          return new Response("Bad Gateway", { status: 502 });
+        }
+        return new Response(JSON.stringify({ data: { ok: callCount } }), { status: 200 });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 10,
+          maxJitterMs: 0,
+          adaptiveCooldownMs: 250,
+          adaptiveCooldownRequests: 2,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: () => {},
+        },
+      });
+
+      // 1 度目: エラーなし → sleep 0 回
+      await client.graphql("query { r1 }");
+      expect(sleepDelays).toEqual([]);
+
+      // 2 度目: 502 で 1 回リトライ（10ms）し、クールダウン発動
+      await client.graphql("query { r2 }");
+      expect(sleepDelays).toEqual([10]);
+
+      // 3・4 度目: クールダウン残り 2 回が消費される（各 250ms）
+      await client.graphql("query { r3 }");
+      await client.graphql("query { r4 }");
+      // 5 度目: クールダウン終了し 0ms へ戻る
+      await client.graphql("query { r5 }");
+      expect(sleepDelays).toEqual([10, 250, 250]);
+    });
+
     test("200 応答の本文受信中（ReadableStream）に接続切断が発生した場合にリトライして成功する", async () => {
       let attempts = 0;
       const sleepDelays: number[] = [];
@@ -1925,6 +2060,60 @@ describe("API: GitHubApiClient", () => {
         expect(isRetryableStatusCode(status)).toBe(false);
       },
     );
+  });
+
+  describe("isSecondaryRateLimitResponse / isRetryableHttpResponse / computeRetryMinDelayMs", () => {
+    test.each([
+      { status: 429, body: "", retryAfter: null, expected: true },
+      {
+        status: 403,
+        body: '{"message":"You have exceeded a secondary rate limit. Please wait."}',
+        retryAfter: null,
+        expected: true,
+      },
+      { status: 403, body: "Forbidden", retryAfter: "60", expected: true },
+      {
+        status: 403,
+        body: "Resource not accessible by integration",
+        retryAfter: null,
+        expected: false,
+      },
+      { status: 403, body: "API rate limit exceeded", retryAfter: null, expected: false },
+      { status: 404, body: "Not Found", retryAfter: "60", expected: false },
+    ])(
+      "セカンダリレート制限判定 (status=$status, retryAfter=$retryAfter) -> $expected",
+      ({ status, body, retryAfter, expected }) => {
+        expect(isSecondaryRateLimitResponse(status, body, retryAfter)).toBe(expected);
+        expect(isRetryableHttpResponse(status, body, retryAfter)).toBe(expected);
+      },
+    );
+
+    test("computeRetryMinDelayMs は Retry-After を優先し、未指定のセカンダリレート制限には secondaryRateLimitDelayMs を返す", () => {
+      expect(
+        computeRetryMinDelayMs({
+          status: 403,
+          bodyText: "You have exceeded a secondary rate limit.",
+          retryAfterHeader: "30",
+          secondaryRateLimitDelayMs: 60000,
+        }),
+      ).toBe(30000);
+      expect(
+        computeRetryMinDelayMs({
+          status: 403,
+          bodyText: "You have exceeded a secondary rate limit.",
+          retryAfterHeader: null,
+          secondaryRateLimitDelayMs: 45000,
+        }),
+      ).toBe(45000);
+      expect(
+        computeRetryMinDelayMs({
+          status: 502,
+          bodyText: "Bad Gateway",
+          retryAfterHeader: null,
+          secondaryRateLimitDelayMs: 60000,
+        }),
+      ).toBe(0);
+    });
   });
 
   describe("calculateBackoffDelay", () => {

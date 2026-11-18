@@ -1644,7 +1644,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     }
   });
 
-  test("fetchFirstReviewMainstreamFrontier はオープンPRと merged-samples.jsonl キャッシュ・増分マージPRを合算し、ボット/常連を除外して中央値を算出する", async () => {
+  test("fetchFirstReviewMainstreamFrontier は軽量2段階SearchでオープンPRと merged-samples.jsonl キャッシュ・増分マージPRを合算し、ボット/常連をバッチ取得前に除外して中央値を算出する", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-mainstream-test-"));
     const samplesPath = join(tempDir, "merged-samples.jsonl");
     const now = new Date("2026-11-17T00:00:00Z");
@@ -1671,9 +1671,10 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       "utf-8",
     );
 
+    const batchedQueries: string[] = [];
     const mockClient = {
       graphql: async <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
-        if (query.includes("SearchInterventionCandidates")) {
+        if (query.includes("SearchInterventionLightCandidates")) {
           const searchQ = String(variables?.query ?? "");
           if (searchQ.includes("is:open")) {
             return {
@@ -1681,58 +1682,22 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
                 issueCount: 2,
                 pageInfo: { hasNextPage: false, endCursor: null },
                 nodes: [
-                  // 有効なオープン初回 PR #902（手動コメントが5日前）
                   {
                     number: 902,
-                    title: "Open First Timer 902",
-                    url: "https://github.com/microsoft/winget-pkgs/pull/902",
-                    state: "OPEN",
-                    createdAt: "2026-10-11T00:00:00Z",
-                    updatedAt: "2026-11-12T00:00:00Z",
-                    author: { __typename: "User", login: "open-ft" },
+                    author: { login: "open-ft" },
                     authorAssociation: "NONE",
-                    commits: { totalCount: 1 },
-                    comments: {
-                      nodes: [
-                        {
-                          author: { __typename: "Bot", login: "microsoft-github-policy-service" },
-                          body: "bot",
-                          createdAt: "2026-10-11T01:00:00Z",
-                        },
-                        {
-                          author: { __typename: "User", login: "stephengillie" },
-                          body: "Please check checksum",
-                          createdAt: "2026-11-12T00:00:00Z",
-                        },
-                      ],
-                    },
                   },
-                  // 常連 CONTRIBUTOR #903 → 除外
+                  // 常連 CONTRIBUTOR #903 → 軽量段階で除外され詳細バッチに入らない
                   {
                     number: 903,
-                    title: "Repeater 903",
-                    url: "https://github.com/microsoft/winget-pkgs/pull/903",
-                    state: "OPEN",
-                    createdAt: "2026-11-05T00:00:00Z",
-                    updatedAt: "2026-11-16T00:00:00Z",
-                    author: { __typename: "User", login: "repeater-open" },
+                    author: { login: "repeater-open" },
                     authorAssociation: "CONTRIBUTOR",
-                    commits: { totalCount: 1 },
-                    reviews: {
-                      nodes: [
-                        {
-                          author: { __typename: "User", login: "stephengillie" },
-                          state: "APPROVED",
-                          submittedAt: "2026-11-16T00:00:00Z",
-                        },
-                      ],
-                    },
                   },
                 ],
               },
             } as unknown as T;
           }
-          // キャッシュ以降の増分マージ PR #904（初回提出者・1日前に人間レビュー＋マージ）
+          // キャッシュ以降の増分マージ PR #904（#901 はキャッシュ済み初回なので Search 結果に出なくてもバッチに含まれる）
           return {
             search: {
               issueCount: 1,
@@ -1740,30 +1705,46 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
               nodes: [
                 {
                   number: 904,
-                  title: "Incremental Merged FT 904",
-                  url: "https://github.com/microsoft/winget-pkgs/pull/904",
-                  state: "MERGED",
-                  createdAt: "2026-10-21T00:00:00Z",
-                  updatedAt: "2026-11-16T12:00:00Z",
-                  mergedAt: "2026-11-16T12:00:00Z",
-                  author: { __typename: "User", login: "inc-ft" },
+                  author: { login: "inc-ft" },
                   authorAssociation: "CONTRIBUTOR",
-                  commits: { totalCount: 2 },
-                  reviews: {
-                    nodes: [
-                      {
-                        author: { __typename: "User", login: "trenly" },
-                        state: "APPROVED",
-                        submittedAt: "2026-11-16T12:00:00Z",
-                      },
-                    ],
-                  },
                 },
               ],
             },
           } as unknown as T;
         }
         if (query.includes("GetPullRequestInterventionBatch")) {
+          batchedQueries.push(query);
+          if (query.includes("number: 902")) {
+            return {
+              repository: {
+                pr0: {
+                  number: 902,
+                  title: "Open First Timer 902",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/902",
+                  state: "OPEN",
+                  createdAt: "2026-10-11T00:00:00Z",
+                  updatedAt: "2026-11-12T00:00:00Z",
+                  author: { __typename: "User", login: "open-ft" },
+                  authorAssociation: "NONE",
+                  commits: { totalCount: 1 },
+                  comments: {
+                    nodes: [
+                      {
+                        author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+                        body: "bot",
+                        createdAt: "2026-10-11T01:00:00Z",
+                      },
+                      {
+                        author: { __typename: "User", login: "stephengillie" },
+                        body: "Please check checksum",
+                        createdAt: "2026-11-12T00:00:00Z",
+                      },
+                    ],
+                  },
+                },
+              },
+            } as unknown as T;
+          }
           return {
             repository: {
               pr0: {
@@ -1783,6 +1764,27 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
                       author: { __typename: "User", login: "stephengillie" },
                       state: "APPROVED",
                       submittedAt: "2026-11-14T00:00:00Z",
+                    },
+                  ],
+                },
+              },
+              pr1: {
+                number: 904,
+                title: "Incremental Merged FT 904",
+                url: "https://github.com/microsoft/winget-pkgs/pull/904",
+                state: "MERGED",
+                createdAt: "2026-10-21T00:00:00Z",
+                updatedAt: "2026-11-16T12:00:00Z",
+                mergedAt: "2026-11-16T12:00:00Z",
+                author: { __typename: "User", login: "inc-ft" },
+                authorAssociation: "CONTRIBUTOR",
+                commits: { totalCount: 2 },
+                reviews: {
+                  nodes: [
+                    {
+                      author: { __typename: "User", login: "trenly" },
+                      state: "APPROVED",
+                      submittedAt: "2026-11-16T12:00:00Z",
                     },
                   ],
                 },
@@ -1817,6 +1819,8 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       expect(frontier.MedianCreatedAt).toBe("2026-10-11T00:00:00.000Z");
       expect(frontier.LagDays).toBe(37);
       expect(frontier.Items?.map((i) => i.Number)).toEqual([904, 901, 902]);
+      // 常連 CONTRIBUTOR #903 は軽量段階で除外され詳細バッチに含まれないこと
+      expect(batchedQueries.some((q) => q.includes("number: 903"))).toBe(false);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1859,12 +1863,12 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     );
 
     const queriedAuthors: string[] = [];
+    const batchedQueries: string[] = [];
     const mockClient = {
       graphql: async <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
-        if (query.includes("SearchInterventionCandidates")) {
+        if (query.includes("SearchInterventionLightCandidates")) {
           const searchQ = String(variables?.query ?? "");
           if (searchQ.includes("is:open")) {
-            // 11/15 に人間 AssignedEvent があるが現在は assignees: [] に解除されているオープン PR
             return {
               search: {
                 issueCount: 1,
@@ -1872,27 +1876,8 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
                 nodes: [
                   {
                     number: 960,
-                    title: "Unassigned After Event 960",
-                    url: "https://github.com/microsoft/winget-pkgs/pull/960",
-                    state: "OPEN",
-                    createdAt: "2026-10-08T00:00:00Z",
-                    updatedAt: "2026-11-16T00:00:00Z",
-                    author: { __typename: "User", login: "unassigned-open-ft" },
+                    author: { login: "unassigned-open-ft" },
                     authorAssociation: "NONE",
-                    commits: { totalCount: 1 },
-                    assignees: { nodes: [] },
-                    reviews: { nodes: [] },
-                    comments: { nodes: [] },
-                    timelineItems: {
-                      nodes: [
-                        {
-                          __typename: "AssignedEvent",
-                          createdAt: "2026-11-15T00:00:00Z",
-                          actor: { __typename: "User", login: "stephengillie" },
-                          assignee: { __typename: "User", login: "stephengillie" },
-                        },
-                      ],
-                    },
                   },
                 ],
               },
@@ -1907,47 +1892,74 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
               nodes: [
                 {
                   number: 950,
-                  title: "Uncached Earlier Merged FT 950",
-                  url: "https://github.com/microsoft/winget-pkgs/pull/950",
-                  state: "MERGED",
-                  createdAt: "2026-10-04T00:00:00Z",
-                  updatedAt: "2026-11-14T00:00:00Z",
-                  mergedAt: "2026-11-14T00:00:00Z",
-                  author: { __typename: "User", login: "uncached-merged-ft" },
+                  author: { login: "uncached-merged-ft" },
                   authorAssociation: "CONTRIBUTOR",
-                  commits: { totalCount: 1 },
-                  reviews: {
-                    nodes: [
-                      {
-                        author: { __typename: "User", login: "trenly" },
-                        state: "APPROVED",
-                        submittedAt: "2026-11-14T00:00:00Z",
-                      },
-                    ],
-                  },
                 },
                 {
                   number: 952,
-                  title: "Known Repeater",
-                  url: "https://github.com/microsoft/winget-pkgs/pull/952",
-                  state: "MERGED",
-                  createdAt: "2026-11-10T00:00:00Z",
-                  updatedAt: "2026-11-15T00:00:00Z",
-                  mergedAt: "2026-11-15T00:00:00Z",
-                  author: { __typename: "User", login: "known-repeater" },
+                  author: { login: "known-repeater" },
                   authorAssociation: "CONTRIBUTOR",
+                },
+              ],
+            },
+          } as unknown as T;
+        }
+        if (query.includes("GetPullRequestInterventionBatch")) {
+          batchedQueries.push(query);
+          if (query.includes("number: 960")) {
+            // 11/15 に人間 AssignedEvent があるが現在は assignees: [] に解除されているオープン PR
+            return {
+              repository: {
+                pr0: {
+                  number: 960,
+                  title: "Unassigned After Event 960",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/960",
+                  state: "OPEN",
+                  createdAt: "2026-10-08T00:00:00Z",
+                  updatedAt: "2026-11-16T00:00:00Z",
+                  author: { __typename: "User", login: "unassigned-open-ft" },
+                  authorAssociation: "NONE",
                   commits: { totalCount: 1 },
-                  reviews: {
+                  assignees: { nodes: [] },
+                  reviews: { nodes: [] },
+                  comments: { nodes: [] },
+                  timelineItems: {
                     nodes: [
                       {
-                        author: { __typename: "User", login: "trenly" },
-                        state: "APPROVED",
-                        submittedAt: "2026-11-15T00:00:00Z",
+                        __typename: "AssignedEvent",
+                        createdAt: "2026-11-15T00:00:00Z",
+                        actor: { __typename: "User", login: "stephengillie" },
+                        assignee: { __typename: "User", login: "stephengillie" },
                       },
                     ],
                   },
                 },
-              ],
+              },
+            } as unknown as T;
+          }
+          return {
+            repository: {
+              pr0: {
+                number: 950,
+                title: "Uncached Earlier Merged FT 950",
+                url: "https://github.com/microsoft/winget-pkgs/pull/950",
+                state: "MERGED",
+                createdAt: "2026-10-04T00:00:00Z",
+                updatedAt: "2026-11-14T00:00:00Z",
+                mergedAt: "2026-11-14T00:00:00Z",
+                author: { __typename: "User", login: "uncached-merged-ft" },
+                authorAssociation: "CONTRIBUTOR",
+                commits: { totalCount: 1 },
+                reviews: {
+                  nodes: [
+                    {
+                      author: { __typename: "User", login: "trenly" },
+                      state: "APPROVED",
+                      submittedAt: "2026-11-14T00:00:00Z",
+                    },
+                  ],
+                },
+              },
             },
           } as unknown as T;
         }
@@ -1970,14 +1982,117 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
         samplesPath,
       });
 
-      // #950 (10/04 MERGED) と #960 (10/08 OPEN) の 2 件が拾われ、#952 (known-repeater) は著者照会せずスキップ
+      // #950 (10/04 MERGED) と #960 (10/08 OPEN) の 2 件が拾われ、#952 (known-repeater) は詳細バッチ・著者照会ともにスキップ
       expect(frontier.CohortCount).toBe(2);
       expect(frontier.OpenCount).toBe(1);
       expect(frontier.MergedCount).toBe(1);
       expect(frontier.MedianCreatedAt).toBe("2026-10-06T00:00:00.000Z");
       expect(queriedAuthors.some((q) => q.includes("known-repeater"))).toBe(false);
+      expect(batchedQueries.some((q) => q.includes("number: 952"))).toBe(false);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("主戦場ラインは1000件超検索の動的二分分割とbatchSize分割を経ても重複なく全候補を集計する", async () => {
+    const now = new Date("2026-11-17T00:00:00Z");
+    const midIso = "2026-11-13T12:00:00.000Z";
+    const batchSizesSeen: number[] = [];
+
+    const mockClient = {
+      graphql: async <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
+        if (query.includes("SearchInterventionLightCandidates")) {
+          const searchQ = String(variables?.query ?? "");
+          if (searchQ.includes("is:open")) {
+            if (searchQ.includes("2026-11-10T00:00:00.000Z..2026-11-17T00:00:00.000Z")) {
+              return {
+                search: {
+                  issueCount: 1200,
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [],
+                },
+              } as unknown as T;
+            }
+            if (searchQ.includes(`..${midIso}`)) {
+              return {
+                search: {
+                  issueCount: 2,
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    { number: 971, author: { login: "ft-971" }, authorAssociation: "NONE" },
+                    { number: 972, author: { login: "ft-972" }, authorAssociation: "NONE" },
+                  ],
+                },
+              } as unknown as T;
+            }
+            // 後半スライスに重複 PR #972 と新規 PR #973
+            return {
+              search: {
+                issueCount: 2,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  { number: 972, author: { login: "ft-972" }, authorAssociation: "NONE" },
+                  { number: 973, author: { login: "ft-973" }, authorAssociation: "NONE" },
+                ],
+              },
+            } as unknown as T;
+          }
+          return {
+            search: { issueCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          } as unknown as T;
+        }
+        if (query.includes("GetPullRequestInterventionBatch")) {
+          const nums = [...query.matchAll(/pullRequest\(number:\s*(\d+)\)/g)].map((m) =>
+            Number(m[1]),
+          );
+          batchSizesSeen.push(nums.length);
+          const repo: Record<string, unknown> = {};
+          nums.forEach((num, idx) => {
+            repo[`pr${idx}`] = {
+              number: num,
+              title: `Open ${num}`,
+              url: `https://github.com/microsoft/winget-pkgs/pull/${num}`,
+              state: "OPEN",
+              createdAt:
+                num === 971
+                  ? "2026-10-01T00:00:00Z"
+                  : num === 972
+                    ? "2026-10-05T00:00:00Z"
+                    : "2026-10-09T00:00:00Z",
+              updatedAt: "2026-11-14T00:00:00Z",
+              author: { __typename: "User", login: `ft-${num}` },
+              authorAssociation: "NONE",
+              commits: { totalCount: 1 },
+              reviews: {
+                nodes: [
+                  {
+                    author: { __typename: "User", login: "stephengillie" },
+                    state: "COMMENTED",
+                    submittedAt: "2026-11-14T00:00:00Z",
+                  },
+                ],
+              },
+            };
+          });
+          return { repository: repo } as unknown as T;
+        }
+        if (query.includes("author:")) {
+          return { u_0: { issueCount: 0 }, u_1: { issueCount: 0 }, u_2: { issueCount: 0 } } as T;
+        }
+        return {} as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const frontier = await fetchFirstReviewMainstreamFrontier({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      now,
+      batchSize: 2,
+    });
+
+    // 重複排除されて 3 件 (#971, #972, #973) が batchSize=2 (2件 + 1件) で取得される
+    expect(batchSizesSeen).toEqual([2, 1]);
+    expect(frontier.CohortCount).toBe(3);
+    expect(frontier.MedianCreatedAt).toBe("2026-10-05T00:00:00.000Z");
   });
 });

@@ -51,12 +51,19 @@ import type {
 } from "./graphql-types";
 import {
   calculateBackoffDelay,
+  computeRetryMinDelayMs,
+  DEFAULT_ADAPTIVE_COOLDOWN_MS,
+  DEFAULT_ADAPTIVE_COOLDOWN_REQUESTS,
+  DEFAULT_MAX_RETRY_DELAY_MS,
+  DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS,
   GitHubApiError,
   GitHubGraphQLError,
   type GraphQLErrorDetail,
   type GraphQLRetryOptions,
   isPrNotFoundGraphQLError,
+  isRetryableHttpResponse,
   isRetryableStatusCode,
+  isSecondaryRateLimitResponse,
   parseRetryAfterMs,
   RETRYABLE_STATUS_CODES,
 } from "./retry";
@@ -75,6 +82,11 @@ export type {
 };
 export {
   calculateBackoffDelay,
+  computeRetryMinDelayMs,
+  DEFAULT_ADAPTIVE_COOLDOWN_MS,
+  DEFAULT_ADAPTIVE_COOLDOWN_REQUESTS,
+  DEFAULT_MAX_RETRY_DELAY_MS,
+  DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS,
   GET_PULL_REQUEST_DETAILS_QUERY,
   GET_PULL_REQUEST_SAMPLE_QUERY,
   GET_PULL_REQUEST_STATE_QUERY,
@@ -84,7 +96,9 @@ export {
   GitHubApiError,
   GitHubGraphQLError,
   isPrNotFoundGraphQLError,
+  isRetryableHttpResponse,
   isRetryableStatusCode,
+  isSecondaryRateLimitResponse,
   parseRetryAfterMs,
   RETRYABLE_STATUS_CODES,
   SEARCH_COUNT_QUERY,
@@ -331,6 +345,11 @@ export class GitHubApiClient {
   private readonly maxRetries: number;
   private readonly baseDelayMs: number;
   private readonly maxJitterMs: number;
+  private readonly secondaryRateLimitDelayMs: number;
+  private readonly maxRetryDelayMs: number;
+  private readonly adaptiveCooldownMs: number;
+  private readonly adaptiveCooldownRequests: number;
+  private cooldownRemainingRequests = 0;
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly warnLogFn: (message: string) => void;
 
@@ -341,6 +360,12 @@ export class GitHubApiClient {
     this.maxRetries = options.retry?.maxRetries ?? 3;
     this.baseDelayMs = options.retry?.baseDelayMs ?? 2000;
     this.maxJitterMs = options.retry?.maxJitterMs ?? 500;
+    this.secondaryRateLimitDelayMs =
+      options.retry?.secondaryRateLimitDelayMs ?? DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS;
+    this.maxRetryDelayMs = options.retry?.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+    this.adaptiveCooldownMs = options.retry?.adaptiveCooldownMs ?? DEFAULT_ADAPTIVE_COOLDOWN_MS;
+    this.adaptiveCooldownRequests =
+      options.retry?.adaptiveCooldownRequests ?? DEFAULT_ADAPTIVE_COOLDOWN_REQUESTS;
     this.sleepFn =
       options.retry?.sleep ??
       ((ms: number) =>
@@ -453,9 +478,27 @@ export class GitHubApiClient {
     );
   }
 
+  private activateCooldown(): void {
+    if (this.adaptiveCooldownMs > 0 && this.adaptiveCooldownRequests > 0) {
+      this.cooldownRemainingRequests = this.adaptiveCooldownRequests;
+    }
+  }
+
+  private async waitAdaptiveCooldown(): Promise<void> {
+    if (this.cooldownRemainingRequests <= 0) {
+      return;
+    }
+    this.cooldownRemainingRequests--;
+    if (this.adaptiveCooldownMs > 0) {
+      await this.sleepFn(this.adaptiveCooldownMs);
+    }
+  }
+
   private async waitBeforeRetry(attempt: number, reason: string, minDelayMs = 0): Promise<void> {
+    this.activateCooldown();
     const exponentialDelay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
-    const delay = minDelayMs > 0 ? Math.max(exponentialDelay, minDelayMs) : exponentialDelay;
+    const rawDelay = minDelayMs > 0 ? Math.max(exponentialDelay, minDelayMs) : exponentialDelay;
+    const delay = this.maxRetryDelayMs > 0 ? Math.min(rawDelay, this.maxRetryDelayMs) : rawDelay;
     this.warnLogFn(
       `[GitHub GraphQL] ${reason}。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
     );
@@ -742,7 +785,7 @@ export class GitHubApiClient {
 
   /**
    * GitHub GraphQL API を呼び出し、data フィールドを返す。
-   * 一時的なネットワークエラーや 502/503/504/429 では指数バックオフ付きで自動リトライする。
+   * 一時的なネットワークエラーや 502/503/504/429・403 セカンダリレート制限では指数バックオフ・Retry-After 付きで自動リトライする。
    *
    * @param query GraphQL クエリ文字列
    * @param variables クエリ変数（省略可）
@@ -756,6 +799,8 @@ export class GitHubApiClient {
         401,
       );
     }
+
+    await this.waitAdaptiveCooldown();
 
     const url = `${this.baseUrl}/graphql`;
     const headers = {
@@ -803,15 +848,23 @@ export class GitHubApiClient {
           `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): ${rawText}`,
           res.status,
         );
+        const retryAfterHeader = res.headers.get("retry-after");
 
-        if (isRetryableStatusCode(res.status) && attempt <= this.maxRetries) {
+        if (
+          isRetryableHttpResponse(res.status, rawText, retryAfterHeader) &&
+          attempt <= this.maxRetries
+        ) {
           lastError = apiError;
-          const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
-          await this.waitBeforeRetry(
-            attempt,
-            `一時エラーが発生しました (status: ${res.status})`,
-            retryAfterMs,
-          );
+          const minDelayMs = computeRetryMinDelayMs({
+            status: res.status,
+            bodyText: rawText,
+            retryAfterHeader,
+            secondaryRateLimitDelayMs: this.secondaryRateLimitDelayMs,
+          });
+          const reason = isSecondaryRateLimitResponse(res.status, rawText, retryAfterHeader)
+            ? `セカンダリレート制限に達しました (status: ${res.status})`
+            : `一時エラーが発生しました (status: ${res.status})`;
+          await this.waitBeforeRetry(attempt, reason, minDelayMs);
           continue;
         }
 
