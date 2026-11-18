@@ -63,6 +63,10 @@ interface CachedCandidateResolution {
   updatedEntry?: SampleCacheEntry;
 }
 
+function hasValidatedReadyVersion(version: number | undefined): boolean {
+  return version !== undefined && version >= MIN_VALIDATION_GUIDE_READY_VERSION;
+}
+
 function createSkippedEntry(
   prNumber: number,
   mergedAt: Date,
@@ -141,15 +145,14 @@ function resolveCachedCandidate(params: {
       cached.CommitCount > 1 &&
       candAuthorCount > 1
     ) {
-      const hasValidatedReady =
-        cached.FirstTimerVersion !== undefined &&
-        cached.FirstTimerVersion >= MIN_VALIDATION_GUIDE_READY_VERSION;
       return {
         needsReevaluation: false,
         updatedEntry: {
           ...cached,
           FirstTimerReason: "recurring-author",
-          ...(hasValidatedReady ? { FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION } : {}),
+          ...(hasValidatedReadyVersion(cached.FirstTimerVersion)
+            ? { FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION }
+            : {}),
         },
       };
     }
@@ -247,7 +250,9 @@ function syncFirstTimerMetadataToCache(
   const updated: CachedSampleEntry = {
     ...cached,
     IsFirstTimer: sample.isFirstTimer,
-    FirstTimerVersion: sample.firstTimerVersion,
+    ...(sample.firstTimerVersion !== undefined
+      ? { FirstTimerVersion: sample.firstTimerVersion }
+      : {}),
   };
   if (sample.firstTimerReason !== undefined) {
     updated.FirstTimerReason = sample.firstTimerReason;
@@ -281,7 +286,9 @@ function markRecurringBatchAuthors(
     if ((countInCandidates > 1 || countInSamples > 1) && s.isFirstTimer !== false) {
       s.isFirstTimer = false;
       s.firstTimerReason = "recurring-author";
-      s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+      if (hasValidatedReadyVersion(s.firstTimerVersion)) {
+        s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+      }
       if (syncFirstTimerMetadataToCache(cacheIndex, s)) {
         modified = true;
       }
@@ -321,7 +328,9 @@ async function resolveSingleHitAuthorMergedCounts(params: {
     if (count === undefined) continue;
 
     s.isFirstTimer = count === 1;
-    s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+    if (hasValidatedReadyVersion(s.firstTimerVersion)) {
+      s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+    }
     if (count !== 1) {
       s.firstTimerReason = "lifetime-merged";
     } else {

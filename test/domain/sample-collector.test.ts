@@ -847,6 +847,118 @@ describe("orchestrateSampleCollection", () => {
     expect(migratedResult.finalCache).toEqual(emptyResult.finalCache);
   });
 
+  it("予算枯渇時に markRecurringBatchAuthors 等で著者判定のみ更新されても未再計測 v4 キャッシュを v5 へ昇格させず、次回の予算あり実行で ReadyAt / ReadyDays を再計測する", async () => {
+    const guideTimeline: ProgressTimelineEvent[] = [
+      { event: "labeled", created_at: "2026-11-01T00:00:00Z", label: { name: "New-Package" } },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Azure-Pipeline-Passed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Validation-Completed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-02T00:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+      {
+        event: "unlabeled",
+        created_at: "2026-11-15T00:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+    ];
+
+    let sampleFetches = 0;
+    const client: SampleCollectorClient = {
+      getPullRequestSampleData: async () => {
+        sampleFetches++;
+        return {
+          createdAt: "2026-11-01T00:00:00Z",
+          commitCount: 1,
+          latestCommittedDate: "2026-11-01T00:00:00Z",
+          author: "batch-repeat-user",
+          timeline: guideTimeline,
+        };
+      },
+      graphql: async <T = unknown>() => ({}) as T,
+    };
+
+    const candidates = [
+      createSearchItem(1211, "2026-11-17T00:00:00Z", "batch-repeat-user"),
+      createSearchItem(1212, "2026-11-17T00:00:00Z", "batch-repeat-user"),
+    ];
+    const overallSinceDate = new Date("2026-10-18T00:00:00Z");
+
+    const v4InitialCache: SampleCacheEntry[] = [1211, 1212].map((num) => ({
+      Type: "sample",
+      Number: num,
+      Title: `PR #${num}`,
+      CreatedAt: "2026-11-01T00:00:00Z",
+      LatestCommittedDate: "2026-11-01T00:00:00Z",
+      CommitCount: 1,
+      ReadyAt: "2026-11-01T00:00:00.000Z",
+      MergedAt: "2026-11-17T00:00:00.000Z",
+      TotalDays: 16,
+      TurnDays: 16,
+      ReadyDays: 16,
+      Author: "batch-repeat-user",
+      IsFirstTimer: true,
+      FirstTimerVersion: 4,
+    }));
+
+    // 第 1 回実行: 予算枯渇 (fetchBudget=0) で markRecurringBatchAuthors が動作
+    const firstRun = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 0,
+      initialCache: v4InitialCache,
+    });
+
+    expect(sampleFetches).toBe(0);
+    expect(firstRun.fetchedCount).toBe(0);
+    expect(firstRun.cacheModified).toBeTrue();
+    for (const num of [1211, 1212]) {
+      const saved = firstRun.finalCache.find((e) => e.Number === num);
+      expect(saved?.Type === "sample" && saved.IsFirstTimer).toBeFalse();
+      expect(saved?.Type === "sample" && saved.FirstTimerReason).toBe("recurring-author");
+      // 未再計測のため v4 のまま維持（v5 へ昇格させない）
+      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(4);
+    }
+
+    // 第 2 回実行: 予算あり (fetchBudget=10) でタイムライン再取得が走り、ReadyAt=11/15・ReadyDays=2・v5 へ修復される
+    const secondRun = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 10,
+      initialCache: firstRun.finalCache,
+    });
+
+    expect(sampleFetches).toBe(2);
+    expect(secondRun.fetchedCount).toBe(2);
+    expect(secondRun.samples).toHaveLength(2);
+    for (const s of secondRun.samples) {
+      expect(s.readyAt).toBe("2026-11-15T00:00:00.000Z");
+      expect(s.days).toBe(2);
+      expect(s.isFirstTimer).toBeFalse();
+      expect(s.firstTimerReason).toBe("recurring-author");
+      expect(s.firstTimerVersion).toBe(5);
+    }
+    for (const num of [1211, 1212]) {
+      const saved = secondRun.finalCache.find((e) => e.Number === num);
+      expect(saved?.Type === "sample" && saved.ReadyAt).toBe("2026-11-15T00:00:00.000Z");
+      expect(saved?.Type === "sample" && saved.ReadyDays).toBe(2);
+      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(5);
+    }
+  });
+
   it("走査窓外の v3/v4 キャッシュはタイムライン未検証のまま v5 へ昇格させず、候補内のものはタイムライン再取得で v5 へ修復する", async () => {
     const initialCache: SampleCacheEntry[] = [
       {
