@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GitHub GraphQL API のセカンダリレート制限（HTTP `403` / `502` / `504`）による定期観測ワークフローのフレーキー失敗対策と負荷軽減:
+  - `src/api/retry.ts`, `src/api/github.ts`: `403` セカンダリレート制限応答（メッセージ判定または `Retry-After` ヘッダー）をリトライ対象（`isSecondaryRateLimitResponse` / `isRetryableHttpResponse`）へ追加して `Retry-After` / 既定 60 秒最小待機＋上限キャップ付きで再試行するよう改善し、一時エラー検知後のみ後続リクエストへ短時間クールダウン（既定 `300ms` × 20 回、正常時は `0ms`）を挟む適応的ペーシングを導入
+  - `src/api/graphql-queries.ts`, `src/cli/explore-depths.ts`: 主戦場ライン探索（`fetchFirstReviewMainstreamFrontier`）を軽量 Search（`SEARCH_INTERVENTION_LIGHT_CANDIDATES_QUERY`、`MAINSTREAM_SEARCH_PAGE_SIZE = 100`）と `repository.pullRequest` エイリアスバッチの 2 段階パイプラインへ変更し、Search 前に `authorAssociation === "NONE"` 絞り込みおよび `merged-samples.jsonl` 既知常連の除外を行って重いネスト Search と `502/504` 誘発を抑制
+  - `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`: 著者累計マージ数検索（`DEFAULT_AUTHOR_MERGED_BATCH_SIZE`）の既定チャンクサイズを `25` → `15` へ引き下げ、未統一のハードコード値（`30`）を共通定数へ集約
 - `scripts/pages/sections/hero-and-kpi.ts`, `scripts/pages/sections/depths-and-history.ts`: `👀 初回レビュー到達予想` 注釈および `👀 未レビュー・介入分離` リード文の `自動検証ログ（(Deterministic automation）` の二重括弧タイポを修正
 
 ## [0.4.0] - 2026-11-17

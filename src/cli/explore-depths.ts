@@ -4,7 +4,7 @@ import { GitHubApiClient, parseRepository, resolvePrInterventionWithPaging } fro
 import {
   buildPullRequestBatchInterventionQuery,
   FIRST_TIMER_GRAPHQL_QUERY,
-  SEARCH_INTERVENTION_CANDIDATES_QUERY,
+  SEARCH_INTERVENTION_LIGHT_CANDIDATES_QUERY,
   SEARCH_PR_NUMBERS_QUERY,
 } from "../api/graphql-queries";
 import type { GraphQLPullRequestNode } from "../api/graphql-types";
@@ -34,6 +34,7 @@ import type {
   ExploreDepthsOptions,
   FirstReviewFrontier,
   GraphQLPrNode,
+  PrInterventionSummary,
   TargetPrInfo,
 } from "../models/depths";
 import {
@@ -273,6 +274,32 @@ interface GraphQLSearchNumbersResponse {
 }
 
 /**
+ * PR 番号チャンクに対して GraphQL alias バッチを実行し、取得できた PR ノード一覧をチャンク順で返す。
+ */
+async function fetchInterventionBatchNodes(params: {
+  client: GitHubApiClient;
+  owner: string;
+  name: string;
+  chunk: readonly number[];
+}): Promise<Array<GraphQLPullRequestNode & GraphQLPrNode>> {
+  const { client, owner, name, chunk } = params;
+  if (chunk.length === 0) return [];
+  const batchQuery = buildPullRequestBatchInterventionQuery(chunk);
+  const batchRes = await client.graphql<{
+    repository?: Record<string, (GraphQLPullRequestNode & GraphQLPrNode) | null> | null;
+  }>(batchQuery, { owner, name });
+  const repoNodes = batchRes.repository ?? {};
+  const nodes: Array<GraphQLPullRequestNode & GraphQLPrNode> = [];
+  for (let idx = 0; idx < chunk.length; idx++) {
+    const prNode = repoNodes[`pr${idx}`];
+    if (prNode?.number) {
+      nodes.push(prNode);
+    }
+  }
+  return nodes;
+}
+
+/**
  * 2 段階パイプライン（第1段階: 軽量 Search で PR 番号収集 → 第2段階: GraphQL alias バッチで詳細エッジ判定）により、
  * 健康な待機 PR（sort:created-asc）を「未レビュー（完全未着手）前線」と「レビュー・介入済み前線」に分離して各上位 limit 件を抽出する。
  * 両区分が limit 件に到達した時点で後続バッチ・後続 Search ページの取得を即打ち切る。
@@ -323,16 +350,8 @@ export async function fetchInterventionFrontiers(
           break;
         }
         const chunk = numbers.slice(i, i + batchSize);
-        const batchQuery = buildPullRequestBatchInterventionQuery(chunk);
-        const batchRes = await client.graphql<{
-          repository?: Record<string, (GraphQLPullRequestNode & GraphQLPrNode) | null> | null;
-        }>(batchQuery, { owner, name });
-
-        const repoNodes = batchRes.repository ?? {};
-        for (let idx = 0; idx < chunk.length; idx++) {
-          const prNode = repoNodes[`pr${idx}`];
-          if (!prNode?.number) continue;
-
+        const batchNodes = await fetchInterventionBatchNodes({ client, owner, name, chunk });
+        for (const prNode of batchNodes) {
           const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
             graphqlInvoker,
             owner,
@@ -378,8 +397,8 @@ export async function fetchInterventionFrontiers(
   };
 }
 
-/** 主戦場ライン探索における 1 ページあたりの検索取得件数 */
-export const MAINSTREAM_SEARCH_PAGE_SIZE = 50;
+/** 主戦場ライン探索における 1 ページあたりの検索取得件数（軽量メタデータ取得のため上限 100） */
+export const MAINSTREAM_SEARCH_PAGE_SIZE = 100;
 
 /** GitHub Search API の 1 窓あたり到達上限（超過時は動的二分走査を行う） */
 const MAINSTREAM_SEARCH_WINDOW_CAPACITY = 1000;
@@ -387,33 +406,43 @@ const MAINSTREAM_SEARCH_WINDOW_CAPACITY = 1000;
 /** 動的二分走査の最小時間幅（1 分） */
 const MAINSTREAM_MIN_BISECT_SPAN_MS = 60_000;
 
-interface SearchInterventionNodesResponse {
+interface LightInterventionCandidateNode {
+  number: number;
+  author?: { login?: string | null } | null;
+  authorAssociation?: string | null;
+}
+
+interface SearchInterventionLightNodesResponse {
   search?: {
     issueCount?: number;
     pageInfo?: {
       hasNextPage?: boolean;
       endCursor?: string | null;
     };
-    nodes?: Array<(GraphQLPullRequestNode & GraphQLPrNode) | null>;
+    nodes?: Array<{
+      number?: number | null;
+      author?: { login?: string | null } | null;
+      authorAssociation?: string | null;
+    } | null>;
   };
 }
 
 /**
- * GitHub Search API の 1,000 件上限を回避しつつ、指定期間内の PR ノード（reviews/comments/AssignedEvent 込み）を
- * 重複なく全量走査して取得する。
+ * GitHub Search API の 1,000 件上限を回避しつつ、指定期間内の PR の軽量メタデータ（number, author, authorAssociation）を
+ * 重複なく全量走査して取得する。コメント本文やレビューのネスト取得は後段の alias バッチに分離して Search 負荷を抑える。
  */
-async function collectInterventionSearchNodes(
+async function collectInterventionLightNodes(
   client: GitHubApiClient,
   baseFilterQuery: string,
   dateQualifier: "updated" | "merged",
   sinceDate: Date,
   untilDate: Date,
-): Promise<Array<GraphQLPullRequestNode & GraphQLPrNode>> {
+): Promise<LightInterventionCandidateNode[]> {
   if (sinceDate.getTime() >= untilDate.getTime()) {
     return [];
   }
 
-  const results: Array<GraphQLPullRequestNode & GraphQLPrNode> = [];
+  const results: LightInterventionCandidateNode[] = [];
   const seen = new Set<number>();
   const stack: Array<{ since: Date; until: Date }> = [{ since: sinceDate, until: untilDate }];
 
@@ -422,8 +451,8 @@ async function collectInterventionSearchNodes(
     if (!slice || slice.since.getTime() >= slice.until.getTime()) continue;
 
     const query = `${baseFilterQuery} ${dateQualifier}:${slice.since.toISOString()}..${slice.until.toISOString()} sort:updated-desc`;
-    const firstRes = await client.graphql<SearchInterventionNodesResponse>(
-      SEARCH_INTERVENTION_CANDIDATES_QUERY,
+    const firstRes = await client.graphql<SearchInterventionLightNodesResponse>(
+      SEARCH_INTERVENTION_LIGHT_CANDIDATES_QUERY,
       {
         query,
         first: MAINSTREAM_SEARCH_PAGE_SIZE,
@@ -445,12 +474,17 @@ async function collectInterventionSearchNodes(
     }
 
     const pushNodes = (
-      nodes: Array<(GraphQLPullRequestNode & GraphQLPrNode) | null> | undefined,
+      nodes: NonNullable<SearchInterventionLightNodesResponse["search"]>["nodes"],
     ) => {
       for (const n of nodes ?? []) {
-        if (!n?.number || seen.has(n.number)) continue;
+        if (typeof n?.number !== "number" || !Number.isInteger(n.number) || n.number <= 0) continue;
+        if (seen.has(n.number)) continue;
         seen.add(n.number);
-        results.push(n);
+        results.push({
+          number: n.number,
+          author: n.author,
+          authorAssociation: n.authorAssociation,
+        });
       }
     };
 
@@ -459,8 +493,8 @@ async function collectInterventionSearchNodes(
     let hasNext = Boolean(conn?.pageInfo?.hasNextPage);
     let cursor = conn?.pageInfo?.endCursor ?? null;
     while (hasNext && cursor) {
-      const nextRes = await client.graphql<SearchInterventionNodesResponse>(
-        SEARCH_INTERVENTION_CANDIDATES_QUERY,
+      const nextRes = await client.graphql<SearchInterventionLightNodesResponse>(
+        SEARCH_INTERVENTION_LIGHT_CANDIDATES_QUERY,
         {
           query,
           first: MAINSTREAM_SEARCH_PAGE_SIZE,
@@ -478,11 +512,67 @@ async function collectInterventionSearchNodes(
   return results;
 }
 
+function isTimestampWithinWindow(
+  iso: string | null | undefined,
+  windowStartMs: number,
+  nowMs: number,
+): boolean {
+  if (!iso) return false;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) && ms >= windowStartMs && ms <= nowMs;
+}
+
+function toFirstReviewCohortCandidate(
+  node: GraphQLPullRequestNode & GraphQLPrNode,
+  summary: PrInterventionSummary,
+  state: "OPEN" | "MERGED",
+): FirstReviewCohortCandidate {
+  return {
+    number: node.number,
+    title: node.title,
+    url: node.url,
+    state,
+    author: node.author?.login,
+    commitCount: node.commits?.totalCount,
+    createdAt: node.createdAt,
+    ...(state === "MERGED" ? { mergedAt: node.mergedAt ?? null } : {}),
+    intervention: summary,
+  };
+}
+
+async function resolveMainstreamInterventionsByNumbers(params: {
+  client: GitHubApiClient;
+  owner: string;
+  name: string;
+  numbers: readonly number[];
+  batchSize: number;
+}): Promise<
+  Array<{ node: GraphQLPullRequestNode & GraphQLPrNode; summary: PrInterventionSummary }>
+> {
+  const { client, owner, name, numbers, batchSize } = params;
+  const graphqlInvoker = <T = unknown>(q: string, vars?: Record<string, unknown>) =>
+    client.graphql<T>(q, vars);
+  const resolved: Array<{
+    node: GraphQLPullRequestNode & GraphQLPrNode;
+    summary: PrInterventionSummary;
+  }> = [];
+
+  for (let i = 0; i < numbers.length; i += batchSize) {
+    const chunk = numbers.slice(i, i + batchSize);
+    const batchNodes = await fetchInterventionBatchNodes({ client, owner, name, chunk });
+    for (const prNode of batchNodes) {
+      resolved.push(await resolvePrInterventionWithPaging(graphqlInvoker, owner, name, prNode));
+    }
+  }
+
+  return resolved;
+}
+
 /**
  * 直近 7 日間（[now - 7d, now]）に初めて人間介入が入った初回提出者 PR（オープン中 ＋ 直近マージ済み）を収集し、
  * 主戦場ライン（起票日時の中央値）を算出する。
- * マージ済み分は既存の merged-samples.jsonl キャッシュ（IsFirstTimer=true）を優先活用し、
- * キャッシュに無い直近マージ分だけを GraphQL Search で補完して API 消費を抑える。
+ * Search API では軽量メタデータのみを抽出し、対象候補だけを repository.pullRequest alias バッチで取得する
+ * 2 段階パイプラインと merged-samples.jsonl キャッシュ活用により、GraphQL Search 負荷とタイムアウトを抑える。
  */
 export async function fetchFirstReviewMainstreamFrontier(params: {
   client: GitHubApiClient;
@@ -506,61 +596,39 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
   const nowMs = now.getTime();
   const windowStartMs = nowMs - windowDays * DAY_MS;
   const windowStart = new Date(windowStartMs);
-  const graphqlInvoker = <T = unknown>(q: string, vars?: Record<string, unknown>) =>
-    client.graphql<T>(q, vars);
 
   const candidates: FirstReviewCohortCandidate[] = [];
 
   try {
-    // 1. オープン中 PR のうち直近 windowDays 日間に更新があり、authorAssociation = NONE の候補を収集
-    const openNodes = await collectInterventionSearchNodes(
+    // 1. オープン中 PR: 軽量 Search で authorAssociation=NONE かつ author ありに絞り込み、バッチで介入詳細を取得
+    const openLightNodes = await collectInterventionLightNodes(
       client,
       `repo:${repository} is:pr is:open label:New-Package`,
       "updated",
       windowStart,
       now,
     );
+    const openCandidateNumbers = openLightNodes
+      .filter((node) => isFirstTimerCandidate(node as GraphQLPrNode))
+      .map((node) => node.number);
 
-    const openIntervenedCandidates: Array<{
-      node: GraphQLPullRequestNode & GraphQLPrNode;
-      candidate: FirstReviewCohortCandidate;
-    }> = [];
+    const resolvedOpenNodes = await resolveMainstreamInterventionsByNumbers({
+      client,
+      owner,
+      name,
+      numbers: openCandidateNumbers,
+      batchSize,
+    });
 
-    for (const node of openNodes) {
-      if (!isFirstTimerCandidate(node)) continue;
-      const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
-        graphqlInvoker,
-        owner,
-        name,
-        node,
-      );
-      if (!summary.FirstHumanInterventionAt) continue;
-      const interventionMs = Date.parse(summary.FirstHumanInterventionAt);
-      if (
-        !Number.isFinite(interventionMs) ||
-        interventionMs < windowStartMs ||
-        interventionMs > nowMs
-      ) {
-        continue;
-      }
-      openIntervenedCandidates.push({
-        node: resolvedNode,
-        candidate: {
-          number: resolvedNode.number,
-          title: resolvedNode.title,
-          url: resolvedNode.url,
-          state: "OPEN",
-          author: resolvedNode.author?.login,
-          commitCount: resolvedNode.commits?.totalCount,
-          createdAt: resolvedNode.createdAt,
-          intervention: summary,
-        },
-      });
-    }
+    const openIntervenedCandidates = resolvedOpenNodes
+      .filter(({ summary }) =>
+        isTimestampWithinWindow(summary.FirstHumanInterventionAt, windowStartMs, nowMs),
+      )
+      .map(({ node, summary }) => toFirstReviewCohortCandidate(node, summary, "OPEN"));
 
     if (openIntervenedCandidates.length > 0) {
       const openAuthors = openIntervenedCandidates
-        .map((c) => c.candidate.author)
+        .map((c) => c.author)
         .filter((login): login is string => Boolean(login));
       await resolveAuthorMergedCounts(
         repository,
@@ -568,7 +636,7 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
         (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
         { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
       );
-      for (const { candidate } of openIntervenedCandidates) {
+      for (const candidate of openIntervenedCandidates) {
         if (!candidate.author) continue;
         if ((mergedCountCache.get(candidate.author) ?? 0) === 0) {
           candidates.push(candidate);
@@ -576,7 +644,7 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       }
     }
 
-    // 2. マージ済み PR（7日窓全体から未キャッシュ・未確定分を補完しつつ、キャッシュ済み初回/常連判定を活用して著者照会を削減）
+    // 2. マージ済み PR: キャッシュ済み初回 PR ＋ 軽量 Search で発見した未キャッシュ候補を統合バッチで取得
     const cachedFirstTimerNumbers: number[] = [];
     const cachedFirstTimerSet = new Set<number>();
     const knownNonFirstTimerNumbers = new Set<number>();
@@ -602,104 +670,42 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       }
     }
 
-    const handledCachedNumbers = new Set<number>();
-    const mergedNodes = await collectInterventionSearchNodes(
+    const mergedLightNodes = await collectInterventionLightNodes(
       client,
       `repo:${repository} is:pr is:merged label:New-Package`,
       "merged",
       windowStart,
       now,
     );
+    const uncachedMergedNumbers = mergedLightNodes
+      .filter(
+        (node) =>
+          !knownNonFirstTimerNumbers.has(node.number) &&
+          !cachedFirstTimerSet.has(node.number) &&
+          Boolean(node.author?.login),
+      )
+      .map((node) => node.number);
+
+    const mergedFetchNumbers = [...cachedFirstTimerNumbers, ...uncachedMergedNumbers];
+    const resolvedMergedNodes = await resolveMainstreamInterventionsByNumbers({
+      client,
+      owner,
+      name,
+      numbers: mergedFetchNumbers,
+      batchSize,
+    });
 
     const uncachedMergedIntervened: FirstReviewCohortCandidate[] = [];
-    for (const node of mergedNodes) {
-      if (knownNonFirstTimerNumbers.has(node.number)) continue;
-
-      if (cachedFirstTimerSet.has(node.number)) {
-        handledCachedNumbers.add(node.number);
-        const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
-          graphqlInvoker,
-          owner,
-          name,
-          node,
-        );
-        if (!summary.FirstHumanInterventionAt) continue;
-        candidates.push({
-          number: resolvedNode.number,
-          title: resolvedNode.title,
-          url: resolvedNode.url,
-          state: "MERGED",
-          author: resolvedNode.author?.login,
-          commitCount: resolvedNode.commits?.totalCount,
-          createdAt: resolvedNode.createdAt,
-          mergedAt: resolvedNode.mergedAt ?? null,
-          intervention: summary,
-        });
-        continue;
-      }
-
-      if (!node.author?.login) continue;
-      const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
-        graphqlInvoker,
-        owner,
-        name,
-        node,
-      );
+    for (const { node, summary } of resolvedMergedNodes) {
       if (!summary.FirstHumanInterventionAt) continue;
-      const interventionMs = Date.parse(summary.FirstHumanInterventionAt);
-      if (
-        !Number.isFinite(interventionMs) ||
-        interventionMs < windowStartMs ||
-        interventionMs > nowMs
-      ) {
+      if (cachedFirstTimerSet.has(node.number)) {
+        candidates.push(toFirstReviewCohortCandidate(node, summary, "MERGED"));
         continue;
       }
-      uncachedMergedIntervened.push({
-        number: resolvedNode.number,
-        title: resolvedNode.title,
-        url: resolvedNode.url,
-        state: "MERGED",
-        author: resolvedNode.author?.login,
-        commitCount: resolvedNode.commits?.totalCount,
-        createdAt: resolvedNode.createdAt,
-        mergedAt: resolvedNode.mergedAt ?? null,
-        intervention: summary,
-      });
-    }
-
-    // Search インデックス遅延や部分結果時に備え、キャッシュ済み初回 PR で検索未出現のものだけバッチ補完する
-    const missingCachedFirstTimers = cachedFirstTimerNumbers.filter(
-      (num) => !handledCachedNumbers.has(num),
-    );
-    for (let i = 0; i < missingCachedFirstTimers.length; i += batchSize) {
-      const chunk = missingCachedFirstTimers.slice(i, i + batchSize);
-      const batchQuery = buildPullRequestBatchInterventionQuery(chunk);
-      const batchRes = await client.graphql<{
-        repository?: Record<string, (GraphQLPullRequestNode & GraphQLPrNode) | null> | null;
-      }>(batchQuery, { owner, name });
-      const repoNodes = batchRes.repository ?? {};
-      for (let idx = 0; idx < chunk.length; idx++) {
-        const prNode = repoNodes[`pr${idx}`];
-        if (!prNode?.number) continue;
-        const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
-          graphqlInvoker,
-          owner,
-          name,
-          prNode,
-        );
-        if (!summary.FirstHumanInterventionAt) continue;
-        candidates.push({
-          number: resolvedNode.number,
-          title: resolvedNode.title,
-          url: resolvedNode.url,
-          state: "MERGED",
-          author: resolvedNode.author?.login,
-          commitCount: resolvedNode.commits?.totalCount,
-          createdAt: resolvedNode.createdAt,
-          mergedAt: resolvedNode.mergedAt ?? null,
-          intervention: summary,
-        });
+      if (!isTimestampWithinWindow(summary.FirstHumanInterventionAt, windowStartMs, nowMs)) {
+        continue;
       }
+      uncachedMergedIntervened.push(toFirstReviewCohortCandidate(node, summary, "MERGED"));
     }
 
     if (uncachedMergedIntervened.length > 0) {

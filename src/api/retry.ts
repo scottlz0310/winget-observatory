@@ -1,5 +1,5 @@
 /**
- * GitHub GraphQL API 通信のリトライ制御（指数バックオフ・Retry-After 解釈）およびエラー型定義。
+ * GitHub GraphQL API 通信のリトライ制御（指数バックオフ・Retry-After 解釈・セカンダリレート制限検知）およびエラー型定義。
  */
 
 /**
@@ -11,8 +11,78 @@
  */
 export const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 504]);
 
+/** Retry-After 未指定のセカンダリレート制限発生時の既定最小待機時間（ミリ秒） */
+export const DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS = 60_000;
+
+/** 1 回あたりのクライアント側バックオフ待機時間の上限（ミリ秒。サーバー指定 Retry-After には適用しない） */
+export const DEFAULT_MAX_RETRY_DELAY_MS = 180_000;
+
+/** サーバー指定 Retry-After に対して許容する最大待機予算（ミリ秒、既定: 15分） */
+export const DEFAULT_MAX_RETRY_AFTER_MS = 900_000;
+
+/** 一時エラー検知後の適応的クールダウン待機時間（ミリ秒） */
+export const DEFAULT_ADAPTIVE_COOLDOWN_MS = 300;
+
+/** 一時エラー検知後に適応的クールダウンを継続する後続リクエスト数 */
+export const DEFAULT_ADAPTIVE_COOLDOWN_REQUESTS = 20;
+
 export function isRetryableStatusCode(status: number): boolean {
   return RETRYABLE_STATUS_CODES.has(status);
+}
+
+/**
+ * GitHub API のセカンダリレート制限（429、または 403 + セカンダリレート制限メッセージ / Retry-After）かを判定する。
+ * 通常の権限不足 403（Bad credentials / Resource not accessible 等）は false を返し誤リトライを防ぐ。
+ */
+export function isSecondaryRateLimitResponse(
+  status: number,
+  bodyText = "",
+  retryAfterHeader?: string | null,
+): boolean {
+  if (status === 429) {
+    return true;
+  }
+  if (status !== 403) {
+    return false;
+  }
+  if (bodyText.toLowerCase().includes("secondary rate limit")) {
+    return true;
+  }
+  return parseRetryAfterMs(retryAfterHeader) !== undefined;
+}
+
+/**
+ * HTTP ステータスコード・応答本文・Retry-After ヘッダーを総合してリトライ可能エラーか判定する。
+ */
+export function isRetryableHttpResponse(
+  status: number,
+  bodyText = "",
+  retryAfterHeader?: string | null,
+): boolean {
+  return (
+    isRetryableStatusCode(status) ||
+    isSecondaryRateLimitResponse(status, bodyText, retryAfterHeader)
+  );
+}
+
+/**
+ * HTTP エラー応答に対する最小待機時間（ミリ秒）を計算する。
+ * Retry-After が明示されていればそれを優先し、未指定のセカンダリレート制限時は secondaryRateLimitDelayMs を使用する。
+ */
+export function computeRetryMinDelayMs(params: {
+  status: number;
+  bodyText?: string;
+  retryAfterHeader?: string | null;
+  secondaryRateLimitDelayMs?: number;
+}): number {
+  const retryAfterMs = parseRetryAfterMs(params.retryAfterHeader);
+  if (retryAfterMs !== undefined) {
+    return retryAfterMs;
+  }
+  if (isSecondaryRateLimitResponse(params.status, params.bodyText ?? "", params.retryAfterHeader)) {
+    return params.secondaryRateLimitDelayMs ?? DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS;
+  }
+  return 0;
 }
 
 /**
@@ -57,6 +127,16 @@ export interface GraphQLRetryOptions {
   baseDelayMs?: number;
   /** ジッターの最大幅（ミリ秒、既定: 500） */
   maxJitterMs?: number;
+  /** Retry-After 未指定のセカンダリレート制限発生時の最小待機時間（ミリ秒、既定: 60000） */
+  secondaryRateLimitDelayMs?: number;
+  /** クライアント側バックオフ待機時間の上限（ミリ秒、既定: 180000。Retry-After は短縮しない） */
+  maxRetryDelayMs?: number;
+  /** サーバー指定 Retry-After の最大許容待機時間（ミリ秒、既定: 900000。0 以下で無制限） */
+  maxRetryAfterMs?: number;
+  /** 一時エラー検知後に後続リクエスト間に挟む適応的クールダウン待機時間（ミリ秒、既定: 300。0 で無効） */
+  adaptiveCooldownMs?: number;
+  /** 一時エラー検知後に適応的クールダウンを継続する後続リクエスト数（既定: 20） */
+  adaptiveCooldownRequests?: number;
   /** 待機関数（既定: setTimeout による Promise） */
   sleep?: (ms: number) => Promise<void>;
   /** 警告ログ関数（既定: console.error） */

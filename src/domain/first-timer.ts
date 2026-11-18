@@ -115,8 +115,8 @@ export function parseAuthorMergedCounts(
   return counts;
 }
 
-/** 生涯マージ件数バッチ照会の既定チャンクサイズ */
-export const DEFAULT_AUTHOR_MERGED_BATCH_SIZE = 25;
+/** 生涯マージ件数バッチ照会の既定チャンクサイズ（Search alias 過負荷によるセカンダリレート制限抑制のため 15） */
+export const DEFAULT_AUTHOR_MERGED_BATCH_SIZE = 15;
 
 export type AuthorMergedCountQueryExecutor = (
   query: string,

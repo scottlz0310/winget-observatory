@@ -16,6 +16,7 @@ import type {
 import {
   CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
+  DEFAULT_AUTHOR_MERGED_BATCH_SIZE,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
   MIN_VALIDATION_GUIDE_READY_VERSION,
@@ -318,7 +319,7 @@ async function resolveSingleHitAuthorMergedCounts(params: {
     repository,
     candidateAuthors,
     (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query),
-    { batchSize: 30, cache: authorCountCache },
+    { batchSize: DEFAULT_AUTHOR_MERGED_BATCH_SIZE, cache: authorCountCache },
   );
 
   let modified = false;
@@ -384,7 +385,7 @@ async function resolveRemainingTimelineBlockingCacheEntries(params: {
     repository,
     pendingAuthors,
     (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query),
-    { batchSize: 30, cache: authorCountCache },
+    { batchSize: DEFAULT_AUTHOR_MERGED_BATCH_SIZE, cache: authorCountCache },
   );
 
   let modified = false;
