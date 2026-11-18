@@ -1579,22 +1579,90 @@ describe("API: GitHubApiClient", () => {
       expect(warnLogs[0]).toContain("status: 403");
     });
 
-    test("403 セカンダリレート制限の Retry-After ヘッダーと secondaryRateLimitDelayMs / maxRetryDelayMs 上限を尊重する", async () => {
+    test.each([403, 429, 503])(
+      "status %i の Retry-After はクライアント側 maxRetryDelayMs 上限で短縮されず、仮想時計上で解除時刻まで正確に待機して成功する",
+      async (status) => {
+        let nowSec = 0;
+        const releaseAtSec = 600;
+        const sendTimesSec: number[] = [];
+        const sleepDelays: number[] = [];
+
+        const mockFetch = async (): Promise<Response> => {
+          sendTimesSec.push(nowSec);
+          if (nowSec < releaseAtSec) {
+            const remainingSec = releaseAtSec - nowSec;
+            return new Response("You have exceeded a secondary rate limit.", {
+              status,
+              headers: { "Retry-After": String(remainingSec) },
+            });
+          }
+          return new Response(JSON.stringify({ data: { test: `ok-${status}` } }), {
+            status: 200,
+          });
+        };
+
+        const client = new GitHubApiClient({
+          token: "dummy-token",
+          fetch: mockFetch,
+          retry: {
+            baseDelayMs: 2000,
+            maxJitterMs: 0,
+            // 既定の maxRetryDelayMs (180000ms) より長い Retry-After: 600s を検証
+            sleep: async (ms) => {
+              sleepDelays.push(ms);
+              nowSec += Math.ceil(ms / 1000);
+            },
+            warnLog: () => {},
+          },
+        });
+
+        const result = await client.graphql<{ test: string }>("query { test }");
+        expect(result).toEqual({ test: `ok-${status}` });
+        expect(sendTimesSec).toEqual([0, 600]);
+        expect(sleepDelays).toEqual([600000]);
+      },
+    );
+
+    test("Retry-After が許容待機上限 (maxRetryAfterMs) を超える場合は短縮して早期再送せずエラーで終了する", async () => {
       let attempts = 0;
       const sleepDelays: number[] = [];
 
       const mockFetch = async (): Promise<Response> => {
         attempts++;
-        if (attempts === 1) {
+        return new Response("You have exceeded a secondary rate limit.", {
+          status: 403,
+          headers: { "Retry-After": "600" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          maxRetryAfterMs: 300000,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: () => {},
+        },
+      });
+
+      await expect(client.graphql("query { test }")).rejects.toThrow(
+        "Retry-After (600000ms) が許容待機上限 (300000ms) を超過",
+      );
+      expect(attempts).toBe(1);
+      expect(sleepDelays).toEqual([]);
+    });
+
+    test("Retry-After 未指定のクライアント側待機時間（secondaryRateLimitDelayMs / 指数バックオフ）には maxRetryDelayMs 上限が適用される", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts <= 2) {
           return new Response("You have exceeded a secondary rate limit.", {
             status: 403,
-            headers: { "Retry-After": "45" },
-          });
-        }
-        if (attempts === 2) {
-          return new Response("You have exceeded a secondary rate limit.", {
-            status: 403,
-            headers: { "Retry-After": "999" },
           });
         }
         return new Response(JSON.stringify({ data: { test: "ok" } }), { status: 200 });
@@ -1606,6 +1674,7 @@ describe("API: GitHubApiClient", () => {
         retry: {
           baseDelayMs: 1000,
           maxJitterMs: 0,
+          secondaryRateLimitDelayMs: 150000,
           maxRetryDelayMs: 120000,
           sleep: async (ms) => {
             sleepDelays.push(ms);
@@ -1617,7 +1686,7 @@ describe("API: GitHubApiClient", () => {
       const result = await client.graphql<{ test: string }>("query { test }");
       expect(result).toEqual({ test: "ok" });
       expect(attempts).toBe(3);
-      expect(sleepDelays).toEqual([45000, 120000]);
+      expect(sleepDelays).toEqual([120000, 120000]);
     });
 
     test("適応的クールダウン: 正常時は 0ms で通過し、一時エラー発生後のみ指定回数だけ後続リクエストを冷却する", async () => {

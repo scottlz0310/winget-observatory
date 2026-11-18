@@ -14,8 +14,11 @@ export const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 504]);
 /** Retry-After 未指定のセカンダリレート制限発生時の既定最小待機時間（ミリ秒） */
 export const DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS = 60_000;
 
-/** 1 回あたりのリトライ待機時間の上限（ミリ秒） */
+/** 1 回あたりのクライアント側バックオフ待機時間の上限（ミリ秒。サーバー指定 Retry-After には適用しない） */
 export const DEFAULT_MAX_RETRY_DELAY_MS = 180_000;
+
+/** サーバー指定 Retry-After に対して許容する最大待機予算（ミリ秒、既定: 15分） */
+export const DEFAULT_MAX_RETRY_AFTER_MS = 900_000;
 
 /** 一時エラー検知後の適応的クールダウン待機時間（ミリ秒） */
 export const DEFAULT_ADAPTIVE_COOLDOWN_MS = 300;
@@ -126,8 +129,10 @@ export interface GraphQLRetryOptions {
   maxJitterMs?: number;
   /** Retry-After 未指定のセカンダリレート制限発生時の最小待機時間（ミリ秒、既定: 60000） */
   secondaryRateLimitDelayMs?: number;
-  /** 1 回あたりのリトライ待機時間の上限（ミリ秒、既定: 180000） */
+  /** クライアント側バックオフ待機時間の上限（ミリ秒、既定: 180000。Retry-After は短縮しない） */
   maxRetryDelayMs?: number;
+  /** サーバー指定 Retry-After の最大許容待機時間（ミリ秒、既定: 900000。0 以下で無制限） */
+  maxRetryAfterMs?: number;
   /** 一時エラー検知後に後続リクエスト間に挟む適応的クールダウン待機時間（ミリ秒、既定: 300。0 で無効） */
   adaptiveCooldownMs?: number;
   /** 一時エラー検知後に適応的クールダウンを継続する後続リクエスト数（既定: 20） */

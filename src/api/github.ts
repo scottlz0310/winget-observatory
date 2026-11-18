@@ -54,6 +54,7 @@ import {
   computeRetryMinDelayMs,
   DEFAULT_ADAPTIVE_COOLDOWN_MS,
   DEFAULT_ADAPTIVE_COOLDOWN_REQUESTS,
+  DEFAULT_MAX_RETRY_AFTER_MS,
   DEFAULT_MAX_RETRY_DELAY_MS,
   DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS,
   GitHubApiError,
@@ -85,6 +86,7 @@ export {
   computeRetryMinDelayMs,
   DEFAULT_ADAPTIVE_COOLDOWN_MS,
   DEFAULT_ADAPTIVE_COOLDOWN_REQUESTS,
+  DEFAULT_MAX_RETRY_AFTER_MS,
   DEFAULT_MAX_RETRY_DELAY_MS,
   DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS,
   GET_PULL_REQUEST_DETAILS_QUERY,
@@ -347,6 +349,7 @@ export class GitHubApiClient {
   private readonly maxJitterMs: number;
   private readonly secondaryRateLimitDelayMs: number;
   private readonly maxRetryDelayMs: number;
+  private readonly maxRetryAfterMs: number;
   private readonly adaptiveCooldownMs: number;
   private readonly adaptiveCooldownRequests: number;
   private cooldownRemainingRequests = 0;
@@ -363,6 +366,7 @@ export class GitHubApiClient {
     this.secondaryRateLimitDelayMs =
       options.retry?.secondaryRateLimitDelayMs ?? DEFAULT_SECONDARY_RATE_LIMIT_DELAY_MS;
     this.maxRetryDelayMs = options.retry?.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+    this.maxRetryAfterMs = options.retry?.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS;
     this.adaptiveCooldownMs = options.retry?.adaptiveCooldownMs ?? DEFAULT_ADAPTIVE_COOLDOWN_MS;
     this.adaptiveCooldownRequests =
       options.retry?.adaptiveCooldownRequests ?? DEFAULT_ADAPTIVE_COOLDOWN_REQUESTS;
@@ -494,11 +498,22 @@ export class GitHubApiClient {
     }
   }
 
-  private async waitBeforeRetry(attempt: number, reason: string, minDelayMs = 0): Promise<void> {
+  private async waitBeforeRetry(
+    attempt: number,
+    reason: string,
+    options?: { clientMinDelayMs?: number; retryAfterMs?: number },
+  ): Promise<void> {
     this.activateCooldown();
     const exponentialDelay = calculateBackoffDelay(attempt, this.baseDelayMs, this.maxJitterMs);
-    const rawDelay = minDelayMs > 0 ? Math.max(exponentialDelay, minDelayMs) : exponentialDelay;
-    const delay = this.maxRetryDelayMs > 0 ? Math.min(rawDelay, this.maxRetryDelayMs) : rawDelay;
+    const clientMinDelay = options?.clientMinDelayMs ?? 0;
+    const rawClientDelay =
+      clientMinDelay > 0 ? Math.max(exponentialDelay, clientMinDelay) : exponentialDelay;
+    const cappedClientDelay =
+      this.maxRetryDelayMs > 0 ? Math.min(rawClientDelay, this.maxRetryDelayMs) : rawClientDelay;
+    // サーバー明示指定の Retry-After は短縮しない（クライアント側バックオフ上限より優先する）
+    const retryAfterMs = options?.retryAfterMs;
+    const delay =
+      retryAfterMs !== undefined ? Math.max(cappedClientDelay, retryAfterMs) : cappedClientDelay;
     this.warnLogFn(
       `[GitHub GraphQL] ${reason}。リトライ ${attempt}/${this.maxRetries} (待機時間: ${delay}ms)...`,
     );
@@ -844,27 +859,40 @@ export class GitHubApiClient {
       }
 
       if (!res.ok) {
+        const retryAfterHeader = res.headers.get("retry-after");
+        const retryAfterMs = parseRetryAfterMs(retryAfterHeader);
+        const withinRetryAfterBudget =
+          retryAfterMs === undefined ||
+          this.maxRetryAfterMs <= 0 ||
+          retryAfterMs <= this.maxRetryAfterMs;
+
+        if (!withinRetryAfterBudget) {
+          throw new GitHubApiError(
+            `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): Retry-After (${retryAfterMs}ms) が許容待機上限 (${this.maxRetryAfterMs}ms) を超過しているため早期再送せず終了します: ${rawText}`,
+            res.status,
+          );
+        }
+
         const apiError = new GitHubApiError(
           `GitHub GraphQL API 呼び出しに失敗しました (${res.status}): ${rawText}`,
           res.status,
         );
-        const retryAfterHeader = res.headers.get("retry-after");
 
         if (
           isRetryableHttpResponse(res.status, rawText, retryAfterHeader) &&
           attempt <= this.maxRetries
         ) {
           lastError = apiError;
-          const minDelayMs = computeRetryMinDelayMs({
-            status: res.status,
-            bodyText: rawText,
-            retryAfterHeader,
-            secondaryRateLimitDelayMs: this.secondaryRateLimitDelayMs,
-          });
-          const reason = isSecondaryRateLimitResponse(res.status, rawText, retryAfterHeader)
+          const isSecondary = isSecondaryRateLimitResponse(res.status, rawText, retryAfterHeader);
+          const clientMinDelayMs =
+            retryAfterMs === undefined && isSecondary ? this.secondaryRateLimitDelayMs : 0;
+          const reason = isSecondary
             ? `セカンダリレート制限に達しました (status: ${res.status})`
             : `一時エラーが発生しました (status: ${res.status})`;
-          await this.waitBeforeRetry(attempt, reason, minDelayMs);
+          await this.waitBeforeRetry(attempt, reason, {
+            clientMinDelayMs,
+            retryAfterMs,
+          });
           continue;
         }
 
