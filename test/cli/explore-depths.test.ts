@@ -870,7 +870,13 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       totalCount?: number;
       hasNextPage?: boolean;
       endCursor?: string | null;
-      nodes: Array<{ author: { __typename?: string; login: string } | null; body: string }>;
+      nodes: Array<{
+        author: { __typename?: string; login: string } | null;
+        body: string;
+        createdAt?: string | null;
+        lastEditedAt?: string | null;
+        editor?: { __typename?: string; login: string } | null;
+      }>;
     };
   }
 
@@ -1359,11 +1365,81 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     const result = await fetchInterventionFrontiers(mockClient, healthyBase, 10, 100);
     expect(capturedQuery).toContain('-label:"Policy-Test-1.5"');
     expect(capturedQuery).toContain('-label:"Validation-Error"');
+    expect(capturedQuery).toContain('-label:"Validation-Guide"');
     expect(capturedQuery).not.toContain('-label:"Waived-Validation-Defender-Error"');
     expect(result.unreviewedBottom.map((r) => r.Number)).toEqual([754]);
     expect(result.intervenedBottom.map((r) => r.Number)).toEqual([755]);
     expect(result.unreviewedTruncated).toBe(false);
     expect(result.intervenedTruncated).toBe(false);
+  });
+
+  test("自動検証ログにメンテナの手動追記がある PR は介入済みに分類し、ボット自動編集の PR は未レビューのまま維持する", async () => {
+    const specs: MockPrSpec[] = [
+      {
+        number: 758,
+        createdAt: "2026-10-01T00:00:00Z",
+        author: "submitter1",
+        comments: {
+          nodes: [
+            {
+              author: { __typename: "User", login: "stephengillie" },
+              createdAt: "2026-10-30T20:23:43Z",
+              lastEditedAt: "2026-10-30T20:23:59Z",
+              editor: { __typename: "User", login: "stephengillie" },
+              body: "Manual Validation ended with:\n(Deterministic automation - build 1831.)\n\nEdit: My approval VMs have been having difficulty connecting to this host recently.",
+            },
+          ],
+        },
+      },
+      {
+        number: 759,
+        createdAt: "2026-10-02T00:00:00Z",
+        author: "submitter2",
+        comments: {
+          nodes: [
+            {
+              author: { __typename: "User", login: "stephengillie" },
+              createdAt: "2026-10-30T20:23:43Z",
+              lastEditedAt: "2026-10-30T20:24:00Z",
+              editor: { __typename: "Bot", login: "github-actions[bot]" },
+              body: "Manual Validation ended with:\n(Deterministic automation - build 1831.)\nEdit: Automated sync",
+            },
+          ],
+        },
+      },
+    ];
+    const nodeMap = new Map(specs.map((s) => [s.number, createInterventionNode(s)]));
+
+    const mockClient = {
+      graphql: async <T>(query: string): Promise<T> => {
+        if (query.includes("SearchPrNumbers")) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: specs.map((s) => ({ number: s.number })),
+            },
+          } as unknown as T;
+        }
+        if (query.includes("GetPullRequestInterventionBatch")) {
+          expect(query).toContain("lastEditedAt");
+          expect(query).toContain("editor");
+          return { repository: buildBatchRepoFromSpecs(query, nodeMap) } as unknown as T;
+        }
+        throw new Error(`想定外のクエリ: ${query}`);
+      },
+    } as unknown as GitHubApiClient;
+
+    const result = await fetchInterventionFrontiers(
+      mockClient,
+      buildHealthyBaseQuery("microsoft/winget-pkgs"),
+      10,
+      100,
+    );
+    expect(result.intervenedBottom.map((r) => r.Number)).toEqual([758]);
+    expect(result.intervenedBottom[0].Intervention?.FirstHumanInterventionAt).toBe(
+      "2026-10-30T20:23:59.000Z",
+    );
+    expect(result.unreviewedBottom.map((r) => r.Number)).toEqual([759]);
   });
 
   test("maxTraverseNodes 上限で未レビューが 0 件のまま打ち切られた場合は unreviewedTruncated=true（逆区分も同様）", async () => {

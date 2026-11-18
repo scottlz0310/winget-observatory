@@ -2229,6 +2229,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         ReadyDays: 3,
         Author: "repeat-author",
         IsFirstTimer: true, // キャッシュ時点では初回扱い
+        FirstTimerVersion: 5,
       };
       writeFileSync(cachePath, serializeSampleCacheEntries([initialCachedEntry]), "utf-8");
 
@@ -2663,13 +2664,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(15.0);
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(5.0);
 
-      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 4 で更新されたこと
+      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 5 で更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached801 = savedCache.find((e) => e.Number === 801);
       expect(cached801?.Type).toBe("sample");
       if (cached801?.Type === "sample") {
         expect(cached801.IsFirstTimer).toBe(true);
-        expect(cached801.FirstTimerVersion).toBe(4);
+        expect(cached801.FirstTimerVersion).toBe(5);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -2830,14 +2831,14 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(graphqlCalled).toBe(true);
       expect(snapshot?.FirstTimerSampleCount).toBe(1);
 
-      // キャッシュファイルで IsFirstTimer: true, FirstTimerVersion: 4 に更新されたこと
+      // キャッシュファイルで IsFirstTimer: true, FirstTimerVersion: 5 に更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached802 = savedCache.find((e) => e.Number === 802);
       expect(cached802?.Type).toBe("sample");
       if (cached802?.Type === "sample") {
         expect(cached802.IsFirstTimer).toBe(true);
         expect(cached802.FirstTimerReason).toBeUndefined();
-        expect(cached802.FirstTimerVersion).toBe(4);
+        expect(cached802.FirstTimerVersion).toBe(5);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -2962,13 +2963,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(10.0); // 通算 10日
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(3.0); // Turn Latency 3日
 
-      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 4 で記録されたこと
+      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 5 で記録されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached803 = savedCache.find((e) => e.Number === 803);
       expect(cached803?.Type).toBe("sample");
       if (cached803?.Type === "sample") {
         expect(cached803.IsFirstTimer).toBe(true);
-        expect(cached803.FirstTimerVersion).toBe(4);
+        expect(cached803.FirstTimerVersion).toBe(5);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });

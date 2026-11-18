@@ -42,3 +42,19 @@ export function formatErrorDays(days: number): string {
   if (days === 0) return "±0 日";
   return `${days > 0 ? "+" : ""}${days} 日`;
 }
+
+/** PR タイトルから `New package: ` / `New version: ` プレフィックスを整理した表示用パッケージ名を返す */
+export function formatSamplePackageName(title: string | undefined): {
+  displayName: string;
+  fullTitle: string;
+} {
+  const fullTitle = (title ?? "").trim();
+  if (!fullTitle) {
+    return { displayName: "", fullTitle: "" };
+  }
+  const stripped = fullTitle.replace(/^\s*(?:New package|New version)\s*:\s*/i, "").trim();
+  return {
+    displayName: stripped || fullTitle,
+    fullTitle,
+  };
+}

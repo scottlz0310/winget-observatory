@@ -59,7 +59,7 @@ describe("orchestrateSampleCollection", () => {
       Title: "Cached PR",
       Author: "cachedUser",
       IsFirstTimer: true,
-      FirstTimerVersion: 2,
+      FirstTimerVersion: 5,
     };
 
     let apiCalled = false;
@@ -325,7 +325,7 @@ describe("orchestrateSampleCollection", () => {
     expect(result.cacheModified).toBeTrue();
     const updated901 = result.finalCache.find((c) => c.Number === 901 && c.Type === "sample");
     expect(updated901?.Type === "sample" && updated901.FirstTimerReason).toBe("recurring-author");
-    expect(updated901?.Type === "sample" && updated901.FirstTimerVersion).toBe(4);
+    expect(updated901?.Type === "sample" && updated901.FirstTimerVersion).toBe(1);
   });
 
   it("旧版 no-ready スキップキャッシュ（Waived-*-Error 付き PR）を再評価し、空キャッシュ時と同一のサンプル・ReadyAt・初回判定を得る", async () => {
@@ -486,7 +486,7 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples[0]?.days).toBe(4);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(4);
+    expect(result.samples[0]?.firstTimerVersion).toBe(5);
   });
 
   it("新版（FirstTimerVersion: 3）で記録済みの no-ready キャッシュは再取得せずスキップを維持する", async () => {
@@ -700,14 +700,266 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples).toHaveLength(1);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(4);
+    expect(result.samples[0]?.firstTimerVersion).toBe(5);
     const saved = result.finalCache.find((e) => e.Number === 449315);
     expect(saved?.Type === "sample" && saved.IsFirstTimer).toBeTrue();
     expect(saved?.Type === "sample" && saved.FirstTimerReason).toBeUndefined();
-    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(4);
+    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(5);
   });
 
-  it("Author 保存済みの既存 timeline-blocking レコードはタイムラインを再取得せず GraphQL 累計マージ判定のみで IsFirstTimer: true 等へ昇格・更新される", async () => {
+  it("Validation-Guide 阻害化に伴う v4 キャッシュ再評価: 一時付与→解除サンプルと未解除サンプルが、空キャッシュ時と同一の ReadyAt / ReadyDays / skipped になる", async () => {
+    const tempGuideTimeline: ProgressTimelineEvent[] = [
+      { event: "labeled", created_at: "2026-11-01T00:00:00Z", label: { name: "New-Package" } },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Azure-Pipeline-Passed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Validation-Completed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-02T00:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+      {
+        event: "unlabeled",
+        created_at: "2026-11-15T00:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+    ];
+    const unresolvedGuideTimeline: ProgressTimelineEvent[] = [
+      { event: "labeled", created_at: "2026-11-01T00:00:00Z", label: { name: "New-Package" } },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Azure-Pipeline-Passed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Validation-Completed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-02T00:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+    ];
+
+    const makeClient = (onFetch?: () => void): SampleCollectorClient => ({
+      getPullRequestSampleData: async (_repo, num) => {
+        onFetch?.();
+        if (num === 1201) {
+          return {
+            createdAt: "2026-11-01T00:00:00Z",
+            commitCount: 1,
+            latestCommittedDate: "2026-11-01T00:00:00Z",
+            author: "guide-temp-user",
+            timeline: tempGuideTimeline,
+          };
+        }
+        return {
+          createdAt: "2026-11-01T00:00:00Z",
+          commitCount: 1,
+          latestCommittedDate: "2026-11-01T00:00:00Z",
+          author: "guide-stuck-user",
+          timeline: unresolvedGuideTimeline,
+        };
+      },
+      graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
+    });
+
+    const candidates = [
+      createSearchItem(1201, "2026-11-17T00:00:00Z", "guide-temp-user"),
+      createSearchItem(1202, "2026-11-17T00:00:00Z", "guide-stuck-user"),
+    ];
+    const overallSinceDate = new Date("2026-10-18T00:00:00Z");
+
+    const emptyResult = await orchestrateSampleCollection({
+      client: makeClient(),
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 10,
+      initialCache: [],
+    });
+
+    // 旧判定（Validation-Guide 阻害化前）で v4 として保存されていたキャッシュ
+    const v4Cache: SampleCacheEntry[] = [
+      {
+        Type: "sample",
+        Number: 1201,
+        Title: "PR #1201",
+        CreatedAt: "2026-11-01T00:00:00Z",
+        LatestCommittedDate: "2026-11-01T00:00:00Z",
+        CommitCount: 1,
+        ReadyAt: "2026-11-01T00:00:00.000Z",
+        MergedAt: "2026-11-17T00:00:00.000Z",
+        TotalDays: 16,
+        TurnDays: 16,
+        ReadyDays: 16,
+        Author: "guide-temp-user",
+        IsFirstTimer: true,
+        FirstTimerVersion: 4,
+      },
+      {
+        Type: "sample",
+        Number: 1202,
+        Title: "PR #1202",
+        CreatedAt: "2026-11-01T00:00:00Z",
+        LatestCommittedDate: "2026-11-01T00:00:00Z",
+        CommitCount: 1,
+        ReadyAt: "2026-11-01T00:00:00.000Z",
+        MergedAt: "2026-11-17T00:00:00.000Z",
+        TotalDays: 16,
+        TurnDays: 16,
+        ReadyDays: 16,
+        Author: "guide-stuck-user",
+        IsFirstTimer: true,
+        FirstTimerVersion: 4,
+      },
+    ];
+
+    let migratedFetches = 0;
+    const migratedResult = await orchestrateSampleCollection({
+      client: makeClient(() => {
+        migratedFetches++;
+      }),
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 10,
+      initialCache: v4Cache,
+    });
+
+    expect(migratedFetches).toBe(2);
+    expect(migratedResult.samples).toEqual(emptyResult.samples);
+    expect(migratedResult.skippedCount).toBe(emptyResult.skippedCount);
+    expect(migratedResult.samples).toHaveLength(1);
+    expect(migratedResult.samples[0]?.number).toBe(1201);
+    expect(migratedResult.samples[0]?.readyAt).toBe("2026-11-15T00:00:00.000Z");
+    expect(migratedResult.samples[0]?.days).toBe(2);
+    expect(migratedResult.samples[0]?.firstTimerVersion).toBe(5);
+    expect(migratedResult.finalCache).toEqual(emptyResult.finalCache);
+  });
+
+  it("予算枯渇時に markRecurringBatchAuthors 等で著者判定のみ更新されても未再計測 v4 キャッシュを v5 へ昇格させず、次回の予算あり実行で ReadyAt / ReadyDays を再計測する", async () => {
+    const guideTimeline: ProgressTimelineEvent[] = [
+      { event: "labeled", created_at: "2026-11-01T00:00:00Z", label: { name: "New-Package" } },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Azure-Pipeline-Passed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-01T00:00:00Z",
+        label: { name: "Validation-Completed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-11-02T00:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+      {
+        event: "unlabeled",
+        created_at: "2026-11-15T00:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+    ];
+
+    let sampleFetches = 0;
+    const client: SampleCollectorClient = {
+      getPullRequestSampleData: async () => {
+        sampleFetches++;
+        return {
+          createdAt: "2026-11-01T00:00:00Z",
+          commitCount: 1,
+          latestCommittedDate: "2026-11-01T00:00:00Z",
+          author: "batch-repeat-user",
+          timeline: guideTimeline,
+        };
+      },
+      graphql: async <T = unknown>() => ({}) as T,
+    };
+
+    const candidates = [
+      createSearchItem(1211, "2026-11-17T00:00:00Z", "batch-repeat-user"),
+      createSearchItem(1212, "2026-11-17T00:00:00Z", "batch-repeat-user"),
+    ];
+    const overallSinceDate = new Date("2026-10-18T00:00:00Z");
+
+    const v4InitialCache: SampleCacheEntry[] = [1211, 1212].map((num) => ({
+      Type: "sample",
+      Number: num,
+      Title: `PR #${num}`,
+      CreatedAt: "2026-11-01T00:00:00Z",
+      LatestCommittedDate: "2026-11-01T00:00:00Z",
+      CommitCount: 1,
+      ReadyAt: "2026-11-01T00:00:00.000Z",
+      MergedAt: "2026-11-17T00:00:00.000Z",
+      TotalDays: 16,
+      TurnDays: 16,
+      ReadyDays: 16,
+      Author: "batch-repeat-user",
+      IsFirstTimer: true,
+      FirstTimerVersion: 4,
+    }));
+
+    // 第 1 回実行: 予算枯渇 (fetchBudget=0) で markRecurringBatchAuthors が動作
+    const firstRun = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 0,
+      initialCache: v4InitialCache,
+    });
+
+    expect(sampleFetches).toBe(0);
+    expect(firstRun.fetchedCount).toBe(0);
+    expect(firstRun.cacheModified).toBeTrue();
+    for (const num of [1211, 1212]) {
+      const saved = firstRun.finalCache.find((e) => e.Number === num);
+      expect(saved?.Type === "sample" && saved.IsFirstTimer).toBeFalse();
+      expect(saved?.Type === "sample" && saved.FirstTimerReason).toBe("recurring-author");
+      // 未再計測のため v4 のまま維持（v5 へ昇格させない）
+      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(4);
+    }
+
+    // 第 2 回実行: 予算あり (fetchBudget=10) でタイムライン再取得が走り、ReadyAt=11/15・ReadyDays=2・v5 へ修復される
+    const secondRun = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates,
+      overallSinceDate,
+      fetchBudget: 10,
+      initialCache: firstRun.finalCache,
+    });
+
+    expect(sampleFetches).toBe(2);
+    expect(secondRun.fetchedCount).toBe(2);
+    expect(secondRun.samples).toHaveLength(2);
+    for (const s of secondRun.samples) {
+      expect(s.readyAt).toBe("2026-11-15T00:00:00.000Z");
+      expect(s.days).toBe(2);
+      expect(s.isFirstTimer).toBeFalse();
+      expect(s.firstTimerReason).toBe("recurring-author");
+      expect(s.firstTimerVersion).toBe(5);
+    }
+    for (const num of [1211, 1212]) {
+      const saved = secondRun.finalCache.find((e) => e.Number === num);
+      expect(saved?.Type === "sample" && saved.ReadyAt).toBe("2026-11-15T00:00:00.000Z");
+      expect(saved?.Type === "sample" && saved.ReadyDays).toBe(2);
+      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(5);
+    }
+  });
+
+  it("走査窓外の v3/v4 キャッシュはタイムライン未検証のまま v5 へ昇格させず、候補内のものはタイムライン再取得で v5 へ修復する", async () => {
     const initialCache: SampleCacheEntry[] = [
       {
         Type: "sample",
@@ -726,24 +978,7 @@ describe("orchestrateSampleCollection", () => {
         FirstTimerReason: "timeline-blocking",
         FirstTimerVersion: 3,
       },
-      {
-        Type: "sample",
-        Number: 449375,
-        Title: "New package: RepeatContributor",
-        CreatedAt: "2026-10-09T07:15:41Z",
-        LatestCommittedDate: "2026-10-09T07:15:37.000Z",
-        CommitCount: 1,
-        ReadyAt: "2026-10-10T01:16:01.000Z",
-        MergedAt: "2026-11-16T19:44:14.000Z",
-        TotalDays: 38.52,
-        TurnDays: 38.52,
-        ReadyDays: 37.77,
-        Author: "repeat-author",
-        IsFirstTimer: false,
-        FirstTimerReason: "timeline-blocking",
-        FirstTimerVersion: 3,
-      },
-      // 走査窓外の古いキャッシュ（candidates に含まれない）も Author 照会で再判定される
+      // 走査窓外の古いキャッシュ（candidates に含まれない）は窓外で勝手に昇格させない
       {
         Type: "sample",
         Number: 411138,
@@ -761,85 +996,43 @@ describe("orchestrateSampleCollection", () => {
         FirstTimerReason: "timeline-blocking",
         FirstTimerVersion: 3,
       },
-      {
-        Type: "sample",
-        Number: 411139,
-        Title: "Older Repeat Author",
-        CreatedAt: "2026-06-01T00:00:00Z",
-        LatestCommittedDate: "2026-06-01T00:00:00Z",
-        CommitCount: 1,
-        ReadyAt: "2026-06-02T00:00:00Z",
-        MergedAt: "2026-07-01T00:00:00Z",
-        TotalDays: 30,
-        TurnDays: 30,
-        ReadyDays: 29,
-        Author: "older-repeat-author",
-        IsFirstTimer: false,
-        FirstTimerReason: "timeline-blocking",
-        FirstTimerVersion: 3,
-      },
     ];
 
     let sampleDataCalled = 0;
-    const graphqlQueries: string[] = [];
     const client: SampleCollectorClient = {
       getPullRequestSampleData: async () => {
         sampleDataCalled++;
-        return {} as ProgressPrSampleData;
-      },
-      graphql: async <T = unknown>(query: string) => {
-        graphqlQueries.push(query);
-        if (query.includes("author:older-first-timer")) {
-          return { u_0: { issueCount: 1 }, u_1: { issueCount: 3 } } as T;
-        }
         return {
-          u_0: { issueCount: 1 }, // tamakichi23
-          u_1: { issueCount: 4 }, // repeat-author
-        } as T;
+          createdAt: "2026-10-09T04:14:06Z",
+          commitCount: 2,
+          latestCommittedDate: "2026-10-09T04:13:31.000Z",
+          author: "tamakichi23",
+          timeline: createTimeline("2026-10-09T05:06:26.000Z"),
+        };
       },
+      graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
     };
 
     const result = await orchestrateSampleCollection({
       client,
       repository: "microsoft/winget-pkgs",
-      candidates: [
-        createSearchItem(449315, "2026-11-16T15:59:28.000Z", "tamakichi23"),
-        createSearchItem(449375, "2026-11-16T19:44:14.000Z", "repeat-author"),
-      ],
+      candidates: [createSearchItem(449315, "2026-11-16T15:59:28.000Z", "tamakichi23")],
       overallSinceDate: new Date("2026-10-18T00:00:00Z"),
       fetchBudget: 10,
       initialCache,
     });
 
-    expect(sampleDataCalled).toBe(0);
-    expect(result.fetchedCount).toBe(0);
-    expect(graphqlQueries).toHaveLength(2);
+    expect(sampleDataCalled).toBe(1);
+    expect(result.fetchedCount).toBe(1);
     expect(result.cacheModified).toBeTrue();
 
     const s449315 = result.samples.find((s) => s.number === 449315);
     expect(s449315?.isFirstTimer).toBeTrue();
     expect(s449315?.firstTimerReason).toBeUndefined();
-    expect(s449315?.firstTimerVersion).toBe(4);
-
-    const s449375 = result.samples.find((s) => s.number === 449375);
-    expect(s449375?.isFirstTimer).toBeFalse();
-    expect(s449375?.firstTimerReason).toBe("lifetime-merged");
-    expect(s449375?.firstTimerVersion).toBe(4);
-
-    const c449315 = result.finalCache.find((e) => e.Number === 449315);
-    expect(c449315?.Type === "sample" && c449315.IsFirstTimer).toBeTrue();
-    expect(c449315?.Type === "sample" && c449315.FirstTimerReason).toBeUndefined();
-    expect(c449315?.Type === "sample" && c449315.FirstTimerVersion).toBe(4);
+    expect(s449315?.firstTimerVersion).toBe(5);
 
     const c411138 = result.finalCache.find((e) => e.Number === 411138);
-    expect(c411138?.Type === "sample" && c411138.IsFirstTimer).toBeTrue();
-    expect(c411138?.Type === "sample" && c411138.FirstTimerReason).toBeUndefined();
-    expect(c411138?.Type === "sample" && c411138.FirstTimerVersion).toBe(4);
-
-    const c411139 = result.finalCache.find((e) => e.Number === 411139);
-    expect(c411139?.Type === "sample" && c411139.IsFirstTimer).toBeFalse();
-    expect(c411139?.Type === "sample" && c411139.FirstTimerReason).toBe("lifetime-merged");
-    expect(c411139?.Type === "sample" && c411139.FirstTimerVersion).toBe(4);
+    expect(c411138?.Type === "sample" && c411138.FirstTimerVersion).toBe(3);
   });
 
   it("走査窓外の v2 timeline-blocking（Waived-* による ReadyAt 未修正）は窓外処理で v4 へ昇格させず、候補復帰時にタイムライン再取得で正しい ReadyDays と初回判定へ修復する", async () => {
@@ -943,6 +1136,6 @@ describe("orchestrateSampleCollection", () => {
     expect(restoredResult.samples[0]?.days).toBe(4);
     expect(restoredResult.samples[0]?.isFirstTimer).toBeTrue();
     expect(restoredResult.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(4);
+    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(5);
   });
 });

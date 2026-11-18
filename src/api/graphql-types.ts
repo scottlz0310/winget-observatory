@@ -40,6 +40,11 @@ export interface GraphQLCommentNode {
   } | null;
   body?: string | null;
   createdAt?: string | null;
+  lastEditedAt?: string | null;
+  editor?: {
+    __typename?: string | null;
+    login?: string | null;
+  } | null;
 }
 
 export interface GraphQLCommentConnection {

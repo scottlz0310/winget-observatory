@@ -3,7 +3,10 @@
 import { formatDeltaBadge } from "../../../src/domain/dashboard";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
 import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
-import { summarizeInterventionFrontier } from "../../../src/domain/intervention";
+import {
+  FIRST_REVIEW_COHORT_ITEM_LIMIT,
+  summarizeInterventionFrontier,
+} from "../../../src/domain/intervention";
 import type { HistoryRowWithDelta } from "../../../src/models/dashboard";
 import type {
   DepthsRow,
@@ -16,7 +19,13 @@ import type {
   ExitBreakdownUnavailableReason,
 } from "../../../src/models/exit-breakdown";
 import type { ForecastHistoryLine, ForecastScore } from "../../../src/models/forecast-history";
-import { escapeHtml, formatErrorDays, formatNumber, renderBadgeHtml } from "../formatters";
+import {
+  escapeHtml,
+  formatErrorDays,
+  formatNumber,
+  formatSamplePackageName,
+  renderBadgeHtml,
+} from "../formatters";
 import type { LatestDepths } from "../types";
 
 interface BottomTableRenderOptions {
@@ -291,6 +300,12 @@ function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): 
   const badgeText = frontier
     ? `計 ${frontier.CohortCount} 件 (Open ${frontier.OpenCount} / Merged ${frontier.MergedCount})`
     : "未観測";
+  const countBadgesHtml = frontier
+    ? `<div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <span class="badge" style="background: #e0f2fe; color: #0369a1; font-weight: 600;">${escapeHtml(badgeText)}</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">直近介入順 ${FIRST_REVIEW_COHORT_ITEM_LIMIT} 件表示</span>
+          </div>`
+    : `<span class="badge" style="background: #e0f2fe; color: #0369a1; font-weight: 600;">未観測</span>`;
   const oldestDateText =
     frontier?.OldestCreatedAt && Number.isFinite(Date.parse(frontier.OldestCreatedAt))
       ? formatJstDate(Date.parse(frontier.OldestCreatedAt))
@@ -307,36 +322,44 @@ function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): 
   const renderRow = (item: FirstReviewCohortItem): string => {
     const stateBadge =
       item.State === "MERGED"
-        ? `<span class="badge" style="background: #dcfce7; color: #15803d; font-size: 0.7rem;">MERGED</span>`
-        : `<span class="badge" style="background: #e0f2fe; color: #0369a1; font-size: 0.7rem;">OPEN</span>`;
+        ? `<span class="badge sample-nowrap" style="background: #dcfce7; color: #15803d; font-size: 0.7rem;">MERGED</span>`
+        : `<span class="badge sample-nowrap" style="background: #e0f2fe; color: #0369a1; font-size: 0.7rem;">OPEN</span>`;
     const kindLabel = item.InterventionKind
       ? COHORT_INTERVENTION_LABELS[item.InterventionKind]
       : "介入";
     const interventionBadge = item.InterventionKind
       ? `<span class="badge" style="${INTERVENTION_BADGE_COLORS[item.InterventionKind]} font-size: 0.7rem; margin-left: 0.25rem;">${escapeHtml(kindLabel)}${item.InterventionActor ? `: ${escapeHtml(item.InterventionActor)}` : ""}</span>`
       : "";
+    const { displayName, fullTitle } = formatSamplePackageName(item.Title);
+    const pkgHtml = displayName
+      ? `<div title="${escapeHtml(fullTitle)}" style="font-size: 0.8rem; color: var(--text-color); margin-top: 0.15rem; word-break: break-word;">${escapeHtml(displayName)}</div>`
+      : "";
     return `
       <tr>
-        <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a> ${stateBadge}</td>
+        <td style="min-width: 170px;">
+          <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+            <a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; white-space: nowrap;">#${escapeHtml(item.Number)}</a>
+            ${stateBadge}
+          </div>
+          ${pkgHtml}
+        </td>
         <td>${escapeHtml(item.Author ?? "-")}</td>
-        <td>${item.CommitCount !== undefined ? escapeHtml(item.CommitCount) : "-"}</td>
-        <td>${escapeHtml(formatJstDateTime(item.CreatedAt, false))}</td>
-        <td>${escapeHtml(formatJstDateTime(item.FirstHumanInterventionAt, false))}${interventionBadge}</td>
-        <td>${escapeHtml(item.Title)}</td>
+        <td class="sample-nowrap">${item.CommitCount !== undefined ? escapeHtml(item.CommitCount) : "-"}</td>
+        <td class="sample-nowrap">${escapeHtml(formatJstDateTime(item.CreatedAt, false))}</td>
+        <td><span class="sample-nowrap">${escapeHtml(formatJstDateTime(item.FirstHumanInterventionAt, false))}</span>${interventionBadge}</td>
       </tr>`;
   };
 
   const body =
     items.length > 0
-      ? `<table>
+      ? `<table class="sample-table">
           <thead>
             <tr>
-              <th>PR / 状態</th>
+              <th>PR / パッケージ</th>
               <th>作者</th>
-              <th>コミット数</th>
-              <th>起票日時 (JST)</th>
-              <th>初回人間介入 (JST)</th>
-              <th>タイトル</th>
+              <th class="sample-nowrap">コミット数</th>
+              <th class="sample-nowrap">起票日時 (JST)</th>
+              <th class="sample-nowrap">初回人間介入 (JST)</th>
             </tr>
           </thead>
           <tbody>${items.map(renderRow).join("")}
@@ -349,9 +372,9 @@ function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): 
         )}</p>`;
 
   return `<div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #0ea5e9;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
           <h3 style="font-size: 1.05rem; font-weight: 600; color: #0284c7;">🎯 主戦場ライン内訳（直近7日・初回介入コホート）</h3>
-          <span class="badge" style="background: #e0f2fe; color: #0369a1; font-weight: 600;">${escapeHtml(badgeText)}</span>
+          ${countBadgesHtml}
         </div>
         <p class="section-note" style="margin-bottom: 0.5rem;">
           直近 7 日間に初めて人間介入が入った初回提出者 PR（オープン中 ＋ 直近マージ済み）の初回介入新しい順内訳です。この母集団全体の起票日時中央値を主戦場ラインとします。
@@ -370,9 +393,9 @@ export function renderInterventionFrontierComparisonSection(depths: LatestDepths
 
   return `<h2 class="section-title">👀 未レビュー・介入分離（主戦場ライン 7日初回介入コホート vs 未レビュー前線）</h2>
     <p class="section-note">
-      ボット・作成者本人・自動検証ログ（(Deterministic automation）を除いた人間介入の有無・初回日時をもとに、「主戦場ライン（直近 7 日に初めて人間介入が入ったオープン中＋マージ済み初回 PR コホート）」の内訳と、参考指標としての完全未着手キュー（未レビュー前線）を示します。
+      ボット・作成者本人・自動検証ログ（Deterministic automation）を除いた人間介入の有無・初回日時をもとに、「主戦場ライン（直近 7 日に初めて人間介入が入ったオープン中＋マージ済み初回 PR コホート）」の内訳と、参考指標としての完全未着手キュー（未レビュー前線）を示します。
     </p>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
       ${renderMainstreamCohortCard(depths?.FirstReviewFrontier)}
 
       ${renderInterventionFrontierCard({

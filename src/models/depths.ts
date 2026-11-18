@@ -71,6 +71,8 @@ export interface PrInterventionCommentInput {
   author?: PrInterventionActor | null;
   body?: string | null;
   createdAt?: string | null;
+  lastEditedAt?: string | null;
+  editor?: PrInterventionActor | null;
 }
 
 /**
@@ -187,6 +189,8 @@ export interface GraphQLPrNode {
       author?: PrInterventionActor | null;
       body?: string | null;
       createdAt?: string | null;
+      lastEditedAt?: string | null;
+      editor?: PrInterventionActor | null;
     } | null> | null;
   } | null;
   timelineItems?: {

@@ -376,7 +376,7 @@ export function renderFirstReviewForecastPanel(forecast: FirstReviewForecast): s
         </div>
       </div>
       <div class="card-subtext">
-        ※ 純粋ボット・作成者本人・自動検証ログ（(Deterministic automation）を除き、直近 7 日間に初めて人間介入（人間レビュー・手動コメント・第三者 Assignees）が入った初回提出者（New-Package）PR 群（オープン中＋直近マージ済み）の起票日時中央値を主戦場ラインとしています。既存の「予想マージ日（2 仮説）」とは独立した初回介入の目安です。
+        ※ 純粋ボット・作成者本人・自動検証ログ（Deterministic automation）を除き、直近 7 日間に初めて人間介入（人間レビュー・手動コメント・第三者 Assignees）が入った初回提出者（New-Package）PR 群（オープン中＋直近マージ済み）の起票日時中央値を主戦場ラインとしています。既存の「予想マージ日（2 仮説）」とは独立した初回介入の目安です。
       </div>
     </section>`;
 }

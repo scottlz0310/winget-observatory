@@ -11,8 +11,10 @@ import {
 import { getPercentile } from "../../../src/domain/progress";
 import type { ProgressSnapshotSample, ReferenceGuidance } from "../../../src/models/progress";
 import type { FirstTimerFastestRanking } from "../../../src/models/sample-cache";
-import { escapeHtml, formatDaysStat } from "../formatters";
+import { escapeHtml, formatDaysStat, formatSamplePackageName } from "../formatters";
 import type { LatestProgress } from "../types";
+
+export { formatSamplePackageName };
 
 /** 実績サンプルが少なく、数値が揺れやすいとみなす件数 */
 const FEW_SAMPLES = 10;
@@ -308,22 +310,6 @@ export function summarizeRecentSamplesPace(
     singleCommitMedianDays: calcTotalDaysMedian(singleCommitSamples),
     multiCommitCount: multiCommitSamples.length,
     multiCommitMedianDays: calcTotalDaysMedian(multiCommitSamples),
-  };
-}
-
-/** PR タイトルから `New package: ` / `New version: ` プレフィックスを整理した表示用パッケージ名を返す */
-export function formatSamplePackageName(title: string | undefined): {
-  displayName: string;
-  fullTitle: string;
-} {
-  const fullTitle = (title ?? "").trim();
-  if (!fullTitle) {
-    return { displayName: "", fullTitle: "" };
-  }
-  const stripped = fullTitle.replace(/^\s*(?:New package|New version)\s*:\s*/i, "").trim();
-  return {
-    displayName: stripped || fullTitle,
-    fullTitle,
   };
 }
 
