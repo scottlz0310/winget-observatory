@@ -18,6 +18,7 @@ import {
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
+  MIN_VALIDATION_GUIDE_READY_VERSION,
   resolveAuthorMergedCounts,
   shouldReevaluateAuthorFirstTimer,
   shouldReevaluateCachedSample,
@@ -119,11 +120,12 @@ function resolveCachedCandidate(params: {
       author: cached.Author,
     });
 
-    if (shouldReevaluate) {
-      return { needsReevaluation: canFetchMore };
+    if (shouldReevaluate && canFetchMore) {
+      return { needsReevaluation: true };
     }
 
     if (
+      !shouldReevaluate &&
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: cached.FirstTimerReason,
         firstTimerVersion: cached.FirstTimerVersion,
@@ -135,18 +137,19 @@ function resolveCachedCandidate(params: {
 
     if (
       cached.IsFirstTimer === false &&
-      (cached.FirstTimerVersion === undefined ||
-        cached.FirstTimerVersion < CURRENT_FIRST_TIMER_VERSION) &&
       cached.FirstTimerReason === undefined &&
       cached.CommitCount > 1 &&
       candAuthorCount > 1
     ) {
+      const hasValidatedReady =
+        cached.FirstTimerVersion !== undefined &&
+        cached.FirstTimerVersion >= MIN_VALIDATION_GUIDE_READY_VERSION;
       return {
         needsReevaluation: false,
         updatedEntry: {
           ...cached,
           FirstTimerReason: "recurring-author",
-          FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+          ...(hasValidatedReady ? { FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION } : {}),
         },
       };
     }

@@ -5,6 +5,7 @@ import {
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
+  MIN_VALIDATION_GUIDE_READY_VERSION,
   MIN_WAIVED_READY_VERSION,
   parseAuthorMergedCounts,
   resolveAuthorMergedCounts,
@@ -136,17 +137,25 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     ).toBe(true);
   });
 
-  test("候補期間内に別 PR がある常連（authorCountInCandidates > 1）は再評価不要", () => {
+  test("v4 以前の旧版は候補期間内に別 PR がある常連（authorCountInCandidates > 1）でも ReadyAt 再計測のため再評価対象", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
         commitCount: 3,
         authorCountInCandidates: 2,
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerVersion: 4,
+        commitCount: 3,
+        authorCountInCandidates: 2,
+      }),
+    ).toBe(true);
   });
 
-  test("すでに新版バージョン（firstTimerVersion >= 4）で判定済みの場合は再評価不要", () => {
+  test("すでに新版バージョン（firstTimerVersion >= 5）で判定済みの場合は再評価不要", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
@@ -155,9 +164,26 @@ describe("Domain: shouldReevaluateCachedSample", () => {
         authorCountInCandidates: 1,
       }),
     ).toBe(false);
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: true,
+        firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+        commitCount: 1,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(false);
   });
 
-  test("v3 の timeline-blocking でも Author が保存済みならタイムライン再取得は不要（Author 判定のみ対象）", () => {
+  test("v5 未満（v4 / v3 / v2 / 未設定）は Validation-Guide 阻害化に伴う ReadyAt 再検証のため再評価対象", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: true,
+        firstTimerVersion: 4,
+        commitCount: 1,
+        authorCountInCandidates: 1,
+        author: "tamakichi23",
+      }),
+    ).toBe(true);
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
@@ -166,48 +192,34 @@ describe("Domain: shouldReevaluateCachedSample", () => {
         commitCount: 3,
         authorCountInCandidates: 1,
         author: "tamakichi23",
+      }),
+    ).toBe(true);
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerReason: "lifetime-merged",
+        firstTimerVersion: 4,
+        commitCount: 3,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(true);
+  });
+
+  test("v5 未満や v5 以降のレコードは shouldReevaluateAuthorFirstTimer が false を返す", () => {
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        firstTimerVersion: 4,
+        author: "v4-user",
       }),
     ).toBe(false);
     expect(
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: "timeline-blocking",
         firstTimerVersion: MIN_WAIVED_READY_VERSION,
-        author: "tamakichi23",
+        author: "v3-user",
       }),
-    ).toBe(true);
-  });
-
-  test("Author が未保存の timeline-blocking、または v3 未満の timeline-blocking はタイムライン再取得対象", () => {
-    expect(
-      shouldReevaluateCachedSample({
-        isFirstTimer: false,
-        firstTimerReason: "timeline-blocking",
-        firstTimerVersion: MIN_WAIVED_READY_VERSION,
-        commitCount: 1,
-        authorCountInCandidates: 1,
-      }),
-    ).toBe(true);
-    expect(
-      shouldReevaluateCachedSample({
-        isFirstTimer: false,
-        firstTimerReason: "timeline-blocking",
-        firstTimerVersion: 2,
-        commitCount: 1,
-        authorCountInCandidates: 2,
-        author: "old-user",
-      }),
-    ).toBe(true);
-    expect(
-      shouldReevaluateCachedSample({
-        isFirstTimer: false,
-        firstTimerReason: "timeline-blocking",
-        commitCount: 3,
-        authorCountInCandidates: 1,
-      }),
-    ).toBe(true);
-  });
-
-  test("v3 未満（v2 / 未設定）や v4 以降のレコードは shouldReevaluateAuthorFirstTimer が false を返す", () => {
+    ).toBe(false);
     expect(
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: "timeline-blocking",
@@ -231,37 +243,34 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     expect(
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: "lifetime-merged",
-        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
         author: "repeat-user",
       }),
     ).toBe(false);
   });
 
-  test("すでに累計マージ数理由（lifetime-merged）が確定している場合は再評価不要", () => {
+  test("v5（MIN_VALIDATION_GUIDE_READY_VERSION 以上）で累計マージ数理由（lifetime-merged）または IsFirstTimer=true が確定している場合は再評価不要", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
         firstTimerReason: "lifetime-merged",
+        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
         commitCount: 3,
         authorCountInCandidates: 1,
       }),
     ).toBe(false);
-  });
-
-  test("旧版でコミット数が 1 だった PR はコミット数制限による除外ではないため再評価不要", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
+        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
         commitCount: 1,
         authorCountInCandidates: 1,
       }),
     ).toBe(false);
-  });
-
-  test("IsFirstTimer が true のサンプルは再評価不要", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: true,
+        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
         commitCount: 3,
         authorCountInCandidates: 1,
       }),

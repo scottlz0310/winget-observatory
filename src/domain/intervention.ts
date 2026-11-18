@@ -147,10 +147,30 @@ function hasEditedTimestampAfterCreation(comment: PrInterventionCommentInput): b
 }
 
 /**
+ * 自動検証ログ（`(Deterministic automation`）を含むコメントが、
+ * 投稿後に第三者の人間によって編集された（`lastEditedAt` かつ `editor` がボット・作成者本人でない）かを判定する。
+ */
+function isThirdPartyHumanEditedComment(
+  comment: PrInterventionCommentInput,
+  prAuthorLogin?: string | null,
+): boolean {
+  if (!hasEditedTimestampAfterCreation(comment)) {
+    return false;
+  }
+  if (comment.editor) {
+    return !isBotActor(comment.editor) && !isSameActorLogin(comment.editor.login, prAuthorLogin);
+  }
+  return !isBotActor(comment.author) && !isSameActorLogin(comment.author?.login, prAuthorLogin);
+}
+
+/**
  * 自動検証ログ（`(Deterministic automation`）を含むコメントに、
  * ボット・作成者本人以外の人間による手動追記または編集形跡が含まれるかを判定する。
  * - `editor` がボットまたは作成者本人の場合は自動編集／本人編集として除外（false）する。
- * - マーカー末尾以降の追記・非引用行の `Edit:` / `*Edit:` 記載、または投稿後の `lastEditedAt` 存在を検知する。
+ * - 元投稿者（`author`）がボットまたは作成者本人の場合は、第三者の人間 `editor` による投稿後の編集のみを検知し、
+ *   未編集のボット追記や作成者本人による自動ログ引用を誤検知しない。
+ * - 元投稿者が第三者人間の場合は、マーカー末尾以降の追記・非引用行の `Edit:` / `*Edit:` 記載、
+ *   または投稿後の `lastEditedAt` 存在を検知する。
  */
 export function hasDeterministicAutomationManualEdit(
   comment: PrInterventionCommentInput,
@@ -161,6 +181,9 @@ export function hasDeterministicAutomationManualEdit(
   }
   if (isBotActor(comment.editor) || isSameActorLogin(comment.editor?.login, prAuthorLogin)) {
     return false;
+  }
+  if (isBotActor(comment.author) || isSameActorLogin(comment.author?.login, prAuthorLogin)) {
+    return isThirdPartyHumanEditedComment(comment, prAuthorLogin);
   }
   if (hasManualAppendInDeterministicBody(comment.body as string)) {
     return true;
@@ -256,13 +279,10 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
 
   const comments = unwrapNodes<PrInterventionCommentInput>(input.comments);
   const manualComments = comments.filter((c) => {
-    if (isBotActor(c.author) || isSameActorLogin(c.author?.login, prAuthorLogin)) {
-      return false;
+    if (isDeterministicAutomationComment(c.body)) {
+      return hasDeterministicAutomationManualEdit(c, prAuthorLogin);
     }
-    if (!isDeterministicAutomationComment(c.body)) {
-      return true;
-    }
-    return hasDeterministicAutomationManualEdit(c, prAuthorLogin);
+    return !isBotActor(c.author) && !isSameActorLogin(c.author?.login, prAuthorLogin);
   });
 
   const assignedEvents = unwrapNodes<PrInterventionAssignedEventInput>(input.timelineItems).filter(

@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - 観測ロジックの純度向上とダッシュボード表示改善（`#439241` 観測点検対応）:
-  - `src/domain/labels.ts`: `INVESTIGATION_LABELS` に `Validation-Guide` を追加し、健康 PR 検索クエリ（`buildHealthyQueryParts` / `buildMergedCandidateQueryParts`）・`isBlockedLabel`・`simulateReadySince` のすべてで阻害ラベル（非健康）として除外・非 Ready 化するよう統一
-  - `src/domain/intervention.ts`, `src/models/depths.ts`, `src/api/graphql-types.ts`, `src/api/graphql-queries.ts`: GraphQL コメント取得に `lastEditedAt` と `editor` を追加し、`(Deterministic automation` を含むコメントでもボット・作成者本人を除く人間による手動追記（マーカー末尾以降の追記・非引用行の `Edit:` / `*Edit:` 記載・投稿後の `lastEditedAt` 更新）を人間介入として検知（編集日時を `FirstHumanInterventionAt` に採用、ボット自動編集やログ引用内テキストの誤検知を除外）
+  - `src/domain/labels.ts`, `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`: `INVESTIGATION_LABELS` に `Validation-Guide` を追加して健康 PR 検索クエリ（`buildHealthyQueryParts` / `buildMergedCandidateQueryParts`）・`isBlockedLabel`・`simulateReadySince` で阻害ラベルとして除外・非 Ready 化し、`CURRENT_FIRST_TIMER_VERSION = 5` / `MIN_VALIDATION_GUIDE_READY_VERSION = 5` へ更新して旧版キャッシュの `ReadyAt` / `ReadyDays` を自動再計測するよう移行
+  - `src/domain/intervention.ts`, `src/models/depths.ts`, `src/api/graphql-types.ts`, `src/api/graphql-queries.ts`: GraphQL コメント取得に `lastEditedAt` と `editor` を追加し、`(Deterministic automation` を含むコメントでもボット・作成者本人を除く人間による手動追記（マーカー末尾以降の追記・非引用行の `Edit:` / `*Edit:` 記載・投稿後の `lastEditedAt` 更新、元投稿者がボット／本人の場合は第三者人間 `editor` による投稿後編集）を人間介入として検知（編集日時を `FirstHumanInterventionAt` に採用、ボット自動編集やログ引用内テキストの誤検知を除外）
   - `scripts/pages/formatters.ts`, `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/sections/stats-and-samples.ts`: `🎯 主戦場ライン内訳` テーブルの右端 `タイトル` 列を左端 `PR / パッケージ` 列（`formatSamplePackageName` 共有）へ統合し、件数バッジ横に「直近介入順 30 件表示」の補足を明記、狭幅グリッドの折り返し安全化を実施
 - 初回提出者（`IsFirstTimer`）判定から `timeline-blocking`（過去の阻害ラベル・Draft 履歴）除外を廃止し、生涯マージ実績ベースへ統一:
   - `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`, `src/models/sample-cache.ts`: `hasBlockingOrDraftHistory` / `isFirstTimerSampleCandidate` による事前除外を廃止し、`CURRENT_FIRST_TIMER_VERSION = 4` へ更新（`no-ready` / `ReadyAt` 再評価の閾値は `MIN_WAIVED_READY_VERSION = 3` を維持）

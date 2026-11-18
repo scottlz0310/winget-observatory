@@ -223,6 +223,42 @@ describe("Domain: intervention helpers", () => {
       prAuthor: "kachakaran6",
       expected: false,
     },
+    {
+      name: "元投稿者がボット（wingetbot）でも第三者人間 editor が投稿後に編集した場合は検知",
+      comment: {
+        author: { __typename: "User", login: "wingetbot" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: "2026-10-30T20:24:10Z",
+        editor: { __typename: "User", login: "stephengillie" },
+        body: "(Deterministic automation - build 1831.)\n\nEdit: Needs manual host check.",
+      },
+      prAuthor: "kachakaran6",
+      expected: true,
+    },
+    {
+      name: "元投稿者がボットで未編集のまま末尾テキストを含む場合は誤検知しない",
+      comment: {
+        author: { __typename: "User", login: "wingetbot" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: null,
+        editor: null,
+        body: "(Deterministic automation - build 1831.)\n\nGenerated automatically.",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
+    {
+      name: "元投稿者が PR 作成者本人で未編集の引用追記を含む場合は誤検知しない",
+      comment: {
+        author: { __typename: "User", login: "kachakaran6" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: null,
+        editor: null,
+        body: "> (Deterministic automation - build 1831.)\n\nI fixed the URL.",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
   ])(
     "hasDeterministicAutomationManualEdit: $name -> $expected",
     ({ comment, prAuthor, expected }) => {
@@ -374,6 +410,58 @@ describe("Domain: classifyPrIntervention", () => {
       HumanReviewCount: 0,
       ManualCommentCount: 0,
     });
+  });
+
+  test("元投稿者がボット（wingetbot）または PR 作成者本人の自動検証ログでも、第三者人間 editor による投稿後編集は人間介入として検知する", () => {
+    const summaryFromBot = classifyPrIntervention({
+      author: { __typename: "User", login: "kachakaran6" },
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "wingetbot" },
+            createdAt: "2026-10-30T20:23:43Z",
+            lastEditedAt: "2026-10-30T20:25:00Z",
+            editor: { __typename: "User", login: "maintainer" },
+            body: "Validation output:\n(Deterministic automation - build 1831.)\n\nEdit: Retrying after host maintenance.",
+          },
+        ],
+      },
+    });
+
+    expect(summaryFromBot).toEqual({
+      Intervened: true,
+      ThirdPartyAssignees: [],
+      HumanReviewCount: 0,
+      ManualCommentCount: 1,
+      PrimaryBadge: {
+        Kind: "comment",
+        Actor: "maintainer",
+        Label: "コメント済: maintainer",
+      },
+      FirstHumanInterventionAt: "2026-10-30T20:25:00.000Z",
+      FirstInterventionKind: "comment",
+      FirstInterventionActor: "maintainer",
+    });
+
+    const summaryFromAuthor = classifyPrIntervention({
+      author: { __typename: "User", login: "kachakaran6" },
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "kachakaran6" },
+            createdAt: "2026-10-30T20:23:43Z",
+            lastEditedAt: "2026-10-30T21:00:00Z",
+            editor: { __typename: "User", login: "stephengillie" },
+            body: "> (Deterministic automation - build 1831.)\n\nEdit: Confirmed by maintainer.",
+          },
+        ],
+      },
+    });
+
+    expect(summaryFromAuthor.Intervened).toBe(true);
+    expect(summaryFromAuthor.ManualCommentCount).toBe(1);
+    expect(summaryFromAuthor.PrimaryBadge?.Actor).toBe("stephengillie");
+    expect(summaryFromAuthor.FirstHumanInterventionAt).toBe("2026-10-30T21:00:00.000Z");
   });
 
   test.each<{
