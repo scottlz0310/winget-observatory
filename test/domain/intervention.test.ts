@@ -5,12 +5,17 @@ import {
   DELETED_ACTOR_LABEL,
   FIRST_REVIEW_MAINSTREAM_MODE,
   type FirstReviewCohortCandidate,
+  hasDeterministicAutomationManualEdit,
   isBotActor,
   isDeterministicAutomationComment,
   isSameActorLogin,
   summarizeInterventionFrontier,
 } from "../../src/domain/intervention";
-import type { DepthsRow, PrInterventionActor } from "../../src/models/depths";
+import type {
+  DepthsRow,
+  PrInterventionActor,
+  PrInterventionCommentInput,
+} from "../../src/models/depths";
 
 describe("Domain: intervention helpers", () => {
   test.each<{
@@ -96,6 +101,135 @@ describe("Domain: intervention helpers", () => {
     expect(isDeterministicAutomationComment(body)).toBe(expected);
   });
 
+  test.each<{
+    name: string;
+    comment: PrInterventionCommentInput;
+    prAuthor?: string | null;
+    expected: boolean;
+  }>([
+    {
+      name: "末尾に Edit: 追記＋lastEditedAt＋人間 editor がある（#439241 実例相当）",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: "2026-10-30T20:23:59Z",
+        editor: { __typename: "User", login: "stephengillie" },
+        body: "Manual Validation ended with:\n> error\n\n(Deterministic automation - build 1831.)\n\nEdit: My approval VMs have been having difficulty connecting to this host recently.",
+      },
+      prAuthor: "kachakaran6",
+      expected: true,
+    },
+    {
+      name: "末尾に *Edit: ...*（斜体）があり lastEditedAt 省略時も手動追記として検知",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        body: "Manual Validation ended with:\n(Deterministic automation - build 1831.)\n\n*Edit: My approval VMs have been having difficulty connecting to this host recently.*",
+      },
+      prAuthor: "kachakaran6",
+      expected: true,
+    },
+    {
+      name: "先頭（マーカー前）の非引用行に *Edit: が追記されている場合も検知",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        body: "*Edit: Please check installer URL.*\n\n(Deterministic automation - build 1831.)",
+      },
+      prAuthor: "kachakaran6",
+      expected: true,
+    },
+    {
+      name: "lastEditedAt が投稿後に更新され、editor が第三者人間なら本文途中編集でも検知",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: "2026-10-30T20:25:00Z",
+        editor: { __typename: "User", login: "stephengillie" },
+        body: "Manual note inserted above.\n(Deterministic automation - build 1831.)",
+      },
+      prAuthor: "kachakaran6",
+      expected: true,
+    },
+    {
+      name: "純粋な自動検証ログ（未編集・末尾改行と HTML コメントのみ）は除外",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: null,
+        editor: null,
+        body: "Automatic Validation ended with:\n(Deterministic automation - build 1831.)\n<!-- auto -->\n",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
+    {
+      name: "引用ログ内に Edit: が含まれるだけの未編集コメントは誤検知しない",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: null,
+        editor: null,
+        body: "Automatic Validation ended with:\n> Edit: something in installer output\n(Deterministic automation - build 1831.)",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
+    {
+      name: "lastEditedAt が createdAt と同一時刻かつ追記なしは未編集として除外",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: "2026-10-30T20:23:43Z",
+        editor: { __typename: "User", login: "stephengillie" },
+        body: "Automatic Validation ended with: (Deterministic automation - build 1831.)",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
+    {
+      name: "ボット（__typename: Bot）による自動編集は人間介入と誤検知しない",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: "2026-10-30T20:24:00Z",
+        editor: { __typename: "Bot", login: "winget-automation" },
+        body: "Automatic Validation ended with:\n(Deterministic automation - build 1831.)\nEdit: Automated retry note",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
+    {
+      name: "純粋ボット名（wingetbot / [bot]）による自動編集も人間介入と誤検知しない",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: "2026-10-30T20:24:00Z",
+        editor: { __typename: "User", login: "wingetbot" },
+        body: "(Deterministic automation - build 1831.)\nUpdated by bot",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
+    {
+      name: "PR 作成者本人による編集は第三者介入とみなさない",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-10-30T20:23:43Z",
+        lastEditedAt: "2026-10-30T20:24:00Z",
+        editor: { __typename: "User", login: "Kachakaran6" },
+        body: "(Deterministic automation - build 1831.)\nEdit: Fixed by author",
+      },
+      prAuthor: "kachakaran6",
+      expected: false,
+    },
+  ])(
+    "hasDeterministicAutomationManualEdit: $name -> $expected",
+    ({ comment, prAuthor, expected }) => {
+      expect(hasDeterministicAutomationManualEdit(comment, prAuthor)).toBe(expected);
+    },
+  );
+
   test("isSameActorLogin は大小文字無視で比較し、作成者不明時は false を返す", () => {
     expect(isSameActorLogin("Alice", "alice")).toBe(true);
     expect(isSameActorLogin("bob", "alice")).toBe(false);
@@ -174,6 +308,71 @@ describe("Domain: classifyPrIntervention", () => {
         Actor: "stephengillie",
         Label: "コメント済: stephengillie",
       },
+    });
+  });
+
+  test("自動検証ログにメンテナの手動追記（Edit:＋lastEditedAt）がある場合は人間介入と判定し、編集日時を FirstHumanInterventionAt とする", () => {
+    const summary = classifyPrIntervention({
+      author: { __typename: "User", login: "kachakaran6" },
+      assignees: { nodes: [] },
+      reviews: { nodes: [] },
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-10-30T05:01:16Z",
+            lastEditedAt: null,
+            editor: null,
+            body: "This manifest version has been depreciated. (Deterministic automation - build 1830.)",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-10-30T20:23:43Z",
+            lastEditedAt: "2026-10-31T01:00:00Z",
+            editor: { __typename: "User", login: "stephengillie" },
+            body: "Manual Validation ended with:\n> error\n\n(Deterministic automation - build 1831.)\n\n*Edit: My approval VMs have been having difficulty connecting to this host recently.*",
+          },
+        ],
+      },
+    });
+
+    expect(summary).toEqual({
+      Intervened: true,
+      ThirdPartyAssignees: [],
+      HumanReviewCount: 0,
+      ManualCommentCount: 1,
+      PrimaryBadge: {
+        Kind: "comment",
+        Actor: "stephengillie",
+        Label: "コメント済: stephengillie",
+      },
+      FirstHumanInterventionAt: "2026-10-31T01:00:00.000Z",
+      FirstInterventionKind: "comment",
+      FirstInterventionActor: "stephengillie",
+    });
+  });
+
+  test("自動検証ログがボットアカウントにより自動編集された場合は人間介入として誤検知しない", () => {
+    const summary = classifyPrIntervention({
+      author: { __typename: "User", login: "kachakaran6" },
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-10-30T20:23:43Z",
+            lastEditedAt: "2026-10-30T20:24:10Z",
+            editor: { __typename: "Bot", login: "github-actions[bot]" },
+            body: "Manual Validation ended with:\n(Deterministic automation - build 1831.)\nEdit: Automated sync",
+          },
+        ],
+      },
+    });
+
+    expect(summary).toEqual({
+      Intervened: false,
+      ThirdPartyAssignees: [],
+      HumanReviewCount: 0,
+      ManualCommentCount: 0,
     });
   });
 

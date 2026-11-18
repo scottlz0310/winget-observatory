@@ -89,6 +89,7 @@ describe("Domain: progress label evaluation", () => {
     expect(parts).toContain("repo:microsoft/winget-pkgs");
     expect(parts).toContain('label:"New-Package"');
     expect(parts).toContain('-label:"Needs-CLA"');
+    expect(parts).toContain('-label:"Validation-Guide"');
     for (const pat of PATTERN_BLOCKED_LABELS) {
       expect(parts).toContain(`-label:"${pat}"`);
     }
@@ -102,6 +103,7 @@ describe("Domain: progress label evaluation", () => {
     expect(mergedParts).toContain("is:merged");
     expect(mergedParts).toContain("draft:false");
     expect(mergedParts).toContain('-label:"Policy-Test-1.5"');
+    expect(mergedParts).toContain('-label:"Validation-Guide"');
     expect(mergedParts).not.toContain('-label:"Waived-Validation-Defender-Error"');
   });
 });
@@ -245,6 +247,49 @@ describe("Domain: simulateReadySince", () => {
     expect(simulateReadySinceDirect(events, false, endAt)?.toISOString()).toBe(
       "2026-11-01T12:00:00.000Z",
     );
+  });
+
+  test("Validation-Guide が付与されている区間は非 Ready（null）となり、解除後のみ再成立する", () => {
+    const baseEvents: ProgressTimelineEvent[] = [
+      { event: "labeled", created_at: "2026-10-01T10:00:00Z", label: { name: "New-Package" } },
+      {
+        event: "labeled",
+        created_at: "2026-10-01T11:00:00Z",
+        label: { name: "Azure-Pipeline-Passed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-10-01T12:00:00Z",
+        label: { name: "Validation-Completed" },
+      },
+      {
+        event: "labeled",
+        created_at: "2026-10-30T05:02:09Z",
+        label: { name: "Validation-Guide" },
+      },
+    ];
+
+    // 付与されたまま未解除の時点では ReadyAt は null（非 Ready）
+    expect(
+      simulateReadySinceDirect(baseEvents, false, new Date("2026-11-18T00:00:00Z")),
+    ).toBeNull();
+
+    // Validation-Guide が解除されたら解除日時から再成立する
+    const resolvedEvents: ProgressTimelineEvent[] = [
+      ...baseEvents,
+      {
+        event: "unlabeled",
+        created_at: "2026-11-19T08:00:00Z",
+        label: { name: "Validation-Guide" },
+      },
+    ];
+    expect(
+      simulateReadySinceDirect(
+        resolvedEvents,
+        false,
+        new Date("2026-11-20T00:00:00Z"),
+      )?.toISOString(),
+    ).toBe("2026-11-19T08:00:00.000Z");
   });
 });
 

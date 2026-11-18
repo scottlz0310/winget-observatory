@@ -101,6 +101,89 @@ export function isDeterministicAutomationComment(body: string | null | undefined
   return typeof body === "string" && body.includes(DETERMINISTIC_AUTOMATION_MARKER);
 }
 
+const EXPLICIT_EDIT_LINE_PATTERN = /^(?:\*{1,2}|_{1,2})?edit\s*:/i;
+
+function hasManualAppendInDeterministicBody(body: string): boolean {
+  const markerIdx = body.lastIndexOf(DETERMINISTIC_AUTOMATION_MARKER);
+  if (markerIdx >= 0) {
+    const closeIdx = body.indexOf(")", markerIdx);
+    if (closeIdx >= 0) {
+      const trailing = body
+        .slice(closeIdx + 1)
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .trim();
+      if (trailing.length > 0) {
+        return true;
+      }
+    }
+  }
+
+  for (const rawLine of body.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith(">")) {
+      continue;
+    }
+    if (EXPLICIT_EDIT_LINE_PATTERN.test(trimmed)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasEditedTimestampAfterCreation(comment: PrInterventionCommentInput): boolean {
+  if (!comment.lastEditedAt) {
+    return false;
+  }
+  const editedMs = Date.parse(comment.lastEditedAt);
+  if (!Number.isFinite(editedMs)) {
+    return false;
+  }
+  if (!comment.createdAt) {
+    return true;
+  }
+  const createdMs = Date.parse(comment.createdAt);
+  return !Number.isFinite(createdMs) || editedMs > createdMs;
+}
+
+/**
+ * 自動検証ログ（`(Deterministic automation`）を含むコメントに、
+ * ボット・作成者本人以外の人間による手動追記または編集形跡が含まれるかを判定する。
+ * - `editor` がボットまたは作成者本人の場合は自動編集／本人編集として除外（false）する。
+ * - マーカー末尾以降の追記・非引用行の `Edit:` / `*Edit:` 記載、または投稿後の `lastEditedAt` 存在を検知する。
+ */
+export function hasDeterministicAutomationManualEdit(
+  comment: PrInterventionCommentInput,
+  prAuthorLogin?: string | null,
+): boolean {
+  if (!isDeterministicAutomationComment(comment.body)) {
+    return false;
+  }
+  if (isBotActor(comment.editor) || isSameActorLogin(comment.editor?.login, prAuthorLogin)) {
+    return false;
+  }
+  if (hasManualAppendInDeterministicBody(comment.body as string)) {
+    return true;
+  }
+  return hasEditedTimestampAfterCreation(comment);
+}
+
+function resolveCommentActor(comment: PrInterventionCommentInput): string {
+  if (isDeterministicAutomationComment(comment.body)) {
+    return comment.editor?.login?.trim() || comment.author?.login?.trim() || DELETED_ACTOR_LABEL;
+  }
+  return comment.author?.login?.trim() || DELETED_ACTOR_LABEL;
+}
+
+function resolveCommentInterventionAt(
+  comment: PrInterventionCommentInput,
+): string | null | undefined {
+  if (isDeterministicAutomationComment(comment.body) && hasEditedTimestampAfterCreation(comment)) {
+    return comment.lastEditedAt;
+  }
+  return comment.createdAt;
+}
+
 /**
  * PR 作成者（authorLogin）を除外した第三者 Assignees のログイン名一覧を抽出する。
  * - 大文字・小文字を区別せずに作成者本人を除外する（セルフアサインを第三者扱いしない）
@@ -172,12 +255,15 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
   );
 
   const comments = unwrapNodes<PrInterventionCommentInput>(input.comments);
-  const manualComments = comments.filter(
-    (c) =>
-      !isBotActor(c.author) &&
-      !isSameActorLogin(c.author?.login, prAuthorLogin) &&
-      !isDeterministicAutomationComment(c.body),
-  );
+  const manualComments = comments.filter((c) => {
+    if (isBotActor(c.author) || isSameActorLogin(c.author?.login, prAuthorLogin)) {
+      return false;
+    }
+    if (!isDeterministicAutomationComment(c.body)) {
+      return true;
+    }
+    return hasDeterministicAutomationManualEdit(c, prAuthorLogin);
+  });
 
   const assignedEvents = unwrapNodes<PrInterventionAssignedEventInput>(input.timelineItems).filter(
     (e) => isEligibleThirdPartyAssignedEvent(e, prAuthorLogin),
@@ -209,11 +295,7 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
     );
   }
   for (const c of manualComments) {
-    considerInterventionTime(
-      c.createdAt,
-      "comment",
-      c.author?.login?.trim() || DELETED_ACTOR_LABEL,
-    );
+    considerInterventionTime(resolveCommentInterventionAt(c), "comment", resolveCommentActor(c));
   }
   for (const e of assignedEvents) {
     considerInterventionTime(
@@ -236,7 +318,7 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
     };
   } else if (manualComments.length > 0) {
     const latestComment = manualComments[manualComments.length - 1];
-    const actor = latestComment.author?.login?.trim() || DELETED_ACTOR_LABEL;
+    const actor = resolveCommentActor(latestComment);
     primaryBadge = {
       Kind: "comment",
       Actor: actor,

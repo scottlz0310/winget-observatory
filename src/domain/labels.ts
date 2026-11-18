@@ -53,6 +53,7 @@ export const INVESTIGATION_LABELS: readonly string[] = [
   "Validation-Hash-Verification-Failed",
   "Validation-Unapproved-URL",
   "Validation-SmartScreen",
+  "Validation-Guide",
 ] as const;
 
 /**

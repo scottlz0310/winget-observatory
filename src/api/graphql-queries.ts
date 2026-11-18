@@ -110,6 +110,11 @@ query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
           }
           body
           createdAt
+          lastEditedAt
+          editor {
+            __typename
+            login
+          }
         }
       }
       timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {
@@ -372,6 +377,11 @@ query GetPullRequestCommentsPage($owner: String!, $name: String!, $number: Int!,
           }
           body
           createdAt
+          lastEditedAt
+          editor {
+            __typename
+            login
+          }
         }
       }
     }
@@ -439,6 +449,11 @@ query SearchInterventionCandidates($query: String!, $first: Int!, $after: String
             }
             body
             createdAt
+            lastEditedAt
+            editor {
+              __typename
+              login
+            }
           }
         }
         timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {
@@ -529,6 +544,11 @@ export function buildPullRequestBatchInterventionQuery(numbers: readonly number[
           }
           body
           createdAt
+          lastEditedAt
+          editor {
+            __typename
+            login
+          }
         }
       }
       timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {

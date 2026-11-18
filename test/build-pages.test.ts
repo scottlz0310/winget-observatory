@@ -1334,7 +1334,7 @@ describe("buildDashboard: 過去実績との比較", () => {
         Items: [
           {
             Number: 441001,
-            Title: "Merged First Timer",
+            Title: "New package: Vendor.App version 1.0.0",
             Url: "https://github.com/microsoft/winget-pkgs/pull/441001",
             State: "MERGED",
             Author: "ft-1",
@@ -1347,7 +1347,7 @@ describe("buildDashboard: 過去実績との比較", () => {
           },
           {
             Number: 441003,
-            Title: "Open First Timer",
+            Title: "New version: Another.Pkg version 2.1.0",
             Url: "https://github.com/microsoft/winget-pkgs/pull/441003",
             State: "OPEN",
             Author: "ft-2",
@@ -1435,8 +1435,20 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain(
         "👀 未レビュー・介入分離（主戦場ライン 7日初回介入コホート vs 未レビュー前線）",
       );
+      expect(html).not.toContain("（(");
+      expect(html).toContain("自動検証ログ（Deterministic automation）");
       expect(html).toContain("🎯 主戦場ライン内訳（直近7日・初回介入コホート）");
       expect(html).toContain("計 12 件 (Open 5 / Merged 7)");
+      expect(html).toContain("直近介入順 30 件表示");
+      const mainstreamCardHtml = html
+        .split("🎯 主戦場ライン内訳（直近7日・初回介入コホート）")[1]
+        .split("🟦 未レビュー前線（参考: 完全未着手キュー）")[0];
+      expect(mainstreamCardHtml).toContain("<th>PR / パッケージ</th>");
+      expect(mainstreamCardHtml).not.toContain("<th>タイトル</th>");
+      expect(mainstreamCardHtml).toContain('title="New package: Vendor.App version 1.0.0"');
+      expect(mainstreamCardHtml).toContain("Vendor.App version 1.0.0");
+      expect(mainstreamCardHtml).toContain('title="New version: Another.Pkg version 2.1.0"');
+      expect(mainstreamCardHtml).toContain("Another.Pkg version 2.1.0");
       expect(html).toContain("🟦 未レビュー前線（参考: 完全未着手キュー）");
       expect(html).toContain("MERGED");
       expect(html).toContain("OPEN");
