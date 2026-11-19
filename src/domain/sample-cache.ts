@@ -9,6 +9,8 @@ import type {
   FirstTimerFastestRanking,
   SampleCacheEntry,
 } from "../models/sample-cache";
+import { isPrivilegedOrBotAuthor, MIN_VALIDATION_GUIDE_READY_VERSION } from "./first-timer";
+import { DAY_MS } from "./formatters";
 
 /** 統計に採用したサンプルを、キャッシュの 1 件にする */
 export function toCachedSample(sample: MergedCandidateSample): CachedSampleEntry {
@@ -25,6 +27,10 @@ export function toCachedSample(sample: MergedCandidateSample): CachedSampleEntry
     TurnDays: sample.turnDays,
     ReadyDays: sample.days,
     ...(sample.author !== undefined ? { Author: sample.author } : {}),
+    ...(sample.authorType !== undefined ? { AuthorType: sample.authorType } : {}),
+    ...(sample.authorAssociation !== undefined
+      ? { AuthorAssociation: sample.authorAssociation }
+      : {}),
     ...(sample.isFirstTimer !== undefined ? { IsFirstTimer: sample.isFirstTimer } : {}),
     ...(sample.firstTimerReason !== undefined ? { FirstTimerReason: sample.firstTimerReason } : {}),
     ...(sample.firstTimerVersion !== undefined
@@ -47,6 +53,10 @@ export function fromCachedSample(entry: CachedSampleEntry): MergedCandidateSampl
     turnDays: entry.TurnDays,
     days: entry.ReadyDays,
     ...(entry.Author !== undefined ? { author: entry.Author } : {}),
+    ...(entry.AuthorType !== undefined ? { authorType: entry.AuthorType } : {}),
+    ...(entry.AuthorAssociation !== undefined
+      ? { authorAssociation: entry.AuthorAssociation }
+      : {}),
     ...(entry.IsFirstTimer !== undefined ? { isFirstTimer: entry.IsFirstTimer } : {}),
     ...(entry.FirstTimerReason !== undefined ? { firstTimerReason: entry.FirstTimerReason } : {}),
     ...(entry.FirstTimerVersion !== undefined
@@ -108,6 +118,12 @@ function validateEntry(parsed: unknown, lineNumber: number): SampleCacheEntry {
     if (entry.Author !== undefined && typeof entry.Author !== "string") {
       return fail("Author が文字列ではありません");
     }
+    if (entry.AuthorType !== undefined && typeof entry.AuthorType !== "string") {
+      return fail("AuthorType が文字列ではありません");
+    }
+    if (entry.AuthorAssociation !== undefined && typeof entry.AuthorAssociation !== "string") {
+      return fail("AuthorAssociation が文字列ではありません");
+    }
     if (entry.IsFirstTimer !== undefined && typeof entry.IsFirstTimer !== "boolean") {
       return fail("IsFirstTimer が真偽値ではありません");
     }
@@ -116,7 +132,8 @@ function validateEntry(parsed: unknown, lineNumber: number): SampleCacheEntry {
         entry.FirstTimerReason !== "multi-commit" &&
         entry.FirstTimerReason !== "timeline-blocking" &&
         entry.FirstTimerReason !== "recurring-author" &&
-        entry.FirstTimerReason !== "lifetime-merged"
+        entry.FirstTimerReason !== "lifetime-merged" &&
+        entry.FirstTimerReason !== "privileged-or-bot"
       ) {
         return fail(`FirstTimerReason が不正です: ${String(entry.FirstTimerReason)}`);
       }
@@ -176,22 +193,96 @@ export function serializeSampleCacheEntries(entries: SampleCacheEntry[]): string
 /** 初回提出者 最速マージランキングの既定表示上限件数 */
 export const FIRST_TIMER_FASTEST_RANKING_LIMIT = 10;
 
+/** 初回提出者 最速マージランキングの既定集計窓（起票日時 CreatedAt 起点の日数） */
+export const FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS = 90;
+
+/** バイパス即マージを除外するための条件成立後経過日数（ReadyDays）の下限 */
+export const FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS = 0.5;
+
+/** v4 以前のゾンビキャッシュ（Validation-Guide 阻害化前）を除外するための最低判定バージョン */
+export const FIRST_TIMER_FASTEST_RANKING_MIN_VERSION = MIN_VALIDATION_GUIDE_READY_VERSION;
+
+/** 初回提出者 最速マージランキング抽出オプション */
+export interface ExtractFirstTimerFastestRankingOptions {
+  /** 表示上限件数（既定: 10） */
+  limit?: number;
+  /** 起票日時（CreatedAt）起点の集計窓日数。0 以下指定時は期間フィルタ無効（既定: 90） */
+  windowDays?: number;
+  /** 条件成立後経過日数（ReadyDays）の下限（既定: 0.5） */
+  minReadyDays?: number;
+  /** 対象とする初回判定ロジックの最低バージョン（既定: 5） */
+  minFirstTimerVersion?: number;
+  /** 集計窓の基準時刻（既定: 現在時刻） */
+  now?: Date;
+}
+
 /**
  * 蓄積済みサンプルキャッシュから、初回提出者（IsFirstTimer === true）の
  * 最速マージランキング（TotalDays 昇順・上位 limit 件）を抽出する。
  *
  * - Type === "sample" のみを対象に Number キーで重複排除する（後続行優先）
- * - 期間フィルタは行わず蓄積全件を対象とし、該当全件数（totalCount）も返す
+ * - 特権ロール（MEMBER / OWNER / COLLABORATOR）および Bot を除外する
+ * - ReadyDays >= minReadyDays（既定 0.5 日）でエラー/CLA 解除直後のバイパス即マージを除外する
+ * - FirstTimerVersion >= minFirstTimerVersion（既定 5）で v4 以前のゾンビキャッシュを除外する
+ * - CreatedAt が直近 windowDays（既定 90 日）以内のサンプルに限定する
  */
 export function extractFirstTimerFastestRanking(
   entries: readonly SampleCacheEntry[],
-  limit = FIRST_TIMER_FASTEST_RANKING_LIMIT,
+  options: ExtractFirstTimerFastestRankingOptions = {},
 ): FirstTimerFastestRanking {
+  const rawLimit = options.limit ?? FIRST_TIMER_FASTEST_RANKING_LIMIT;
+  const safeLimit = Number.isFinite(rawLimit)
+    ? Math.max(0, Math.floor(rawLimit))
+    : FIRST_TIMER_FASTEST_RANKING_LIMIT;
+
+  const windowDays = options.windowDays ?? FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS;
+  if (!Number.isFinite(windowDays) || windowDays < 0) {
+    throw new RangeError(`windowDays は 0 以上の有限数値を指定してください: ${windowDays}`);
+  }
+
+  const minReadyDays = options.minReadyDays ?? FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS;
+  if (!Number.isFinite(minReadyDays) || minReadyDays < 0) {
+    throw new RangeError(`minReadyDays は 0 以上の有限数値を指定してください: ${minReadyDays}`);
+  }
+
+  const minFirstTimerVersion =
+    options.minFirstTimerVersion ?? FIRST_TIMER_FASTEST_RANKING_MIN_VERSION;
+  const nowMs = (options.now ?? new Date()).getTime();
+  if (!Number.isFinite(nowMs)) {
+    throw new RangeError("now は有効な Date を指定してください");
+  }
+  const cutoffMs = windowDays > 0 ? nowMs - windowDays * DAY_MS : Number.NEGATIVE_INFINITY;
+
   const latestByNumber = indexSampleCache(entries);
 
-  const firstTimers = [...latestByNumber.values()].filter(
-    (entry): entry is CachedSampleEntry => entry.Type === "sample" && entry.IsFirstTimer === true,
-  );
+  const firstTimers = [...latestByNumber.values()].filter((entry): entry is CachedSampleEntry => {
+    if (entry.Type !== "sample" || entry.IsFirstTimer !== true) {
+      return false;
+    }
+    if (
+      isPrivilegedOrBotAuthor({
+        author: entry.Author,
+        authorType: entry.AuthorType,
+        authorAssociation: entry.AuthorAssociation,
+      })
+    ) {
+      return false;
+    }
+    if ((entry.FirstTimerVersion ?? 0) < minFirstTimerVersion) {
+      return false;
+    }
+    if (entry.ReadyDays < minReadyDays) {
+      return false;
+    }
+    if (windowDays > 0) {
+      const createdMs = Date.parse(entry.CreatedAt);
+      if (!Number.isFinite(createdMs) || createdMs < cutoffMs) {
+        return false;
+      }
+    }
+    return true;
+  });
+
   firstTimers.sort(
     (a, b) =>
       a.TotalDays - b.TotalDays ||
@@ -200,9 +291,9 @@ export function extractFirstTimerFastestRanking(
       a.Number - b.Number,
   );
 
-  const safeLimit = Math.max(0, limit);
   return {
     totalCount: firstTimers.length,
     items: firstTimers.slice(0, safeLimit),
+    windowDays,
   };
 }

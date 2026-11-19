@@ -9,6 +9,12 @@ import {
   toJstEpochDay,
 } from "../../../src/domain/formatters";
 import { getPercentile } from "../../../src/domain/progress";
+import {
+  FIRST_TIMER_FASTEST_RANKING_LIMIT,
+  FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS,
+  FIRST_TIMER_FASTEST_RANKING_MIN_VERSION,
+  FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS,
+} from "../../../src/domain/sample-cache";
 import type { ProgressSnapshotSample, ReferenceGuidance } from "../../../src/models/progress";
 import type { FirstTimerFastestRanking } from "../../../src/models/sample-cache";
 import { escapeHtml, formatDaysStat, formatSamplePackageName } from "../formatters";
@@ -222,18 +228,24 @@ export function renderRivalsSection(progress: LatestProgress | null): string {
     </table>`;
 }
 
-/** 初回提出者限定の最速マージランキング（蓄積全件 TOP 10） */
+/** 初回提出者限定の最速マージランキング（直近90日起票 TOP 10） */
 export function renderFirstTimerFastestRankingSection(
   ranking: FirstTimerFastestRanking | undefined,
   repo: string,
 ): string {
   const totalCount = ranking?.totalCount ?? 0;
   const items = ranking?.items ?? [];
+  const windowDays = ranking?.windowDays ?? FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS;
+  const windowLabel = windowDays > 0 ? `直近 ${windowDays} 日起票` : "蓄積全件";
+  const scopeNote =
+    windowDays > 0
+      ? `直近 ${windowDays} 日以内に起票された初回提出者`
+      : "蓄積サンプル内の初回提出者";
 
   if (items.length === 0) {
     return `
-    <h2 class="section-title">🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）</h2>
-    <p class="section-note">蓄積サンプル内の初回提出者: 0 件</p>
+    <h2 class="section-title">🏆 初回提出者 最速マージランキング（${escapeHtml(windowLabel)} TOP ${FIRST_TIMER_FASTEST_RANKING_LIMIT}）</h2>
+    <p class="section-note">${escapeHtml(scopeNote)}（成立後 ${FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS} 日以上・v${FIRST_TIMER_FASTEST_RANKING_MIN_VERSION} 以上・特権ロール/Bot 除外）: 0 件</p>
     <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 2rem;">対象の初回提出者サンプルがまだありません</p>`;
   }
 
@@ -255,9 +267,9 @@ export function renderFirstTimerFastestRankingSection(
     .join("");
 
   return `
-    <h2 class="section-title">🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）</h2>
+    <h2 class="section-title">🏆 初回提出者 最速マージランキング（${escapeHtml(windowLabel)} TOP ${FIRST_TIMER_FASTEST_RANKING_LIMIT}）</h2>
     <p class="section-note">
-      蓄積サンプル内の初回提出者（全 ${totalCount} 件）から、通算日数（起票→マージ）が短い上位 ${items.length} 件を表示しています。
+      ${escapeHtml(scopeNote)}（成立後 ${FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS} 日以上・v${FIRST_TIMER_FASTEST_RANKING_MIN_VERSION} 以上・特権ロール/Bot 除外・全 ${totalCount} 件）から、通算日数（起票→マージ）が短い上位 ${items.length} 件を表示しています。
     </p>
     <div style="overflow-x: auto;">
       <table>

@@ -37,6 +37,8 @@ export interface ProgressPrSampleData {
   commitCount: number;
   latestCommittedDate: string;
   author?: string;
+  authorType?: string;
+  authorAssociation?: string;
   timeline: ProgressTimelineEvent[];
 }
 
@@ -84,6 +86,8 @@ export interface MergedCandidateSample {
   turnDays: number;
   days: number;
   author?: string;
+  authorType?: string;
+  authorAssociation?: string;
   isFirstTimer?: boolean;
   firstTimerReason?: FirstTimerDisqualificationReason;
   firstTimerVersion?: number;

@@ -3,14 +3,40 @@
  * 外部 I/O を行わず、src/models の型定義のみに依存する。
  */
 
-/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版, 5: Validation-Guide 阻害ラベル化・ReadyAt 再計測版） */
-export const CURRENT_FIRST_TIMER_VERSION = 5;
+/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版, 5: Validation-Guide 阻害ラベル化・ReadyAt 再計測版, 6: 特権ロール・Bot 除外版） */
+export const CURRENT_FIRST_TIMER_VERSION = 6;
 
 /** Waived-* 免除ラベルを健康体扱いとして no-ready を評価した最低バージョン */
 export const MIN_WAIVED_READY_VERSION = 3;
 
 /** Validation-Guide 阻害ラベル化を反映した ReadyAt / ReadyDays を持つ最低バージョン */
 export const MIN_VALIDATION_GUIDE_READY_VERSION = 5;
+
+const PRIVILEGED_AUTHOR_ASSOCIATIONS = new Set(["MEMBER", "OWNER", "COLLABORATOR"]);
+
+/**
+ * 作者がリポジトリの特権ロール（MEMBER / OWNER / COLLABORATOR）または Bot アカウントか判定する。
+ * GitHub 仕様上、マージ後は一般の初回提出者も `CONTRIBUTOR` へ変わるため `CONTRIBUTOR` は許容する。
+ */
+export function isPrivilegedOrBotAuthor(params: {
+  author?: string;
+  authorType?: string;
+  authorAssociation?: string;
+}): boolean {
+  if (params.authorType?.trim().toLowerCase() === "bot") {
+    return true;
+  }
+  if (params.author?.trim().toLowerCase().endsWith("[bot]")) {
+    return true;
+  }
+  if (
+    params.authorAssociation &&
+    PRIVILEGED_AUTHOR_ASSOCIATIONS.has(params.authorAssociation.trim().toUpperCase())
+  ) {
+    return true;
+  }
+  return false;
+}
 
 /**
  * 検索一覧の軽量メタデータから、初回提出者の候補として詳細フェッチを行う価値があるか判定するための入力。
@@ -213,7 +239,8 @@ export function shouldReevaluateCachedSample(params: {
 
   if (
     params.firstTimerReason === "lifetime-merged" ||
-    params.firstTimerReason === "recurring-author"
+    params.firstTimerReason === "recurring-author" ||
+    params.firstTimerReason === "privileged-or-bot"
   ) {
     return false;
   }

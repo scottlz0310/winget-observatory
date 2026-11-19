@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 初回提出者 最速マージランキングから不純物を除外し、特権ロール・Bot 除外判定（v6）を導入（#117）:
+  - `src/api/graphql-queries.ts`, `src/api/graphql-adapters.ts`, `src/models/`, `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`: `GET_PULL_REQUEST_SAMPLE_QUERY` で `author { __typename login }` と `authorAssociation` を取得・保存し、`MEMBER` / `OWNER` / `COLLABORATOR` / `Bot`（`AuthorType === "Bot"` / `[bot]`）を `privileged-or-bot` として初回判定から除外（`CURRENT_FIRST_TIMER_VERSION = 6`。既存 v5 キャッシュは `MIN_VALIDATION_GUIDE_READY_VERSION = 5` を維持して遡及再取得しない）
+  - `src/domain/sample-cache.ts`, `scripts/build-pages.ts`, `scripts/pages/sections/stats-and-samples.ts`: `extractFirstTimerFastestRanking` に `ReadyDays >= 0.5`（バイパス即マージ除外）・`FirstTimerVersion >= 5`（v4 ゾンビキャッシュ除外）・`CreatedAt` 直近 90 日窓（定数・オプションで調整可能）・特権ロール/Bot 二重除外を追加し、ダッシュボード見出し・注記を最新仕様へ更新（複数コミットの通常調整ケースは許容維持）
 - ダッシュボード最上部を「統合処理バンド」ヒーローカードへ再編し、「消化前線」呼称を「健康的大底」へ統一（#114）:
   - `scripts/pages/sections/hero-and-kpi.ts`, `scripts/pages/template.ts`, `scripts/pages/styles.ts`, `src/domain/chart.ts`: 縦 3 段のトップカードを `renderIntegratedForecastHero`（本命中央値バンド・全体レンジ・前線/本命/大底 統合タイムライン SVG・現在の処理帯スナップショット・折りたたみ詳細）へ統合し、`renderTimelineSvg` に全体レンジ補助帯 `overallBand` を追加
   - `scripts/pages/sections/stats-and-samples.ts`: トップカードから重複していた追い越し分離内訳を下部 `renderOvertakeSection` へ集約

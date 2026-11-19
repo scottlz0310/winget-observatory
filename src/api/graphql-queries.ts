@@ -193,8 +193,10 @@ query GetPullRequestSample($owner: String!, $name: String!, $number: Int!, $afte
     pullRequest(number: $number) {
       createdAt
       author {
+        __typename
         login
       }
+      authorAssociation
       commits(last: 1) {
         totalCount
         nodes {

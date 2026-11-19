@@ -852,7 +852,8 @@ describe("API: GitHubApiClient", () => {
               repository: {
                 pullRequest: {
                   createdAt: "2026-11-01T00:00:00Z",
-                  author: { login: "sample-user" },
+                  author: { __typename: "User", login: "sample-user" },
+                  authorAssociation: "CONTRIBUTOR",
                   commits: {
                     totalCount: 3,
                     nodes: [{ commit: { committedDate: "2026-11-02T00:00:00Z" } }],
@@ -907,6 +908,8 @@ describe("API: GitHubApiClient", () => {
     expect(sample.commitCount).toBe(3);
     expect(sample.latestCommittedDate).toBe("2026-11-02T00:00:00Z");
     expect(sample.author).toBe("sample-user");
+    expect(sample.authorType).toBe("User");
+    expect(sample.authorAssociation).toBe("CONTRIBUTOR");
     expect(sample.timeline.length).toBe(2);
 
     await expect(client.getPullRequestSampleData("test/repo", 999)).rejects.toThrow(GitHubApiError);

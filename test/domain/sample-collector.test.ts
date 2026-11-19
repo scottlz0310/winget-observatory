@@ -486,7 +486,7 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples[0]?.days).toBe(4);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(5);
+    expect(result.samples[0]?.firstTimerVersion).toBe(6);
   });
 
   it("新版（FirstTimerVersion: 3）で記録済みの no-ready キャッシュは再取得せずスキップを維持する", async () => {
@@ -700,11 +700,11 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples).toHaveLength(1);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(5);
+    expect(result.samples[0]?.firstTimerVersion).toBe(6);
     const saved = result.finalCache.find((e) => e.Number === 449315);
     expect(saved?.Type === "sample" && saved.IsFirstTimer).toBeTrue();
     expect(saved?.Type === "sample" && saved.FirstTimerReason).toBeUndefined();
-    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(5);
+    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(6);
   });
 
   it("Validation-Guide 阻害化に伴う v4 キャッシュ再評価: 一時付与→解除サンプルと未解除サンプルが、空キャッシュ時と同一の ReadyAt / ReadyDays / skipped になる", async () => {
@@ -843,7 +843,7 @@ describe("orchestrateSampleCollection", () => {
     expect(migratedResult.samples[0]?.number).toBe(1201);
     expect(migratedResult.samples[0]?.readyAt).toBe("2026-11-15T00:00:00.000Z");
     expect(migratedResult.samples[0]?.days).toBe(2);
-    expect(migratedResult.samples[0]?.firstTimerVersion).toBe(5);
+    expect(migratedResult.samples[0]?.firstTimerVersion).toBe(6);
     expect(migratedResult.finalCache).toEqual(emptyResult.finalCache);
   });
 
@@ -949,13 +949,13 @@ describe("orchestrateSampleCollection", () => {
       expect(s.days).toBe(2);
       expect(s.isFirstTimer).toBeFalse();
       expect(s.firstTimerReason).toBe("recurring-author");
-      expect(s.firstTimerVersion).toBe(5);
+      expect(s.firstTimerVersion).toBe(6);
     }
     for (const num of [1211, 1212]) {
       const saved = secondRun.finalCache.find((e) => e.Number === num);
       expect(saved?.Type === "sample" && saved.ReadyAt).toBe("2026-11-15T00:00:00.000Z");
       expect(saved?.Type === "sample" && saved.ReadyDays).toBe(2);
-      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(5);
+      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(6);
     }
   });
 
@@ -1029,7 +1029,7 @@ describe("orchestrateSampleCollection", () => {
     const s449315 = result.samples.find((s) => s.number === 449315);
     expect(s449315?.isFirstTimer).toBeTrue();
     expect(s449315?.firstTimerReason).toBeUndefined();
-    expect(s449315?.firstTimerVersion).toBe(5);
+    expect(s449315?.firstTimerVersion).toBe(6);
 
     const c411138 = result.finalCache.find((e) => e.Number === 411138);
     expect(c411138?.Type === "sample" && c411138.FirstTimerVersion).toBe(3);
@@ -1136,6 +1136,119 @@ describe("orchestrateSampleCollection", () => {
     expect(restoredResult.samples[0]?.days).toBe(4);
     expect(restoredResult.samples[0]?.isFirstTimer).toBeTrue();
     expect(restoredResult.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(5);
+    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(6);
+  });
+
+  it("特権ロール (MEMBER/OWNER/COLLABORATOR) と Bot は累計マージ照会を行わず privileged-or-bot (v6) で除外し、CONTRIBUTOR は許容する", async () => {
+    const capturedQueries: string[] = [];
+    const client: SampleCollectorClient = {
+      getPullRequestSampleData: async (_repo, num) => {
+        const meta: Record<
+          number,
+          { author: string; authorType: string; authorAssociation: string }
+        > = {
+          1301: { author: "asklar", authorType: "User", authorAssociation: "MEMBER" },
+          1302: { author: "collab-dev", authorType: "User", authorAssociation: "COLLABORATOR" },
+          1303: { author: "auto-app", authorType: "Bot", authorAssociation: "NONE" },
+          1304: { author: "normal-user", authorType: "User", authorAssociation: "CONTRIBUTOR" },
+        };
+        const m = meta[num];
+        return {
+          createdAt: "2026-11-01T00:00:00Z",
+          commitCount: 1,
+          latestCommittedDate: "2026-11-01T00:00:00Z",
+          author: m.author,
+          authorType: m.authorType,
+          authorAssociation: m.authorAssociation,
+          timeline: createTimeline("2026-11-01T01:00:00Z"),
+        };
+      },
+      graphql: async <T = unknown>(query: string) => {
+        capturedQueries.push(query);
+        return { u_0: { issueCount: 1 } } as T;
+      },
+    };
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [
+        createSearchItem(1301, "2026-11-05T00:00:00Z", "asklar"),
+        createSearchItem(1302, "2026-11-05T00:00:00Z", "collab-dev"),
+        createSearchItem(1303, "2026-11-05T00:00:00Z", "auto-app"),
+        createSearchItem(1304, "2026-11-05T00:00:00Z", "normal-user"),
+      ],
+      overallSinceDate: new Date("2026-10-18T00:00:00Z"),
+      fetchBudget: 10,
+      initialCache: [],
+    });
+
+    // 特権ロール・Bot の 3 件は累計マージ照会に回らず、normal-user のみ照会される
+    expect(capturedQueries).toHaveLength(1);
+    expect(capturedQueries[0]).toContain("author:normal-user");
+    expect(capturedQueries[0]).not.toContain("author:asklar");
+
+    for (const num of [1301, 1302, 1303]) {
+      const s = result.samples.find((item) => item.number === num);
+      expect(s?.isFirstTimer).toBeFalse();
+      expect(s?.firstTimerReason).toBe("privileged-or-bot");
+      expect(s?.firstTimerVersion).toBe(6);
+      const cached = result.finalCache.find((e) => e.Number === num);
+      expect(cached?.Type === "sample" && cached.FirstTimerReason).toBe("privileged-or-bot");
+      expect(cached?.Type === "sample" && cached.FirstTimerVersion).toBe(6);
+    }
+
+    const normal = result.samples.find((item) => item.number === 1304);
+    expect(normal?.isFirstTimer).toBeTrue();
+    expect(normal?.authorAssociation).toBe("CONTRIBUTOR");
+    expect(normal?.firstTimerVersion).toBe(6);
+  });
+
+  it("既存の FirstTimerVersion: 5 キャッシュ（AuthorAssociation 未記録）は fetchBudget を消費して遡及再取得しない", async () => {
+    let fetched = 0;
+    let graphqlCalled = 0;
+    const client: SampleCollectorClient = {
+      getPullRequestSampleData: async () => {
+        fetched++;
+        return {} as ProgressPrSampleData;
+      },
+      graphql: async <T = unknown>() => {
+        graphqlCalled++;
+        return {} as T;
+      },
+    };
+
+    const v5Cache: SampleCacheEntry[] = [
+      {
+        Type: "sample",
+        Number: 1401,
+        Title: "PR #1401",
+        CreatedAt: "2026-11-01T00:00:00Z",
+        LatestCommittedDate: "2026-11-01T00:00:00Z",
+        CommitCount: 1,
+        ReadyAt: "2026-11-01T01:00:00.000Z",
+        MergedAt: "2026-11-10T00:00:00.000Z",
+        TotalDays: 9,
+        TurnDays: 9,
+        ReadyDays: 8.96,
+        Author: "v5-user",
+        IsFirstTimer: true,
+        FirstTimerVersion: 5,
+      },
+    ];
+
+    const result = await orchestrateSampleCollection({
+      client,
+      repository: "microsoft/winget-pkgs",
+      candidates: [createSearchItem(1401, "2026-11-10T00:00:00.000Z", "v5-user")],
+      overallSinceDate: new Date("2026-10-18T00:00:00Z"),
+      fetchBudget: 10,
+      initialCache: v5Cache,
+    });
+
+    expect(fetched).toBe(0);
+    expect(graphqlCalled).toBe(0);
+    expect(result.fetchedCount).toBe(0);
+    expect(result.samples[0]?.firstTimerVersion).toBe(5);
   });
 });
