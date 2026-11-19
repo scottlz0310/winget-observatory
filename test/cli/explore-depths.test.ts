@@ -2294,4 +2294,115 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("fetchFirstReviewMainstreamFrontier は 1 ページ目が特権ロールの自動指摘のみでも後続ページから初回人間介入日時を補完してコホートに含める", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-mainstream-paging-"));
+    const samplesPath = join(tempDir, "merged-samples.jsonl");
+    const now = new Date("2026-11-17T00:00:00Z");
+    writeFileSync(samplesPath, "", "utf-8");
+
+    try {
+      let extraPageFetchCount = 0;
+      const mockClient = {
+        graphql: async <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
+          if (query.includes("SearchInterventionLightCandidates")) {
+            const searchQ = String(variables?.query ?? "");
+            if (searchQ.includes("is:open")) {
+              return {
+                search: {
+                  issueCount: 1,
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      number: 990,
+                      author: { login: "open-first-timer-990" },
+                      authorAssociation: "NONE",
+                    },
+                  ],
+                },
+              } as unknown as T;
+            }
+            return {
+              search: {
+                issueCount: 0,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            } as unknown as T;
+          }
+          if (query.includes("GetPullRequestInterventionBatch")) {
+            return {
+              repository: {
+                pr0: {
+                  number: 990,
+                  title: "Open First Timer 990",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/990",
+                  state: "OPEN",
+                  createdAt: "2026-10-12T00:00:00Z",
+                  updatedAt: "2026-11-16T12:00:00Z",
+                  author: { __typename: "User", login: "open-first-timer-990" },
+                  authorAssociation: "NONE",
+                  commits: { totalCount: 1 },
+                  reviews: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [],
+                  },
+                  comments: {
+                    pageInfo: { hasNextPage: true, endCursor: "c1" },
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "stephengillie" },
+                        authorAssociation: "COLLABORATOR",
+                        body: "This PR cannot be merged.\n\n(Deterministic automation)",
+                        createdAt: "2026-10-12T01:00:00Z",
+                        lastEditedAt: null,
+                      },
+                    ],
+                  },
+                },
+              },
+            } as unknown as T;
+          }
+          if (variables?.after === "c1") {
+            extraPageFetchCount += 1;
+            return {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "winget-reviewer" },
+                        authorAssociation: "MEMBER",
+                        body: "Thanks, reviewing package manifest now.",
+                        createdAt: "2026-11-16T12:00:00Z",
+                        lastEditedAt: null,
+                      },
+                    ],
+                  },
+                },
+              },
+            } as unknown as T;
+          }
+          return {} as T;
+        },
+      } as unknown as GitHubApiClient;
+
+      const frontier = await fetchFirstReviewMainstreamFrontier({
+        client: mockClient,
+        repository: "microsoft/winget-pkgs",
+        now,
+        samplesPath,
+      });
+
+      expect(extraPageFetchCount).toBe(1);
+      expect(frontier.CohortCount).toBe(1);
+      expect(frontier.OpenCount).toBe(1);
+      expect(frontier.MedianCreatedAt).toBe("2026-10-12T00:00:00.000Z");
+      expect(frontier.Items?.[0]?.FirstHumanInterventionAt).toBe("2026-11-16T12:00:00.000Z");
+      expect(frontier.Items?.[0]?.InterventionActor).toBe("winget-reviewer");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -432,6 +432,121 @@ describe("API: GitHubApiClient", () => {
     },
   );
 
+  test.each([
+    {
+      name: "comments 後続ページの手動コメントで FirstHumanInterventionAt を取得する",
+      reviewsHasNext: false,
+      commentsHasNext: true,
+      extraReviewNodes: [],
+      extraCommentNodes: [
+        {
+          author: { login: "reviewer-b" },
+          authorAssociation: "MEMBER",
+          body: "Looks good, please fix typo",
+          createdAt: "2026-11-18T12:00:00Z",
+          lastEditedAt: null,
+        },
+      ],
+      expectedHumanReviews: 0,
+      expectedManualComments: 1,
+      expectedFirstHumanAt: "2026-11-18T12:00:00.000Z",
+      expectedBadgeLabel: "コメント済: reviewer-b",
+    },
+    {
+      name: "reviews 後続ページの人間レビューで FirstHumanInterventionAt を取得する",
+      reviewsHasNext: true,
+      commentsHasNext: false,
+      extraReviewNodes: [
+        {
+          author: { login: "winget-maintainer" },
+          state: "APPROVED",
+          submittedAt: "2026-11-18T15:00:00Z",
+        },
+      ],
+      extraCommentNodes: [],
+      expectedHumanReviews: 1,
+      expectedManualComments: 0,
+      expectedFirstHumanAt: "2026-11-18T15:00:00.000Z",
+      expectedBadgeLabel: "レビュー済: winget-maintainer (APPROVED)",
+    },
+  ])(
+    "resolvePrInterventionWithPaging は特権ロールの自動指摘のみで Intervened=true になっても $name",
+    async ({
+      reviewsHasNext,
+      commentsHasNext,
+      extraReviewNodes,
+      extraCommentNodes,
+      expectedHumanReviews,
+      expectedManualComments,
+      expectedFirstHumanAt,
+      expectedBadgeLabel,
+    }) => {
+      let pageCalls = 0;
+      const initialNode: Parameters<typeof resolvePrInterventionWithPaging>[3] = {
+        number: 439626,
+        author: { login: "contributor-a" },
+        assignees: { nodes: [] },
+        reviews: {
+          pageInfo: { hasNextPage: reviewsHasNext, endCursor: reviewsHasNext ? "r1" : null },
+          nodes: [
+            {
+              author: { __typename: "Bot", login: "msftbot" },
+              state: "COMMENTED",
+              submittedAt: "2026-10-30T06:00:00Z",
+            },
+          ],
+        },
+        comments: {
+          pageInfo: { hasNextPage: commentsHasNext, endCursor: commentsHasNext ? "c1" : null },
+          nodes: [
+            {
+              author: { __typename: "User", login: "stephengillie" },
+              authorAssociation: "COLLABORATOR",
+              body: "This PR cannot be merged.\n\n(Deterministic automation)",
+              createdAt: "2026-10-30T06:18:49Z",
+              lastEditedAt: null,
+            },
+          ],
+        },
+        timelineItems: { nodes: [] },
+      };
+
+      const { summary } = await resolvePrInterventionWithPaging(
+        async <T>(_query: string, variables?: Record<string, unknown>): Promise<T> => {
+          pageCalls += 1;
+          expect(variables).toMatchObject({
+            owner: "microsoft",
+            name: "winget-pkgs",
+            number: 439626,
+          });
+          return {
+            repository: {
+              pullRequest: {
+                reviews: reviewsHasNext
+                  ? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: extraReviewNodes }
+                  : undefined,
+                comments: commentsHasNext
+                  ? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: extraCommentNodes }
+                  : undefined,
+              },
+            },
+          } as T;
+        },
+        "microsoft",
+        "winget-pkgs",
+        initialNode,
+      );
+
+      expect(pageCalls).toBe(1);
+      expect(summary.Intervened).toBe(true);
+      expect(summary.PrivilegedAutomationCommentCount).toBe(1);
+      expect(summary.HumanReviewCount).toBe(expectedHumanReviews);
+      expect(summary.ManualCommentCount).toBe(expectedManualComments);
+      expect(summary.FirstHumanInterventionAt).toBe(expectedFirstHumanAt);
+      expect(summary.PrimaryBadge?.Label).toBe(expectedBadgeLabel);
+    },
+  );
+
   test("getPullRequest は PR が存在しない場合（実 API の NOT_FOUND errors 応答）404 GitHubApiError をスローする", async () => {
     const mockFetch = async (): Promise<Response> => {
       return new Response(
