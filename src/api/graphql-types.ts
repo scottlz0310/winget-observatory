@@ -38,6 +38,7 @@ export interface GraphQLCommentNode {
     __typename?: string | null;
     login?: string | null;
   } | null;
+  authorAssociation?: string | null;
   body?: string | null;
   createdAt?: string | null;
   lastEditedAt?: string | null;

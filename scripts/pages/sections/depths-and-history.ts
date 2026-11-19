@@ -401,7 +401,7 @@ export function renderInterventionFrontierComparisonSection(depths: LatestDepths
       ${renderInterventionFrontierCard({
         title: "🟦 未レビュー前線（参考: 完全未着手キュー）",
         description:
-          "人間レビュー・手動コメント・第三者 Assignees すべて無し（ボット・本人・自動ログ除く）。起票日時の古い順です。",
+          "人間レビュー・手動コメント・第三者 Assignees・Collaborator 以上の自動指摘（Deterministic automation）がいずれも無い完全未着手キュー。起票日時の古い順です。",
         items: unreviewedItems,
         timestamp,
         truncated: unreviewedTruncated,

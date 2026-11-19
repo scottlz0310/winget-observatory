@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 未レビュー前線（`UnreviewedBottom`）から特権ロール（`COLLABORATOR` / `MEMBER` / `OWNER`）による `Deterministic automation` コメント付き PR を除外し、主戦場ラインの初回人間介入日時判定と定義を分離（#121）:
+  - `src/api/graphql-queries.ts`, `src/api/graphql-types.ts`, `src/models/depths.ts`: `comments.nodes` 取得クエリへ `authorAssociation` を追加し、`PrInterventionSummary` へ `PrivilegedAutomationCommentCount` を追加
+  - `src/domain/first-timer.ts`, `src/domain/intervention.ts`: `isPrivilegedAuthorAssociation` を共通ヘルパーとして抽出し、`Deterministic automation` を含む未編集コメントでも発言者が特権ロール（非 Bot・非作成者）の場合はトリアージ反応ありとして `UnreviewedBottom` から除外する一方、主戦場ライン用の `FirstHumanInterventionAt` には算入しないよう分離
+  - `src/cli/explore-depths.ts`, `scripts/pages/sections/depths-and-history.ts`: 未レビュー前線の説明文を更新
 - `src/cli/explore-depths.ts`: `fetchFirstReviewMainstreamFrontier` の `merged-samples.jsonl` キャッシュ参照時に `hasValidatedReadyVersion`（v5 以上）および非特権/非 Bot ガードを適用（#119）
 - 初回提出者 最速マージランキングから不純物を除外し、特権ロール・Bot 除外判定（v6）を導入（#117）:
   - `src/api/graphql-queries.ts`, `src/api/graphql-adapters.ts`, `src/models/`, `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`: `GET_PULL_REQUEST_SAMPLE_QUERY` で `author { __typename login }` と `authorAssociation` を取得・保存し、`MEMBER` / `OWNER` / `COLLABORATOR` / `Bot`（`AuthorType === "Bot"` / `[bot]`）を `privileged-or-bot` として初回判定から除外（`CURRENT_FIRST_TIMER_VERSION = 6`。既存 v5 キャッシュは `MIN_VALIDATION_GUIDE_READY_VERSION = 5` を維持して遡及再取得しない）

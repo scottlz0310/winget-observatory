@@ -22,7 +22,21 @@ export function hasValidatedReadyVersion(
   return version !== undefined && version >= minReadyVersion;
 }
 
-const PRIVILEGED_AUTHOR_ASSOCIATIONS = new Set(["MEMBER", "OWNER", "COLLABORATOR"]);
+export const PRIVILEGED_AUTHOR_ASSOCIATIONS: ReadonlySet<string> = new Set([
+  "MEMBER",
+  "OWNER",
+  "COLLABORATOR",
+]);
+
+/**
+ * `authorAssociation` がリポジトリの特権ロール（MEMBER / OWNER / COLLABORATOR）に該当するか判定する。
+ */
+export function isPrivilegedAuthorAssociation(authorAssociation?: string | null): boolean {
+  if (!authorAssociation) {
+    return false;
+  }
+  return PRIVILEGED_AUTHOR_ASSOCIATIONS.has(authorAssociation.trim().toUpperCase());
+}
 
 /**
  * 作者がリポジトリの特権ロール（MEMBER / OWNER / COLLABORATOR）または Bot アカウントか判定する。
@@ -39,13 +53,7 @@ export function isPrivilegedOrBotAuthor(params: {
   if (params.author?.trim().toLowerCase().endsWith("[bot]")) {
     return true;
   }
-  if (
-    params.authorAssociation &&
-    PRIVILEGED_AUTHOR_ASSOCIATIONS.has(params.authorAssociation.trim().toUpperCase())
-  ) {
-    return true;
-  }
-  return false;
+  return isPrivilegedAuthorAssociation(params.authorAssociation);
 }
 
 /**

@@ -108,6 +108,7 @@ query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
             __typename
             login
           }
+          authorAssociation
           body
           createdAt
           lastEditedAt
@@ -377,6 +378,7 @@ query GetPullRequestCommentsPage($owner: String!, $name: String!, $number: Int!,
             __typename
             login
           }
+          authorAssociation
           body
           createdAt
           lastEditedAt
@@ -471,6 +473,7 @@ export function buildPullRequestBatchInterventionQuery(numbers: readonly number[
             __typename
             login
           }
+          authorAssociation
           body
           createdAt
           lastEditedAt

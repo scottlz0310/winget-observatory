@@ -28,14 +28,16 @@ export interface PrInterventionBadge {
  * PR に対する人間レビュー・手動コメント・第三者 Assignees の統合判定結果
  */
 export interface PrInterventionSummary {
-  /** 人間レビュー・手動コメント・第三者 Assignees のいずれかが存在すれば true */
+  /** 人間レビュー・手動コメント・第三者 Assignees・特権ロールによる自動指摘のいずれかが存在すれば true */
   Intervened: boolean;
   /** PR 作成者を除いた第三者 Assignees */
   ThirdPartyAssignees: string[];
   /** ボット・作成者本人を除いた人間レビュー数 */
   HumanReviewCount: number;
-  /** ボット・作成者本人・自動検証ログを除いた手動コメント数 */
+  /** ボット・作成者本人・未編集自動検証ログを除いた手動コメント数 */
   ManualCommentCount: number;
+  /** Deterministic automation を含むが発言者が COLLABORATOR / MEMBER / OWNER である自動指摘コメント数 */
+  PrivilegedAutomationCommentCount?: number;
   /** 最も強い介入種別に基づく代表バッジ（未介入時は undefined） */
   PrimaryBadge?: PrInterventionBadge;
   /** 最初の人間介入日時（ISO 8601, UTC。タイムスタンプ付き介入が観測できた場合のみ） */
@@ -69,6 +71,7 @@ export interface PrInterventionReviewInput {
  */
 export interface PrInterventionCommentInput {
   author?: PrInterventionActor | null;
+  authorAssociation?: string | null;
   body?: string | null;
   createdAt?: string | null;
   lastEditedAt?: string | null;

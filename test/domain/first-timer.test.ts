@@ -7,6 +7,7 @@ import {
   extractSingleHitCandidateLogins,
   hasValidatedReadyVersion,
   isCandidateEligibleForFirstTimerDetail,
+  isPrivilegedAuthorAssociation,
   isPrivilegedOrBotAuthor,
   MIN_VALIDATION_GUIDE_READY_VERSION,
   MIN_WAIVED_READY_VERSION,
@@ -294,6 +295,19 @@ describe("Domain: shouldReevaluateCachedSample", () => {
 
 describe("Domain: isPrivilegedOrBotAuthor", () => {
   test.each([
+    ["MEMBER", true],
+    ["OWNER", true],
+    ["COLLABORATOR", true],
+    ["collaborator", true],
+    ["CONTRIBUTOR", false],
+    ["NONE", false],
+    [null, false],
+    [undefined, false],
+  ])("isPrivilegedAuthorAssociation(%p) -> %p", (assoc, expected) => {
+    expect(isPrivilegedAuthorAssociation(assoc)).toBe(expected);
+  });
+
+  test.each([
     ["MEMBER は除外", { author: "asklar", authorType: "User", authorAssociation: "MEMBER" }, true],
     [
       "OWNER は除外",
@@ -471,6 +485,19 @@ describe("Domain: resolveAuthorMergedCounts", () => {
 });
 
 describe("Domain: hasValidatedReadyVersion & 汎用作者メタデータバッチ", () => {
+  test.each([
+    ["MEMBER", true],
+    ["OWNER", true],
+    ["COLLABORATOR", true],
+    ["collaborator", true],
+    ["CONTRIBUTOR", false],
+    ["NONE", false],
+    [null, false],
+    [undefined, false],
+  ])("isPrivilegedAuthorAssociation(%p) -> %p", (assoc, expected) => {
+    expect(isPrivilegedAuthorAssociation(assoc)).toBe(expected);
+  });
+
   test.each([
     [undefined, false],
     [4, false],
