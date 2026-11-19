@@ -423,7 +423,7 @@ const SCORE_KEY_LABELS: Record<string, string> = {
   "creation-order:p75": "② 作成順（75%点）",
 };
 
-/** 予想の答え合わせ: 基準 PR のマージ後に、仮説・モデルごとの予想誤差を示す */
+/** 予想の答え合わせ: 基準 PR のマージ後に、仮説・モデルごとの予想誤差および処理バンド的中率を示す */
 export function renderForecastScoreSection(
   history: ForecastHistoryLine[],
   scores: ForecastScore[],
@@ -431,12 +431,12 @@ export function renderForecastScoreSection(
   const recorded = history.filter((line) => line.Type === "forecast").length;
   const note = `
     <p class="section-note">
-      観測のたびに 2 つの仮説（順位消化・作成順）の予想日を記録し、基準 PR がマージされたら実際のマージ日との誤差を採点します。誤差は「予想日 − 実際のマージ日」で、+ は予想が遅すぎ、− は早すぎです。
+      観測のたびに予想日（2 つの仮説および統合処理バンド）を記録し、基準 PR がマージされたら実際のマージ日との誤差・バンド的中率を採点します。誤差は「予想日 − 実際のマージ日」で、+ は予想が遅すぎ、− は早すぎです。
     </p>`;
   if (scores.length === 0) {
     return `
     <h2 class="section-title">🎯 予想の答え合わせ</h2>${note}
-    <p class="section-note">基準 PR がマージされると、仮説・モデルごとの予想誤差をここに表示します（記録済みの予想 ${recorded} 件）。</p>`;
+    <p class="section-note">基準 PR がマージされると、仮説・モデルごとの予想誤差と処理バンド的中率をここに表示します（記録済みの予想 ${recorded} 件）。</p>`;
   }
 
   const tables = scores
@@ -453,6 +453,26 @@ export function renderForecastScoreSection(
         </tr>`,
         )
         .join("");
+
+      const b = score.bandScore;
+      const bandTable = b
+        ? `
+    <table style="margin-top: -0.75rem;">
+      <thead>
+        <tr><th>統合処理バンド評価 (JST暦日基準)</th><th>本命バンド的中率</th><th>全体レンジ包含率</th><th>中央値平均誤差 / 絶対誤差</th><th>直前の本命予想</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>処理バンド統合</td>
+          <td><strong>${b.count > 0 ? `${b.mainstreamHitRatePct}% (${b.mainstreamHitCount}/${b.count} 回)` : "-"}</strong></td>
+          <td>${b.overallCount > 0 ? `${b.overallHitRatePct}% (${b.overallHitCount}/${b.overallCount} 回)` : "-"}</td>
+          <td>${b.medianMeanErrorDays !== null ? `${formatErrorDays(b.medianMeanErrorDays)} / ${b.medianMeanAbsErrorDays ?? "-"} 日` : "-"}</td>
+          <td>${b.lastInMainstreamBand === null ? "-" : b.lastInMainstreamBand ? "✅ バンド内" : "❌ バンド外"}${b.medianLastErrorDays !== null ? ` (${formatErrorDays(b.medianLastErrorDays)})` : ""}</td>
+        </tr>
+      </tbody>
+    </table>`
+        : "";
+
       return `
     <h3 class="section-note" style="margin: 1rem 0 0.5rem; font-weight: 600;">${escapeHtml(score.repository)} #${score.targetPr}（マージ: ${escapeHtml(formatJstDate(score.mergedAtMs))}、予想の記録 ${score.observationCount} 回）</h3>
     <table>
@@ -461,7 +481,7 @@ export function renderForecastScoreSection(
       </thead>
       <tbody>${rows}
       </tbody>
-    </table>`;
+    </table>${bandTable}`;
     })
     .join("");
   return `
@@ -534,7 +554,7 @@ export function renderRecentHistorySection(
         <tr>
           <th>観測日時 (JST)</th>
           <th>基準 PR</th>
-          <th>消化前線 PR</th>
+          <th>健康的大底 PR</th>
           <th>実質待ち件数</th>
           <th>前回比 (Δ)</th>
           <th>累積待ち件数</th>

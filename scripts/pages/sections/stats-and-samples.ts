@@ -143,18 +143,28 @@ export function renderOvertakeSection(progress: LatestProgress | null): string {
   const c = progress?.Comparison;
   if (!c) return "";
   const noteColor = c.Verdict === "overtaken" ? "var(--danger)" : "var(--text-muted)";
-  const unknownDetail =
-    c.UnknownLaterCreated !== undefined && c.UnknownLaterCreated > 0
-      ? ` / 未判定: <strong>${c.UnknownLaterCreated}</strong> 件`
+  const lookbackDays = progress?.LookbackDays ?? 30;
+  const sampleScopeText =
+    progress?.SampleCount !== undefined
+      ? `直近 ${lookbackDays} 日間の全体採用サンプル（${progress.SampleCount} 件）内`
+      : `直近 ${lookbackDays} 日間の全体採用サンプル内`;
+
+  const hasCohortBreakdown =
+    c.FirstTimerLaterCreated !== undefined && c.RepeatOrExpressLaterCreated !== undefined;
+  const unknownCount = c.UnknownLaterCreated ?? 0;
+  const unknownDetail = unknownCount > 0 ? ` / 未判定: <strong>${unknownCount}</strong> 件` : "";
+  const overtakeDetail = hasCohortBreakdown
+    ? `<div class="card-subtext" style="margin-top: 0.2rem;">うち初回提出者: <strong>${c.FirstTimerLaterCreated}</strong> 件 / 常連・特急レーン: <strong>${c.RepeatOrExpressLaterCreated}</strong> 件${unknownDetail}</div>`
+    : `<div class="card-subtext" style="margin-top: 0.2rem;">初回/常連の内訳は未分類（旧データ）</div>`;
+  const firstTimerHighlight =
+    hasCohortBreakdown && c.FirstTimerLaterCreated === 0 && unknownCount === 0
+      ? `<p class="section-note" style="color: var(--success); font-weight: 600;">✨ 採用サンプル内で確定した初回提出者の追い越し: 0 件</p>`
       : "";
-  const overtakeDetail =
-    c.FirstTimerLaterCreated !== undefined && c.RepeatOrExpressLaterCreated !== undefined
-      ? `<div class="card-subtext" style="margin-top: 0.2rem;">うち初回提出者: <strong>${c.FirstTimerLaterCreated}</strong> 件 / 常連・特急レーン: <strong>${c.RepeatOrExpressLaterCreated}</strong> 件${unknownDetail}</div>`
-      : "";
+
   return `
     <h2 class="section-title">🏃 追い越しの比較（採用サンプル内）</h2>
     <p class="section-note">
-      直近にマージされた PR のうち、基準 PR と比べた件数です（全期間の件数ではありません）。
+      ${sampleScopeText}で、基準 PR と比べたマージ済み件数です（全期間の件数ではありません）。
     </p>
     <table>
       <thead>
@@ -166,6 +176,7 @@ export function renderOvertakeSection(progress: LatestProgress | null): string {
         <tr><td>自分より後に条件が整い（ReadyAt）、マージ済み</td><td>${c.LaterReady} 件</td></tr>
       </tbody>
     </table>
+    ${firstTimerHighlight}
     <p class="section-note" style="color: ${noteColor};">※ ${escapeHtml(describeOvertake(c))}</p>`;
 }
 

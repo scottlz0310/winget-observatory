@@ -1,168 +1,68 @@
-// 初回提出者サマリー・予想比較パネル・KPI グリッド・トリアージフロー図の描画セクション
+// 統合処理バンドヒーローカード・KPI グリッド・トリアージフロー図の描画セクション
 
-import { DAY_MS, formatJstDate, formatMonthDay, round1 } from "../../../src/domain/formatters";
+import { formatJstDate, formatMonthDay } from "../../../src/domain/formatters";
 import type { DashboardCalculatedMetrics } from "../../../src/models/dashboard";
-import type { FirstReviewForecast, FirstReviewForecastStatus } from "../../../src/models/forecast";
+import type { FirstReviewForecast } from "../../../src/models/forecast";
+import type { ForecastBandSnapshot } from "../../../src/models/forecast-band";
 import type { ForecastComparison, HypothesisId } from "../../../src/models/forecast-comparison";
 import { escapeHtml, formatEtaDays, formatNumber, renderBadgeHtml } from "../formatters";
-import type { DeltaBadge, LatestDepths, LatestProgress } from "../types";
+import type { DeltaBadge, LatestProgress } from "../types";
 
 const HYPOTHESIS_STYLE: Record<HypothesisId, { mark: string; color: string }> = {
   "rank-velocity": { mark: "①", color: "var(--primary)" },
   "creation-order": { mark: "②", color: "var(--success)" },
 };
 
-function formatCohortForecastTarget(
-  days: number | null | undefined,
-  currentLifetime: number,
-  createdMs: number,
-): { dateStr: string; etaStr: string } {
-  if (days === undefined || days === null) {
-    return { dateStr: "-", etaStr: "" };
+function formatTargetInterventionLabel(forecast: FirstReviewForecast): string {
+  if (forecast.targetIntervention?.PrimaryBadge?.Label) {
+    return forecast.targetIntervention.PrimaryBadge.Label;
   }
-  const eta = Math.max(0, round1(days - currentLifetime));
-  const etaStr = eta === 0 ? "（到達済み）" : `（残り約 ${eta} 日）`;
-  const dateStr = !Number.isNaN(createdMs)
-    ? formatJstDate(createdMs + days * DAY_MS)
-    : `起票から ${days} 日目`;
-  return { dateStr, etaStr };
+  if (forecast.targetAssignees.length > 0) {
+    return `アサイン済: ${forecast.targetAssignees.join(", ")}`;
+  }
+  return "介入あり";
 }
 
-/**
- * ページ最上部に置く初回提出者サマリー
- * スクロールなしで P50/P75 予想マージ日、残り目安日数、追い越し実態の内訳を把握できる
- */
-export function renderFirstTimerHeroSummary(
-  progress: LatestProgress | null,
-  depths: LatestDepths | null,
-): string {
-  const rawLifetime = progress?.TotalLifetimeDays ?? progress?.WaitDays ?? 0;
-  const parsedLifetime = Number(rawLifetime);
-  const currentLifetime = Number.isFinite(parsedLifetime) ? parsedLifetime : 0;
-  const p50 = progress?.FirstTimerMedianDays;
-  const p75 = progress?.FirstTimerP75Days;
-  const sampleCount = progress?.FirstTimerSampleCount ?? 0;
-  const firstTimerDays = progress?.FirstTimerLookbackDays ?? progress?.LookbackDays ?? 90;
-  const overallLookbackDays = progress?.LookbackDays ?? 30;
-  const overallSampleCount = progress?.SampleCount;
-
-  // 基準 PR の起票時刻
-  const createdRaw = depths?.TargetPr?.CreatedAt || depths?.TargetPr?.CreatedAtJst;
-  const createdMs = createdRaw ? Date.parse(createdRaw) : Number.NaN;
-
-  const { dateStr: p50DateStr, etaStr: p50EtaStr } = formatCohortForecastTarget(
-    p50,
-    currentLifetime,
-    createdMs,
-  );
-  const { dateStr: p75DateStr, etaStr: p75EtaStr } = formatCohortForecastTarget(
-    p75,
-    currentLifetime,
-    createdMs,
-  );
-
-  const c = progress?.Comparison;
-  const hasCohortBreakdown =
-    c?.FirstTimerLaterCreated !== undefined && c?.RepeatOrExpressLaterCreated !== undefined;
-
-  let overtakeHeadline = "-";
-  let overtakeBreakdownHtml = "";
-  let overtakeNoteHtml = "";
-
-  if (!c || c.LaterCreated === undefined) {
-    overtakeHeadline = `<div style="font-size: 1.15rem; color: var(--text-muted);">-</div>`;
-    overtakeBreakdownHtml = `<div class="card-subtext" style="color: var(--text-muted);">追い越しの観測データなし</div>`;
-  } else if (!hasCohortBreakdown) {
-    // 旧形式スナップショット（コホート別内訳なし）
-    overtakeHeadline = `<div style="font-size: 1.15rem; font-weight: 700;">後発マージ計 ${c.LaterCreated} 件</div>`;
-    overtakeBreakdownHtml = `<div class="card-subtext" style="color: var(--text-muted);">初回/常連の内訳は未分類（旧データ）</div>`;
-    overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">※ 次回の観測から初回提出者と常連が分離されます</div>`;
-  } else {
-    // コホート別内訳あり
-    const firstTimerOvertake = c.FirstTimerLaterCreated ?? 0;
-    const repeatOvertake = c.RepeatOrExpressLaterCreated ?? 0;
-    const unknownOvertake = c.UnknownLaterCreated ?? 0;
-    const totalOvertake = c.LaterCreated;
-
-    overtakeHeadline = `<div style="font-size: 1.15rem; font-weight: 700;">後発マージ計 ${totalOvertake} 件</div>`;
-    const unknownDetail =
-      unknownOvertake > 0 ? ` / 未判定: <strong>${unknownOvertake}</strong> 件` : "";
-    const sampleScopeText =
-      overallSampleCount !== undefined
-        ? `直近 ${overallLookbackDays} 日間の全体採用サンプル（${overallSampleCount} 件）内`
-        : `直近 ${overallLookbackDays} 日間の全体採用サンプル内`;
-    overtakeBreakdownHtml = `<div class="card-subtext" style="margin-top: 0.2rem;">常連・特急: <strong>${repeatOvertake}</strong> 件 / 初回: <strong>${firstTimerOvertake}</strong> 件${unknownDetail}</div><div class="card-subtext" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem;">集計対象: ${sampleScopeText}</div>`;
-
-    if (firstTimerOvertake === 0 && unknownOvertake === 0) {
-      overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--success); font-weight: 600; margin-top: 0.25rem;">✨ 採用サンプル内で確定した初回提出者の追い越し: 0 件</div>`;
-    } else if (firstTimerOvertake === 0 && unknownOvertake > 0) {
-      overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">採用サンプル内で確定した初回追い越し 0 件（未判定 ${unknownOvertake} 件）</div>`;
-    } else {
-      overtakeNoteHtml = `<div style="font-size: 0.75rem; color: var(--warning); margin-top: 0.25rem;">採用サンプル内で確定した初回追い越し ${firstTimerOvertake} 件</div>`;
-    }
-  }
-
-  return `
-    <section class="card first-timer-hero" style="border: 2px solid var(--success); margin-bottom: 1.5rem; background: linear-gradient(to bottom right, var(--card-bg), rgba(22, 163, 74, 0.04));">
-      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
-        <div class="card-title" style="color: var(--success); font-weight: 700; font-size: 1.05rem; margin-bottom: 0;">
-          🎯 初回提出者サマリー
-        </div>
-        <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">過去 ${firstTimerDays} 日間の初回提出者コホート 準拠</span>
-      </div>
-      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 0.5rem;">
-        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">予想マージ日 (P50 中央値)</div>
-          <div style="font-size: 1.25rem; font-weight: 700;">${escapeHtml(p50DateStr)} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">${p50EtaStr}</span></div>
-          <div class="card-subtext">通算実績: <strong>${p50 ?? "-"}</strong> 日（基準 PR 現在: ${currentLifetime} 日）</div>
-          ${
-            progress?.FirstTimerTurnMedianDays !== undefined &&
-            progress?.FirstTimerTurnMedianDays !== null
-              ? `<div class="card-subtext" style="margin-top: 0.15rem; font-size: 0.75rem; color: var(--text-muted);">最終コミット後 (Turn): <strong>${progress.FirstTimerTurnMedianDays}</strong> 日</div>`
-              : ""
-          }
-        </div>
-        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">予想マージ日 (P75 75%点)</div>
-          <div style="font-size: 1.25rem; font-weight: 700;">${escapeHtml(p75DateStr)} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">${p75EtaStr}</span></div>
-          <div class="card-subtext">通算実績: <strong>${p75 ?? "-"}</strong> 日（過去 ${firstTimerDays} 日間 / サンプル ${sampleCount} 件）</div>
-          ${
-            progress?.FirstTimerTurnP75Days !== undefined &&
-            progress?.FirstTimerTurnP75Days !== null
-              ? `<div class="card-subtext" style="margin-top: 0.15rem; font-size: 0.75rem; color: var(--text-muted);">最終コミット後 (Turn): <strong>${progress.FirstTimerTurnP75Days}</strong> 日</div>`
-              : ""
-          }
-        </div>
-        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.75rem 1rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">追い越し実態の分離内訳</div>
-          ${overtakeHeadline}
-          ${overtakeBreakdownHtml}
-          ${overtakeNoteHtml}
-        </div>
-      </div>
-      <div class="card-subtext" style="margin-top: 0.5rem;">
-        ※ 常連コントリビューター（大量まとめマージ）や特急レーンを除外した、生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）の観測値に基づきます。通算所要日数および最終コミット後の所要日数（Turn Latency）を測定しています。
-      </div>
-    </section>`;
+function formatDateRange(startMs: number, endMs: number): string {
+  return startMs === endMs
+    ? escapeHtml(formatJstDate(startMs))
+    : `${escapeHtml(formatJstDate(startMs))} 〜 ${escapeHtml(formatJstDate(endMs))}`;
 }
 
-/** 2 つの仮説によるマージ時期の予想を比較するパネル（ページの最上部に置く） */
-export function renderForecastPanel(
-  comparison: ForecastComparison,
-  timelineSvg: string | null,
-): string {
-  const { range } = comparison;
-  const headline = range
-    ? range.startMs === range.endMs
-      ? escapeHtml(formatJstDate(range.startMs))
-      : `${escapeHtml(formatJstDate(range.startMs))} 〜 ${escapeHtml(formatJstDate(range.endMs))}`
-    : `<span style="color: var(--text-muted);">予想できません</span>`;
-  const headlineDays = range
-    ? range.minDays === range.maxDays
-      ? formatEtaDays(range.minDays)
-      : `約 ${range.minDays}〜${range.maxDays} 日後`
-    : "どの仮説も、予想に必要な観測がそろっていません";
+function formatEtaRange(minDays: number, maxDays: number): string {
+  return minDays === maxDays ? formatEtaDays(minDays) : `残り約 ${minDays} 〜 ${maxDays} 日`;
+}
 
+/** 統合処理バンドタイムライン SVG 用のマーカーデータを抽出する */
+export function buildBandTimelineMarkers(
+  band: ForecastBandSnapshot,
+): Array<{ label: string; dateMs: number; color: string }> {
+  const markers: Array<{ label: string; dateMs: number; color: string }> = [];
+  if (band.front) {
+    markers.push({
+      label: `▼前線 ${formatMonthDay(band.front.dateMs)}`,
+      dateMs: band.front.dateMs,
+      color: "var(--success)",
+    });
+  }
+  if (band.mainstream) {
+    markers.push({
+      label: `★本命 ${formatMonthDay(band.mainstream.medianDateMs)}`,
+      dateMs: band.mainstream.medianDateMs,
+      color: "var(--primary)",
+    });
+  }
+  if (band.bottom) {
+    markers.push({
+      label: `▼大底 ${formatMonthDay(band.bottom.dateMs)}`,
+      dateMs: band.bottom.dateMs,
+      color: "var(--warning)",
+    });
+  }
+  return markers;
+}
+
+function renderTwoHypothesesTable(comparison: ForecastComparison): string {
   const rows = comparison.hypotheses
     .map((h) => {
       const bar =
@@ -188,180 +88,208 @@ export function renderForecastPanel(
     .join("");
 
   return `
-    <section class="card forecast-panel" aria-label="マージ時期の予想の比較">
-      <div class="card-title">予想マージ日（2 つの仮説の比較）</div>
-      <div class="card-value">${headline} <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">${headlineDays}</span></div>
-      <div class="card-subtext">範囲は主な予想の最小〜最大です。2 つの仮説は前提が異なり、どちらが実態に近いかはまだ検証できていません。</div>
-      ${timelineSvg ? `<div style="margin: 0.75rem 0;">${timelineSvg}</div>` : ""}
-      <div style="overflow-x: auto;">
-        <table style="margin-bottom: 0;">
-          <thead>
-            <tr><th style="width: 30%;">仮説と前提</th><th>現在の進捗</th><th style="width: 30%;">予想日</th></tr>
-          </thead>
-          <tbody>${rows}
-          </tbody>
-        </table>
+    <div style="overflow-x: auto; margin-top: 0.75rem;">
+      <table style="margin-bottom: 0;">
+        <thead>
+          <tr><th style="width: 30%;">仮説と前提</th><th>現在の進捗</th><th style="width: 30%;">予想日</th></tr>
+        </thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderHeroStatusGrid(params: {
+  progress: LatestProgress | null;
+  band: ForecastBandSnapshot;
+  repo: string;
+}): string {
+  const { progress, band, repo } = params;
+  const { firstReview } = band.snapshot;
+
+  // 1. メンテナー作業前線（7日初回介入中央値）
+  let mainstreamHeadHtml = `<span style="color: var(--text-muted);">データ不足</span>`;
+  let mainstreamSubHtml = "直近 7 日間の初回介入コホート 0 件または未観測";
+  if (firstReview.frontier) {
+    mainstreamHeadHtml = `${escapeHtml(formatJstDate(firstReview.frontier.createdMs))} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">（経過 ${firstReview.lagDays ?? "-"} 日）</span>`;
+    const cohortSummary = `7日初回介入 ${firstReview.frontier.cohortCount}件 [Open ${firstReview.frontier.openCount} / Merged ${firstReview.frontier.mergedCount}]`;
+    if (firstReview.status === "target-intervened") {
+      mainstreamSubHtml = `到達済み（${escapeHtml(formatTargetInterventionLabel(firstReview))}） / ${cohortSummary}`;
+    } else if (firstReview.status === "reached") {
+      mainstreamSubHtml = `基準 PR の起票日ラインに到達済み / ${cohortSummary}`;
+    } else if (firstReview.status === "steady" && firstReview.steadyDateMs !== null) {
+      mainstreamSubHtml = `自PRと差 ${firstReview.gapDays} 日（定常 1.0 日/日換算: ${escapeHtml(formatJstDate(firstReview.steadyDateMs))}） / ${cohortSummary}`;
+    } else {
+      mainstreamSubHtml = `基準 PR の起票日時が不明 / ${cohortSummary}`;
+    }
+  } else if (firstReview.status === "target-intervened") {
+    mainstreamHeadHtml = `<span style="color: var(--success);">介入済み</span>`;
+    mainstreamSubHtml = `${escapeHtml(formatTargetInterventionLabel(firstReview))}（主戦場ラインは未観測）`;
+  }
+
+  // 2. 1コミット優等生の底
+  const staleHtml =
+    band.snapshot.staleBottomCreatedMs !== null
+      ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(band.snapshot.staleBottomPr)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(band.snapshot.staleBottomPr)}</a> ${escapeHtml(formatJstDate(band.snapshot.staleBottomCreatedMs))}`
+      : `<span style="color: var(--text-muted);">-</span>`;
+  const staleSubHtml =
+    band.snapshot.staleBottomGapDays !== null
+      ? `自PRと差 ${band.snapshot.staleBottomGapDays} 日（1コミット健康体最古）`
+      : "優等生の底データ未観測";
+
+  // 3. 実質待ち順位 / 健康的大底とのギャップ
+  const healthyPr = band.snapshot.healthyBottomPr;
+  const healthyGap = band.snapshot.healthyBottomGapDays;
+  const queueSubHtml =
+    healthyGap !== null
+      ? `健康的大底（${healthyPr ? `#${escapeHtml(healthyPr)}` : "-"}）と差 ${healthyGap} 日`
+      : "健康的大底との日差は未算出";
+
+  // 4. 初回提出者コホート実績サマリ
+  const rawLifetime = progress?.TotalLifetimeDays ?? progress?.WaitDays ?? 0;
+  const parsedLifetime = Number(rawLifetime);
+  const currentLifetime = Number.isFinite(parsedLifetime) ? parsedLifetime : 0;
+  const firstTimerDays = progress?.FirstTimerLookbackDays ?? progress?.LookbackDays ?? 90;
+  const ftSampleCount = progress?.FirstTimerSampleCount ?? 0;
+  const p50 = progress?.FirstTimerMedianDays;
+  const p75 = progress?.FirstTimerP75Days;
+  const turnLine =
+    progress?.FirstTimerTurnMedianDays !== undefined && progress?.FirstTimerTurnMedianDays !== null
+      ? `<div class="card-subtext">最終コミット後 (Turn): <strong>${progress.FirstTimerTurnMedianDays}</strong> 日${progress.FirstTimerTurnP75Days !== undefined && progress.FirstTimerTurnP75Days !== null ? ` / P75: <strong>${progress.FirstTimerTurnP75Days}</strong> 日` : ""}</div>`
+      : "";
+
+  return `
+    <div class="hero-status-grid" aria-label="現在の処理帯ステータス">
+      <div class="hero-status-item">
+        <div style="font-size: 0.75rem; color: var(--text-muted);">👀 メンテナー作業前線（7日介入中央値）</div>
+        <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${mainstreamHeadHtml}</div>
+        <div class="card-subtext">${mainstreamSubHtml}</div>
       </div>
-    </section>`;
-}
-
-const FIRST_REVIEW_BADGE_MAP: Record<FirstReviewForecastStatus, { label: string; style: string }> =
-  {
-    "target-intervened": {
-      label: "基準PR介入済み",
-      style: "background: #dcfce7; color: #15803d;",
-    },
-    reached: { label: "到達済み", style: "background: #dcfce7; color: #15803d;" },
-    steady: { label: "現在位置・定常目安", style: "background: #e0f2fe; color: #0369a1;" },
-    "no-samples": {
-      label: "データ不足",
-      style: "background: var(--code-bg); color: var(--text-muted);",
-    },
-    "no-target": {
-      label: "基準PR未指定",
-      style: "background: var(--code-bg); color: var(--text-muted);",
-    },
-  };
-
-function formatTargetInterventionLabel(forecast: FirstReviewForecast): string {
-  if (forecast.targetIntervention?.PrimaryBadge?.Label) {
-    return forecast.targetIntervention.PrimaryBadge.Label;
-  }
-  if (forecast.targetAssignees.length > 0) {
-    return `アサイン済: ${forecast.targetAssignees.join(", ")}`;
-  }
-  return "介入あり";
-}
-
-function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
-  headlineHtml: string;
-  detailText: string;
-} {
-  switch (forecast.status) {
-    case "target-intervened": {
-      const badgeLabel = formatTargetInterventionLabel(forecast);
-      return {
-        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（${escapeHtml(badgeLabel)}）</span>`,
-        detailText:
-          "基準 PR にはすでに人間レビュー・手動コメント・第三者 Assignees のいずれかが記録されているため、初回レビュー・介入は到達済みと判定しています。",
-      };
-    }
-    case "reached":
-      return {
-        headlineHtml: `<span style="color: var(--success);">到達済み</span> <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">（基準 PR の起票日ラインに到達済み）</span>`,
-        detailText:
-          "主戦場ライン（直近7日初回人間介入コホートの起票日時中央値）が基準 PR の起票日以降に到達しています（基準 PR の起票日ラインに到達済み・残り 0 日）。",
-      };
-    case "steady": {
-      const dateStr = forecast.steadyDateMs !== null ? formatJstDate(forecast.steadyDateMs) : "-";
-      const etaStr = forecast.steadyEtaDays !== null ? formatEtaDays(forecast.steadyEtaDays) : "-";
-      return {
-        headlineHtml: `${escapeHtml(dateStr)} <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">${escapeHtml(etaStr)}</span>`,
-        detailText:
-          "現在の主戦場ライン（7日初回介入コホート起票日時中央値）と基準 PR との起票日差に基づく定常ペース（1.0 日/日）換算の現在地目安です。",
-      };
-    }
-    case "no-target":
-      return {
-        headlineHtml: `<span style="color: var(--text-muted);">基準 PR 起票日時が不明</span>`,
-        detailText:
-          "基準 PR の起票日時が記録されていないため、起票日差および定常換算を算出できません（主戦場ラインの現在位置のみ表示）。",
-      };
-    case "no-samples":
-      return {
-        headlineHtml: `<span style="color: var(--text-muted);">データ不足</span>`,
-        detailText:
-          "直近 7 日間に初回人間介入が入った初回提出 PR コホートの観測データが不足しているため算出できません。",
-      };
-  }
+      <div class="hero-status-item">
+        <div style="font-size: 0.75rem; color: var(--text-muted);">🧗 1コミット優等生の底</div>
+        <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${staleHtml}</div>
+        <div class="card-subtext">${escapeHtml(staleSubHtml)}</div>
+      </div>
+      <div class="hero-status-item">
+        <div style="font-size: 0.75rem; color: var(--text-muted);">⚓ 実質待ち順位 / 健康的大底差</div>
+        <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${formatNumber(progress?.ActiveAhead)} <span style="font-size: 0.85rem; font-weight: normal;">件</span></div>
+        <div class="card-subtext">${escapeHtml(queueSubHtml)}</div>
+      </div>
+      <div class="hero-status-item">
+        <div style="font-size: 0.75rem; color: var(--text-muted);">🌱 初回提出者コホート実績（過去 ${escapeHtml(firstTimerDays)} 日・${escapeHtml(ftSampleCount)} 件）</div>
+        <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">P50: ${p50 ?? "-"} 日 / P75: ${p75 ?? "-"} 日</div>
+        <div class="card-subtext">基準 PR 現在: ${escapeHtml(currentLifetime)} 日（生涯マージ1件・手直し込み）</div>
+        ${turnLine}
+      </div>
+    </div>`;
 }
 
 /**
- * 基準 PR への初回レビュー現在地パネルを描画する（主戦場ラインスナップショット＋定常換算）
+ * ページ最上部に置く「統合処理バンド」ヒーローカード
+ * 本命中央値予想・全体レンジ（前線〜大底）・タイムライン SVG・現在の処理帯スナップショットを 1 枚に統合表示する
  */
-export function renderFirstReviewForecastPanel(forecast: FirstReviewForecast): string {
-  const badge = FIRST_REVIEW_BADGE_MAP[forecast.status];
-  const { headlineHtml, detailText } = renderFirstReviewHeadline(forecast);
-  const { frontier } = forecast;
+export function renderIntegratedForecastHero(params: {
+  targetPrNum: number | string;
+  repo: string;
+  progress: LatestProgress | null;
+  band: ForecastBandSnapshot;
+  timelineSvg: string | null;
+}): string {
+  const { targetPrNum, repo, progress, band, timelineSvg } = params;
+  const { front, mainstream, bottom, overallRange, comparison } = band;
+  const { firstReview } = band.snapshot;
 
-  const frontierValueHtml = frontier
-    ? `${escapeHtml(formatJstDate(frontier.createdMs))}`
-    : `<span style="color: var(--text-muted);">データ不足</span>`;
-  const frontierSubHtml = frontier
-    ? `直近7日初回介入 ${frontier.cohortCount}件の中央値（経過 ${forecast.lagDays ?? "-"} 日 / Open ${frontier.openCount}・Merged ${frontier.mergedCount}）`
-    : "対象コホート 0 件または未観測";
+  let statusBadgeLabel = "算出待ち / データ不足";
+  let statusBadgeStyle = "background: var(--code-bg); color: var(--text-muted);";
+  if (firstReview.status === "target-intervened") {
+    statusBadgeLabel = `基準PR介入済み（${formatTargetInterventionLabel(firstReview)}）`;
+    statusBadgeStyle = "background: #dcfce7; color: #15803d;";
+  } else if (firstReview.status === "reached") {
+    statusBadgeLabel = "主戦場ライン到達済み";
+    statusBadgeStyle = "background: #dcfce7; color: #15803d;";
+  } else if (mainstream) {
+    statusBadgeLabel = "統合処理バンド（定常＋実績）";
+    statusBadgeStyle = "background: var(--primary-light); color: var(--primary);";
+  }
 
-  const hasTargetIntervention = Boolean(forecast.targetIntervention?.Intervened);
-  const gapValueHtml = hasTargetIntervention
-    ? `介入済み`
-    : forecast.gapDays !== null
-      ? `差 ${forecast.gapDays} 日`
-      : `<span style="color: var(--text-muted);">-</span>`;
-  const gapSubHtml = hasTargetIntervention
-    ? escapeHtml(formatTargetInterventionLabel(forecast))
-    : forecast.gapDays !== null
-      ? forecast.gapDays <= 0
-        ? "基準 PR の起票日ラインに到達済み"
-        : "基準 PR の起票日 − 主戦場ライン中央値"
-      : "基準 PR の起票日時が不明";
+  const mainstreamHeadline = mainstream
+    ? formatDateRange(mainstream.range.startMs, mainstream.range.endMs)
+    : `<span style="color: var(--text-muted);">予想できません</span>`;
+  const mainstreamEta = mainstream
+    ? formatEtaRange(mainstream.range.minDays, mainstream.range.maxDays)
+    : "本命バンド算出に必要な観測データが不足しています";
+  const mainstreamSub = mainstream
+    ? `代表中央値: <strong>${escapeHtml(formatJstDate(mainstream.medianDateMs))}</strong>（${formatEtaDays(mainstream.medianEtaDays)}） / 採用指標 ${mainstream.estimates.length} 件`
+    : "通常は全体P50・初回P75・順位消化・主戦場定常換算から算出します";
 
-  const steadyValueHtml =
-    forecast.steadyDateMs !== null
-      ? `${escapeHtml(formatJstDate(forecast.steadyDateMs))}`
-      : `<span style="color: var(--text-muted);">-</span>`;
-  const steadySubHtml =
-    forecast.steadyEtaDays !== null
-      ? forecast.steadyEtaDays === 0
-        ? "到達・介入済み（残り 0 日）"
-        : `定常 1.0 日/日換算（${formatEtaDays(forecast.steadyEtaDays)}）`
-      : "データ不足";
+  const overallHeadline = overallRange
+    ? `${escapeHtml(formatMonthDay(overallRange.startMs))}（最短） 〜 ${escapeHtml(formatMonthDay(overallRange.endMs))}（最長）`
+    : `<span style="color: var(--text-muted);">-</span>`;
+  const overallEta = overallRange
+    ? formatEtaRange(overallRange.minDays, overallRange.maxDays)
+    : "観測データ不足";
+  const frontSummaryText = front
+    ? `前線: ${escapeHtml(formatMonthDay(front.dateMs))}（${formatEtaDays(front.etaDays)}）`
+    : "前線: -";
+  const bottomSummaryText = bottom
+    ? `大底: ${escapeHtml(formatMonthDay(bottom.dateMs))}（${formatEtaDays(bottom.etaDays)}）`
+    : "大底: -";
+
+  const bandBreakdownRows = [
+    ...(front ? [{ group: "前線（最短）", items: front.estimates }] : []),
+    ...(mainstream ? [{ group: "本命（中央値）", items: mainstream.estimates }] : []),
+    ...(bottom ? [{ group: "大底（最長）", items: [bottom.estimate] }] : []),
+  ]
+    .flatMap((g) =>
+      g.items.map(
+        (item) =>
+          `<li><strong>${escapeHtml(g.group)}</strong> — ${escapeHtml(item.label)}: <strong>${escapeHtml(formatJstDate(item.dateMs))}</strong>（${formatEtaDays(item.etaDays)}）</li>`,
+      ),
+    )
+    .join("");
 
   return `
-    <section class="card forecast-panel" style="border-left: 4px solid #0ea5e9; margin-top: 1rem; margin-bottom: 0.5rem;" aria-label="初回レビュー到達予想">
-      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.4rem;">
-        <div class="card-title" style="margin-bottom: 0; font-weight: 600; color: var(--text-color);">
-          👀 主戦場ライン現在位置（7日初回介入コホート中央値）
+    <section class="card hero-band-card" aria-label="基準 PR 着地予測（統合処理バンド）">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <div class="card-title" style="color: var(--primary); font-weight: 700; font-size: 1.05rem; margin-bottom: 0;">
+          🎯 基準 PR #${escapeHtml(targetPrNum)} 着地予測（統合処理バンド）
         </div>
-        <span class="badge" style="${badge.style}">${escapeHtml(badge.label)}</span>
+        <span class="badge" style="${statusBadgeStyle}">${escapeHtml(statusBadgeLabel)}</span>
       </div>
-      <div class="card-value" style="font-size: 1.45rem;">${headlineHtml}</div>
-      <div class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(detailText)}</div>
-      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 0.5rem;">
-        <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">主戦場ラインの現在位置</div>
-          <div style="font-size: 1.1rem; font-weight: 700;">${frontierValueHtml}</div>
-          <div class="card-subtext">${escapeHtml(frontierSubHtml)}</div>
+
+      <div class="hero-band-summary">
+        <div class="hero-band-box is-mainstream">
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">本命予想（中央値バンド）</div>
+          <div style="font-size: 1.4rem; font-weight: 700;">${mainstreamHeadline}</div>
+          <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0.15rem;">${escapeHtml(mainstreamEta)}</div>
+          <div class="card-subtext">${mainstreamSub}</div>
         </div>
-        <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">基準 PR との起票日差 / 状態</div>
-          <div style="font-size: 1.1rem; font-weight: 700;">${gapValueHtml}</div>
-          <div class="card-subtext">${gapSubHtml}</div>
-        </div>
-        <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">定常ペース（1.0 日/日）換算</div>
-          <div style="font-size: 1.1rem; font-weight: 700;">${steadyValueHtml}</div>
-          <div class="card-subtext">${escapeHtml(steadySubHtml)}</div>
+        <div class="hero-band-box">
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">全体レンジ（前線 〜 大底）</div>
+          <div style="font-size: 1.25rem; font-weight: 700;">${overallHeadline}</div>
+          <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0.15rem;">${escapeHtml(overallEta)}</div>
+          <div class="card-subtext">${frontSummaryText} / ${bottomSummaryText}</div>
         </div>
       </div>
-      <div class="card-subtext">
-        ※ 純粋ボット・作成者本人・自動検証ログ（Deterministic automation）を除き、直近 7 日間に初めて人間介入（人間レビュー・手動コメント・第三者 Assignees）が入った初回提出者（New-Package）PR 群（オープン中＋直近マージ済み）の起票日時中央値を主戦場ラインとしています。短期実測速度による割り算外挿は行いません。
+
+      ${timelineSvg ? `<div style="margin: 0.75rem 0;">${timelineSvg}</div>` : ""}
+
+      ${renderHeroStatusGrid({ progress, band, repo })}
+
+      <details class="hero-details">
+        <summary>🔍 統合処理バンドの内訳と 2 仮説比較（検証用詳細）</summary>
+        ${
+          bandBreakdownRows
+            ? `<ul style="margin: 0.75rem 0 0 1.25rem; font-size: 0.8125rem; color: var(--text-color);">${bandBreakdownRows}</ul>`
+            : `<p class="card-subtext" style="margin-top: 0.5rem;">処理バンドの内訳データはまだありません。</p>`
+        }
+        ${renderTwoHypothesesTable(comparison)}
+      </details>
+
+      <div class="card-subtext" style="margin-top: 0.75rem;">
+        ※ 主戦場ラインの短期実測速度による割り算外挿を廃止し、現在の処理帯位置（定常 1.0 日/日換算）と実績コホート・168h 順位消化を統合した処理バンドで表示しています。
       </div>
     </section>`;
-}
-
-/** 予想タイムライン SVG 用のマーカーデータを抽出する */
-export function buildForecastTimelineMarkers(
-  comparison: ForecastComparison,
-): Array<{ label: string; dateMs: number; color: string }> {
-  return comparison.hypotheses.flatMap((h) =>
-    h.estimates
-      .filter((e) => e.primary)
-      .map((e) => ({
-        label: `${HYPOTHESIS_STYLE[h.id].mark} ${formatMonthDay(e.dateMs)}`,
-        dateMs: e.dateMs,
-        color: HYPOTHESIS_STYLE[h.id].color,
-      })),
-  );
 }
 
 /** 主要 KPI 5 カードグリッドを描画する */
@@ -392,13 +320,13 @@ export function renderKpiGridSection(params: {
             : `<span style="font-size: 1.25rem; color: var(--text-muted);">-</span>`
         }</div>
         <div class="card-subtext">
-          <span>前線: ${escapeHtml(metrics.calendarGap.frontCreatedAt)}</span>
+          <span>健康的大底: ${escapeHtml(metrics.calendarGap.frontCreatedAt)}</span>
           ${metrics.calendarGap.targetCreatedAt ? `<span>/ 自PR: ${escapeHtml(metrics.calendarGap.targetCreatedAt)}</span>` : ""}
         </div>
       </div>
 
       <div class="card">
-        <div class="card-title">現在の消化前線</div>
+        <div class="card-title">健康的大底（最古健康PR）</div>
         <div class="card-value">${progress?.FrontNumber ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${progress.FrontNumber}" target="_blank">#${progress.FrontNumber}</a>` : "-"}</div>
         <div class="card-subtext">
           <span>起票: ${escapeHtml(progress?.FrontCreatedAt)}</span>
@@ -435,7 +363,7 @@ export function renderTriageFlowSection(params: {
   return `<h2 class="section-title">📊 トリアージキュー構造</h2>
     <div class="flow-container">
       <div class="flow-node">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">消化前線（健康的大底）</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">健康的大底（最古健康PR）</div>
         <strong>${progress?.FrontNumber ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${progress.FrontNumber}" target="_blank">#${progress.FrontNumber}</a>` : "-"}</strong>
         <div style="font-size: 0.7rem; color: var(--text-muted);">${escapeHtml(progress?.FrontCreatedAt)}</div>
       </div>

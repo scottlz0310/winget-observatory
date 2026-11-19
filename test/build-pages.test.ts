@@ -105,17 +105,22 @@ describe("buildDashboard", () => {
       expect(html.match(/<polyline /g)?.length).toBeGreaterThanOrEqual(2);
       expect(html).toContain("+50"); // 前線番号増加（進行）
 
-      // ファーストビューのサマリー
-      expect(html).toContain("🎯 初回提出者サマリー");
-      expect(html).toContain("初回提出者コホート 準拠");
+      // ファーストビューの統合処理バンドヒーローカード
+      expect(html).toContain("着地予測（統合処理バンド）");
+      expect(html).toContain("本命予想（中央値バンド）");
+      expect(html).toContain("全体レンジ（前線 〜 大底）");
+      expect(html).toContain("🌱 初回提出者コホート実績（過去 90 日・5 件）");
       expect(html).toContain("生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）");
-      expect(html).toContain("予想マージ日 (P50 中央値)");
-      expect(html).toContain("予想マージ日 (P75 75%点)");
-      expect(html).toContain("追い越し実態の分離内訳");
-      expect(html).toContain("常連・特急: <strong>9</strong> 件 / 初回: <strong>1</strong> 件");
+      expect(html).toContain(
+        "うち初回提出者: <strong>1</strong> 件 / 常連・特急レーン: <strong>9</strong> 件",
+      );
+      expect(html).toContain("健康的大底（最古健康PR）");
+      expect(html).toContain("<th>健康的大底 PR</th>");
+      expect(html).not.toContain("現在の消化前線");
+      expect(html).not.toContain("<th>消化前線 PR</th>");
 
-      // 新指標: 最上部の予想パネルの順位消化（24時間で50件消化 = 日速50件、残り100件で約2日後）
-      expect(html).toContain("予想マージ日（2 つの仮説の比較）");
+      // 検証用詳細の順位消化（24時間で50件消化 = 日速50件、残り100件で約2日後）
+      expect(html).toContain("🔍 統合処理バンドの内訳と 2 仮説比較（検証用詳細）");
       expect(html).not.toContain("🔮 仮説② の根拠");
       expect(html).toContain("① 順位消化");
       expect(html).toContain("直近 1.0 日（24.0 時間）で 50 件減（50 件/日）");
@@ -377,11 +382,11 @@ describe("buildDashboard: マージ時期の予想", () => {
       expect(html).toContain("75%点の日数でマージされる場合");
       expect(html).toContain("起票から 11 日 / 通算所要日数の中央値 44.5 日（25%）");
       expect(html).toContain('class="progress-bar"');
-      expect(html).toContain('aria-label="2 つの仮説による予想マージ日"');
+      expect(html).toContain('aria-label="統合処理バンドによる着地予想タイムライン"');
       // 順位消化の注意（更新の入れ替わりを含む）
       expect(html).toContain("実際の消化より速く出ることがあります");
       // 予想パネルは、上部の統計カードより前に出す
-      expect(html.indexOf("予想マージ日（2 つの仮説の比較）")).toBeLessThan(
+      expect(html.indexOf("着地予測（統合処理バンド）")).toBeLessThan(
         html.indexOf("実質待ち件数 (更新順の順位)"),
       );
     } finally {
@@ -547,7 +552,7 @@ describe("buildDashboard: 過去実績との比較", () => {
     expect(flow).toContain("更新順の順位 10");
     expect(flow).not.toContain("… 10 件");
     expect(flow.match(/class="flow-node/g)).toHaveLength(3);
-    expect(flow).toContain("消化前線（健康的大底）");
+    expect(flow).toContain("健康的大底（最古健康PR）");
     expect(flow).toContain("後続の準備完了 PR");
     expect(flow).toContain("CI・検証通過済みの健康体");
     expect(flow).not.toContain("CI 通過待ち含む");
@@ -788,16 +793,17 @@ describe("buildDashboard: 過去実績との比較", () => {
       const { htmlPath } = buildDashboard({ dataDir, outputDir });
       const html = readFileSync(htmlPath, "utf-8");
 
-      // 1. ファーストビューサマリー
-      expect(html).toContain("🎯 初回提出者サマリー");
-      expect(html).toContain("初回提出者コホート 準拠");
+      // 1. 統合処理バンドヒーローカード
+      expect(html).toContain("着地予測（統合処理バンド）");
+      expect(html).toContain("本命予想（中央値バンド）");
+      expect(html).toContain("全体レンジ（前線 〜 大底）");
+      expect(html).toContain("🌱 初回提出者コホート実績（過去 90 日・12 件）");
       expect(html).toContain("生涯マージ1件の初回提出者（手直し・ラベル履歴を含む）");
-      expect(html).toContain("予想マージ日 (P50 中央値)");
-      expect(html).toContain("残り約 2.5 日");
-      expect(html).toContain("予想マージ日 (P75 75%点)");
-      expect(html).toContain("残り約 4.4 日");
-      expect(html).toContain("後発マージ計 56 件");
-      expect(html).toContain("常連・特急: <strong>56</strong> 件 / 初回: <strong>0</strong> 件");
+      expect(html).toContain("P50: 37.5 日 / P75: 39.4 日");
+      expect(html).toContain("<strong>56</strong> 件");
+      expect(html).toContain(
+        "うち初回提出者: <strong>0</strong> 件 / 常連・特急レーン: <strong>56</strong> 件",
+      );
       expect(html).toContain("✨ 採用サンプル内で確定した初回提出者の追い越し: 0 件");
 
       // 2. 統合チャート（4系列・2軸）
@@ -1014,7 +1020,7 @@ describe("buildDashboard: 過去実績との比較", () => {
     }
   });
 
-  test("renderFirstTimerHeroSummary: 未観測・旧形式・未判定ありのフォールバックが安全に処理される", () => {
+  test("renderOvertakeSection: 未観測・旧形式・未判定ありのフォールバックが安全に処理される", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-summary-fallback-"));
     const dataDir = join(tempDir, "data");
     const outputDir = join(tempDir, "site");
@@ -1027,7 +1033,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       "utf-8",
     );
     let html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-    expect(html).toContain("追い越しの観測データなし");
+    expect(html).not.toContain("🏃 追い越しの比較（採用サンプル内）");
     expect(html).not.toContain("完全な作成順で進行中");
 
     // ケース 2: 旧形式スナップショット（LaterCreated のみあり、コホート別内訳なし）
@@ -1043,9 +1049,9 @@ describe("buildDashboard: 過去実績との比較", () => {
       "utf-8",
     );
     html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-    expect(html).toContain("後発マージ計 15 件");
+    expect(html).toContain("<strong>15</strong> 件");
     expect(html).toContain("初回/常連の内訳は未分類（旧データ）");
-    expect(html).not.toContain("常連・特急: <strong>15</strong> 件"); // 勝手に常連に計上しない
+    expect(html).not.toContain("常連・特急レーン: <strong>15</strong> 件"); // 勝手に常連に計上しない
     expect(html).not.toContain("完全な作成順で進行中");
 
     // ケース 3: 未判定あり（FirstTimerLaterCreated: 0, UnknownLaterCreated: 7）
@@ -1065,15 +1071,15 @@ describe("buildDashboard: 過去実績との比較", () => {
     );
     html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
     expect(html).toContain(
-      "常連・特急: <strong>13</strong> 件 / 初回: <strong>0</strong> 件 / 未判定: <strong>7</strong> 件",
+      "うち初回提出者: <strong>0</strong> 件 / 常連・特急レーン: <strong>13</strong> 件 / 未判定: <strong>7</strong> 件",
     );
-    expect(html).toContain("採用サンプル内で確定した初回追い越し 0 件（未判定 7 件）");
+    expect(html).not.toContain("採用サンプル内で確定した初回提出者の追い越し: 0 件");
     expect(html).not.toContain("完全な作成順で進行中");
 
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  test("renderFirstTimerHeroSummary & renderFirstTimerCohortBlock: FirstTimerLookbackDays が集計期間バッジに反映される", () => {
+  test("統合ヒーロー & renderFirstTimerCohortBlock: FirstTimerLookbackDays が集計期間表示に反映される", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-ft-lookback-"));
     const dataDir = join(tempDir, "data");
     const outputDir = join(tempDir, "site");
@@ -1093,8 +1099,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       "utf-8",
     );
     let html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-    expect(html).toContain("過去 90 日間の初回提出者コホート 準拠");
-    expect(html).toContain("（過去 90 日間 / サンプル 8 件）");
+    expect(html).toContain("過去 90 日・8 件");
     expect(html).toContain("過去 90 日間・採用 8 件");
 
     // FirstTimerLookbackDays 未指定で LookbackDays: 45 の場合
@@ -1110,14 +1115,13 @@ describe("buildDashboard: 過去実績との比較", () => {
       "utf-8",
     );
     html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-    expect(html).toContain("過去 45 日間の初回提出者コホート 準拠");
-    expect(html).toContain("（過去 45 日間 / サンプル 4 件）");
+    expect(html).toContain("過去 45 日・4 件");
     expect(html).toContain("過去 45 日間・採用 4 件");
 
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  test("renderFirstTimerHeroSummary: FirstTimerTurnMedianDays と FirstTimerTurnP75Days が設定されている場合に最終コミット後 (Turn) が出力される", () => {
+  test("統合ヒーロー: FirstTimerTurnMedianDays と FirstTimerTurnP75Days が設定されている場合に最終コミット後 (Turn) が出力される", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-ft-turn-"));
     const dataDir = join(tempDir, "data");
     const outputDir = join(tempDir, "site");
@@ -1138,8 +1142,9 @@ describe("buildDashboard: 過去実績との比較", () => {
       "utf-8",
     );
     const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-    expect(html).toContain("最終コミット後 (Turn): <strong>5.5</strong> 日");
-    expect(html).toContain("最終コミット後 (Turn): <strong>8.2</strong> 日");
+    expect(html).toContain(
+      "最終コミット後 (Turn): <strong>5.5</strong> 日 / P75: <strong>8.2</strong> 日",
+    );
 
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -1180,15 +1185,17 @@ describe("buildDashboard: 過去実績との比較", () => {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
       // TotalLifetimeDays=0 のとき WaitDays=12 に誤フォールバックしないこと
-      expect(html).toContain("（基準 PR 現在: 0 日）");
-      expect(html).toContain("（残り約 37 日）");
-      expect(html).not.toContain("（基準 PR 現在: 12 日）");
+      expect(html).toContain("基準 PR 現在: 0 日");
+      expect(html).not.toContain("基準 PR 現在: 12 日");
 
       // 追い越し分離内訳の 30 日全体サンプル表記
-      expect(html).toContain("集計対象: 直近 30 日間の全体採用サンプル（142 件）内");
+      expect(html).toContain("直近 30 日間の全体採用サンプル（142 件）内で");
 
-      // KPI カード 4 見出し、チャート上限、離脱内訳 7 日基準、除外件数・初期健康体説明、仮説②削除済み
+      // KPI カード 4 見出し、用語統一、仮説②削除済み
       expect(html).toContain("準備完了後の待機 (Ready / 通算 / 手番)");
+      expect(html).toContain("健康的大底（最古健康PR）");
+      expect(html).not.toContain("現在の消化前線");
+      expect(html).not.toContain("<th>消化前線 PR</th>");
       expect(html).toContain("直近最大 120 観測点を表示");
       expect(html).toContain("比較対象は直近約 7 日間 / 168 時間窓基準");
       expect(html).toContain("除外件数は、タイムライン上で Ready 条件");
@@ -1234,9 +1241,9 @@ describe("buildDashboard: 過去実績との比較", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
-      expect(html).toContain("過去 60 日間の初回提出者コホート 準拠");
+      expect(html).toContain("過去 60 日・5 件");
       expect(html).toContain("過去 60 日間・採用 5 件");
-      expect(html).toContain("集計対象: 直近 14 日間の全体採用サンプル（55 件）内");
+      expect(html).toContain("直近 14 日間の全体採用サンプル（55 件）内で");
       expect(html).toContain("マージ実績の所要日数統計 (直近 14 日間");
       expect(html).toContain("直近（14日間）の全体マージ実績（常連・特急含む）");
       expect(html).toContain("上部の初回提出者60日コホート統計とは母集団が異なります");
@@ -1409,12 +1416,10 @@ describe("buildDashboard: 過去実績との比較", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
-      // 初回レビュー現在位置パネル（外挿廃止・定常換算）
-      expect(html).toContain("👀 主戦場ライン現在位置（7日初回介入コホート中央値）");
-      expect(html).toContain("現在位置・定常目安");
-      expect(html).toContain("約 9 日後");
-      expect(html).toContain("直近7日初回介入 12件の中央値");
-      expect(html).toContain("Open 5・Merged 7");
+      // 統合ヒーローカード内の主戦場ライン現在位置（外挿廃止・定常換算）
+      expect(html).toContain("👀 メンテナー作業前線（7日介入中央値）");
+      expect(html).toContain("自PRと差 9 日（定常 1.0 日/日換算:");
+      expect(html).toContain("7日初回介入 12件 [Open 5 / Merged 7]");
 
       // 統合時系列チャートに主戦場ライン系列
       expect(html).toContain("👀 主戦場ライン 起票経過（7日初回介入中央値）");

@@ -557,13 +557,13 @@ describe("CLI: 前線・実質待ち（更新順）の算出", () => {
       );
 
       expect(logs.find((l) => l.startsWith("実質待ちPR"))).toContain("[前回比 -10 件]");
-      expect(logs.find((l) => l.startsWith("消化前線"))).toContain("[前回 #90 から +10 件前進]");
+      expect(logs.find((l) => l.startsWith("健康的大底"))).toContain("[前回 #90 から +10 件前進]");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("検索結果に前線が存在しない場合は黙って続行せず中断する", async () => {
+  test("検索結果に健康的大底が存在しない場合は黙って続行せず中断する", async () => {
     const mockClient = {
       ...createMockClient([]),
       searchIssuesDetailed: async () => ({ totalCount: 0, items: [] }),
@@ -571,7 +571,7 @@ describe("CLI: 前線・実質待ち（更新順）の算出", () => {
 
     await expect(
       runProgressCli({ ...baseOptions, noLog: true }, mockClient, () => {}),
-    ).rejects.toThrow("前線");
+    ).rejects.toThrow("健康的大底");
   });
 });
 

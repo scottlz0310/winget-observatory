@@ -222,7 +222,7 @@ export function calculateVelocityMetrics(
 }
 
 /**
- * 消化前線の起票日と基準 PR の起票日とのカレンダー日数差を計算する
+ * 健康的大底（最古健康 PR）の起票日と基準 PR の起票日とのカレンダー日数差を計算する
  */
 export function calculateCalendarGap(
   frontCreatedAtStr?: string | null,

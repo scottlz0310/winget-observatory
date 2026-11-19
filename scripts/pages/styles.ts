@@ -256,6 +256,49 @@ export const DASHBOARD_CSS = `    :root {
       border-left: 4px solid var(--success);
     }
     .forecast-panel { margin-bottom: 0.5rem; }
+    .hero-band-card {
+      border: 2px solid var(--primary);
+      margin-bottom: 1.5rem;
+      background: linear-gradient(to bottom right, var(--card-bg), rgba(37, 99, 235, 0.04));
+    }
+    .hero-band-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+      margin: 0.75rem 0;
+    }
+    .hero-band-box {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 0.5rem;
+      padding: 0.85rem 1rem;
+    }
+    .hero-band-box.is-mainstream {
+      border-left: 4px solid var(--primary);
+    }
+    .hero-status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }
+    .hero-status-item {
+      background-color: var(--code-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 0.5rem;
+      padding: 0.65rem 0.9rem;
+    }
+    .hero-details {
+      margin-top: 1rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border-color);
+    }
+    .hero-details summary {
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
     .section-note { font-size: 0.875rem; color: var(--text-muted); margin: -0.5rem 0 1rem; }
     a { color: var(--primary); text-decoration: none; }
     a:hover { text-decoration: underline; }

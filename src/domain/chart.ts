@@ -230,8 +230,10 @@ export interface TimelineOptions {
   /** 起点（今日）の時刻（UTC ミリ秒） */
   nowMs: number;
   markers: TimelineMarker[];
-  /** 範囲として帯で示す期間（UTC ミリ秒） */
+  /** 主な範囲（本命中央値バンド等）として帯で示す期間（UTC ミリ秒） */
   band?: { startMs: number; endMs: number };
+  /** 全体レンジ（前線〜大底）として背景に細く示す期間（UTC ミリ秒） */
+  overallBand?: { startMs: number; endMs: number };
 }
 
 const TL_WIDTH = 640;
@@ -251,7 +253,14 @@ export function renderTimelineSvg(options: TimelineOptions): string | null {
     .sort((a, b) => a.dateMs - b.dateMs);
   if (!Number.isFinite(options.nowMs) || markers.length === 0) return null;
 
-  const endMs = Math.max(...markers.map((m) => m.dateMs), options.nowMs + DAY_MS);
+  const bandEndpoints = [
+    options.band?.startMs,
+    options.band?.endMs,
+    options.overallBand?.startMs,
+    options.overallBand?.endMs,
+  ].filter((ms): ms is number => typeof ms === "number" && Number.isFinite(ms));
+
+  const endMs = Math.max(...markers.map((m) => m.dateMs), ...bandEndpoints, options.nowMs + DAY_MS);
   const span = endMs - options.nowMs;
   const domainEnd = endMs + span * 0.05;
   const plotW = TL_WIDTH - TL_MARGIN.left - TL_MARGIN.right;
@@ -262,9 +271,30 @@ export function renderTimelineSvg(options: TimelineOptions): string | null {
       plotW;
   const num = (value: number): string => String(round1(value));
 
-  const band = options.band
-    ? `<rect x="${num(px(options.band.startMs))}" y="${TL_AXIS_Y - 7}" width="${num(Math.max(px(options.band.endMs) - px(options.band.startMs), 2))}" height="14" rx="3" style="fill: var(--primary); opacity: 0.18" />`
-    : "";
+  const renderBandRect = (
+    range: { startMs: number; endMs: number } | undefined,
+    y: number,
+    height: number,
+    style: string,
+  ): string => {
+    if (!range || !Number.isFinite(range.startMs) || !Number.isFinite(range.endMs)) return "";
+    const startX = px(Math.min(range.startMs, range.endMs));
+    const endX = px(Math.max(range.startMs, range.endMs));
+    return `<rect x="${num(startX)}" y="${y}" width="${num(Math.max(endX - startX, 2))}" height="${height}" rx="3" style="${style}" />`;
+  };
+
+  const overallBand = renderBandRect(
+    options.overallBand,
+    TL_AXIS_Y - 3,
+    6,
+    "fill: var(--text-muted); opacity: 0.25",
+  );
+  const band = renderBandRect(
+    options.band,
+    TL_AXIS_Y - 7,
+    14,
+    "fill: var(--primary); opacity: 0.2",
+  );
 
   const ticks = Array.from({ length: 4 }, (_, i) => {
     const ms = options.nowMs + (domainEnd - options.nowMs) * (i / 3);
@@ -290,5 +320,5 @@ export function renderTimelineSvg(options: TimelineOptions): string | null {
     .join("");
 
   const title = xmlEscape(options.title);
-  return `<svg viewBox="0 0 ${TL_WIDTH} ${TL_HEIGHT}" role="img" aria-label="${title}" style="width: 100%; height: auto; display: block;"><title>${title}</title><line x1="${TL_MARGIN.left}" y1="${TL_AXIS_Y}" x2="${TL_WIDTH - TL_MARGIN.right}" y2="${TL_AXIS_Y}" stroke-width="2" style="stroke: var(--border-color)" />${band}${ticks}${marks}</svg>`;
+  return `<svg viewBox="0 0 ${TL_WIDTH} ${TL_HEIGHT}" role="img" aria-label="${title}" style="width: 100%; height: auto; display: block;"><title>${title}</title><line x1="${TL_MARGIN.left}" y1="${TL_AXIS_Y}" x2="${TL_WIDTH - TL_MARGIN.right}" y2="${TL_AXIS_Y}" stroke-width="2" style="stroke: var(--border-color)" />${overallBand}${band}${ticks}${marks}</svg>`;
 }
