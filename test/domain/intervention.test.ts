@@ -802,4 +802,150 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
     expect(frontier.MedianCreatedAt).toBe("2026-10-08T00:00:00.000Z");
     expect(frontier.Items?.[0].InterventionKind).toBe("assignee");
   });
+
+  test.each<{
+    name: string;
+    authorAssociation: string | null | undefined;
+    author?: { __typename?: string | null; login?: string | null };
+    expectedIntervened: boolean;
+    expectedPrivCount?: number;
+    expectedBadgeLabel?: string;
+  }>([
+    {
+      name: "COLLABORATOR (stephengillie, #439626 相当) の Deterministic automation は反応ありとして Unreviewed から除外",
+      authorAssociation: "COLLABORATOR",
+      author: { __typename: "User", login: "stephengillie" },
+      expectedIntervened: true,
+      expectedPrivCount: 1,
+      expectedBadgeLabel: "自動指摘済: stephengillie",
+    },
+    {
+      name: "MEMBER の Deterministic automation も反応あり",
+      authorAssociation: "MEMBER",
+      author: { __typename: "User", login: "denelon" },
+      expectedIntervened: true,
+      expectedPrivCount: 1,
+      expectedBadgeLabel: "自動指摘済: denelon",
+    },
+    {
+      name: "OWNER の Deterministic automation も反応あり",
+      authorAssociation: "OWNER",
+      author: { __typename: "User", login: "owner-user" },
+      expectedIntervened: true,
+      expectedPrivCount: 1,
+      expectedBadgeLabel: "自動指摘済: owner-user",
+    },
+    {
+      name: "小文字 collaborator も正規化して反応あり",
+      authorAssociation: "collaborator",
+      author: { __typename: "User", login: "collab-user" },
+      expectedIntervened: true,
+      expectedPrivCount: 1,
+      expectedBadgeLabel: "自動指摘済: collab-user",
+    },
+    {
+      name: "一般ユーザー (CONTRIBUTOR / NONE / 未設定) の未編集 Deterministic automation は従来どおり未着手",
+      authorAssociation: "CONTRIBUTOR",
+      author: { __typename: "User", login: "random-user" },
+      expectedIntervened: false,
+    },
+    {
+      name: "PR 作成者本人が COLLABORATOR で Deterministic automation を投稿した場合は本人扱いで未着手",
+      authorAssociation: "COLLABORATOR",
+      author: { __typename: "User", login: "submitter" },
+      expectedIntervened: false,
+    },
+    {
+      name: "純粋 Bot (wingetbot / [bot]) が COLLABORATOR 相当で Deterministic automation を投稿しても除外",
+      authorAssociation: "COLLABORATOR",
+      author: { __typename: "User", login: "wingetbot" },
+      expectedIntervened: false,
+    },
+  ])(
+    "Deterministic automation 特権ロール判定: $name",
+    ({ authorAssociation, author, expectedIntervened, expectedPrivCount, expectedBadgeLabel }) => {
+      const summary = classifyPrIntervention({
+        author: { __typename: "User", login: "submitter" },
+        assignees: { nodes: [] },
+        reviews: { nodes: [] },
+        comments: {
+          nodes: [
+            {
+              author,
+              authorAssociation,
+              createdAt: "2026-10-30T06:18:49Z",
+              body: "This manifest version has been depreciated. Please use version `1.28.0`. (Deterministic automation - build 1830.)",
+            },
+          ],
+        },
+      });
+
+      expect(summary.Intervened).toBe(expectedIntervened);
+      expect(summary.PrivilegedAutomationCommentCount).toBe(expectedPrivCount);
+      expect(summary.ManualCommentCount).toBe(0);
+      expect(summary.HumanReviewCount).toBe(0);
+      // 主戦場ライン（FirstHumanInterventionAt）には未編集の自動ログ日時を算入しない
+      expect(summary.FirstHumanInterventionAt).toBeUndefined();
+      if (expectedBadgeLabel) {
+        expect(summary.PrimaryBadge).toEqual({
+          Kind: "comment",
+          Actor: author?.login ?? "",
+          Label: expectedBadgeLabel,
+        });
+      } else {
+        expect(summary.PrimaryBadge).toBeUndefined();
+      }
+    },
+  );
+
+  test("10/30 に COLLABORATOR の自動指摘があっても、11/18 にレビュー承認された PR の主戦場ライン初回人間介入日時は 11/18 のまま維持される（#440856 相当）", () => {
+    const intervention = classifyPrIntervention({
+      author: { __typename: "User", login: "rodolphobrock" },
+      assignees: { nodes: [] },
+      reviews: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            state: "APPROVED",
+            submittedAt: "2026-11-18T17:50:15Z",
+          },
+        ],
+      },
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            authorAssociation: "COLLABORATOR",
+            createdAt: "2026-10-30T06:42:36Z",
+            body: "This manifest version has been depreciated. (Deterministic automation - build 1830.)",
+          },
+        ],
+      },
+    });
+
+    expect(intervention.Intervened).toBe(true);
+    expect(intervention.PrivilegedAutomationCommentCount).toBe(1);
+    expect(intervention.FirstHumanInterventionAt).toBe("2026-11-18T17:50:15.000Z");
+    expect(intervention.FirstInterventionKind).toBe("review");
+
+    const frontier = calculateFirstReviewMainstreamFrontier(
+      [
+        {
+          number: 440856,
+          title: "New package",
+          url: "https://github.com/microsoft/winget-pkgs/pull/440856",
+          state: "MERGED",
+          author: "rodolphobrock",
+          commitCount: 2,
+          createdAt: "2026-09-24T23:48:53Z",
+          mergedAt: "2026-11-18T17:50:19Z",
+          intervention,
+        },
+      ],
+      "2026-11-19T05:00:00Z",
+    );
+    expect(frontier.CohortCount).toBe(1);
+    expect(frontier.MergedCount).toBe(1);
+    expect(frontier.MedianCreatedAt).toBe("2026-09-24T23:48:53.000Z");
+  });
 });

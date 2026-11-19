@@ -205,6 +205,43 @@ describe("GraphQL Adapters", () => {
         },
       });
     });
+
+    test("COLLABORATOR の Deterministic automation コメントを含む場合は Intervened=true かつ FirstHumanInterventionAt 未設定になる", () => {
+      const node: GraphQLPullRequestNode = {
+        number: 439626,
+        title: "Deprecated manifest PR",
+        url: "https://github.com/repo/pull/439626",
+        createdAt: "2026-09-23T08:52:58Z",
+        updatedAt: "2026-10-30T12:47:07Z",
+        author: { __typename: "User", login: "rakleed" },
+        assignees: { nodes: [] },
+        reviews: { nodes: [] },
+        comments: {
+          nodes: [
+            {
+              author: { __typename: "User", login: "stephengillie" },
+              authorAssociation: "COLLABORATOR",
+              createdAt: "2026-10-30T06:18:49Z",
+              body: "This manifest version has been depreciated. Please use version `1.28.0`. (Deterministic automation - build 1830.)",
+            },
+          ],
+        },
+      };
+
+      const result = adaptGraphQLToPrView(node);
+      expect(result.intervention).toEqual({
+        Intervened: true,
+        ThirdPartyAssignees: [],
+        HumanReviewCount: 0,
+        ManualCommentCount: 0,
+        PrivilegedAutomationCommentCount: 1,
+        PrimaryBadge: {
+          Kind: "comment",
+          Actor: "stephengillie",
+          Label: "自動指摘済: stephengillie",
+        },
+      });
+    });
   });
 
   describe("adaptGraphQLToPrDetail & adaptGraphQLToPrState & adaptGraphQLToPrSampleData", () => {

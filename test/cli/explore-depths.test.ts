@@ -872,6 +872,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       endCursor?: string | null;
       nodes: Array<{
         author: { __typename?: string; login: string } | null;
+        authorAssociation?: string | null;
         body: string;
         createdAt?: string | null;
         lastEditedAt?: string | null;
@@ -1503,6 +1504,76 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     expect(r2.intervenedBottom).toEqual([]);
     expect(r2.unreviewedTruncated).toBe(false);
     expect(r2.intervenedTruncated).toBe(true);
+  });
+
+  test("COLLABORATOR の Deterministic automation コメント付き PR (#439626 相当) は未レビュー前線から除外され介入済み側へ分類される（Issue #121）", async () => {
+    const privAutoPr = createInterventionNode({
+      number: 439626,
+      createdAt: "2026-09-23T08:52:58Z",
+      author: "rakleed",
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            authorAssociation: "COLLABORATOR",
+            createdAt: "2026-10-30T06:18:49Z",
+            body: "This manifest version has been depreciated. Please use version `1.28.0`. (Deterministic automation - build 1830.)",
+          },
+        ],
+      },
+    });
+    const trueUnreviewedPr = createInterventionNode({
+      number: 448260,
+      createdAt: "2026-10-07T15:34:01Z",
+      author: "Aureliolo",
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "Bot", login: "microsoft-github-policy-service" },
+            authorAssociation: "CONTRIBUTOR",
+            createdAt: "2026-10-07T15:35:00Z",
+            body: "CLA check",
+          },
+          {
+            author: { __typename: "User", login: "Aureliolo" },
+            authorAssociation: "CONTRIBUTOR",
+            createdAt: "2026-10-07T15:36:00Z",
+            body: "@microsoft-github-policy-service agree",
+          },
+        ],
+      },
+    });
+
+    const nodeMap = new Map([
+      [439626, privAutoPr],
+      [448260, trueUnreviewedPr],
+    ]);
+    const mockClient = {
+      graphql: async <T>(query: string): Promise<T> => {
+        if (query.includes("SearchPrNumbers")) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ number: 439626 }, { number: 448260 }],
+            },
+          } as unknown as T;
+        }
+        return { repository: buildBatchRepoFromSpecs(query, nodeMap) } as unknown as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const result = await fetchInterventionFrontiers(
+      mockClient,
+      "repo:microsoft/winget-pkgs",
+      10,
+      100,
+    );
+    expect(result.unreviewedBottom.map((r) => r.Number)).toEqual([448260]);
+    expect(result.intervenedBottom.map((r) => r.Number)).toEqual([439626]);
+    expect(result.intervenedBottom[0]?.Intervention?.PrimaryBadge?.Label).toBe(
+      "自動指摘済: stephengillie",
+    );
+    expect(result.intervenedBottom[0]?.Intervention?.FirstHumanInterventionAt).toBeUndefined();
   });
 
   test("runExploreDepths は DepthsVersion=4 で FirstReviewFrontier / UnreviewedBottom / IntervenedBottom / TargetPr.Intervention を保存する", async () => {

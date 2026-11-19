@@ -955,7 +955,7 @@ export async function runExploreDepths(
     log("【5A. 未レビュー（完全未着手）前線 (Unreviewed Frontier)】");
     const unreviewedTruncatedNote = unreviewedTruncated ? " [※走査上限到達のため一部未完了]" : "";
     log(
-      `説明: 人間レビュー・手動コメント・第三者 Assignees がすべて無い健康なPR（ボット・作成者本人・自動ログ除く）の起票順先頭 (上位 ${unreviewedSummary.count} 件 / 先頭: ${unreviewedSummary.head ? `${unreviewedSummary.head.PR} 起票 ${unreviewedSummary.head.作成日時}・経過 ${unreviewedSummary.headElapsedDays ?? "-"} 日` : unreviewedTruncated ? "走査上限到達・未確定" : "該当なし"})${unreviewedTruncatedNote}`,
+      `説明: 人間レビュー・手動コメント・第三者 Assignees・Collaborator 以上の自動指摘がいずれも無い健康なPR（作成者本人・一般ボット除く）の起票順先頭 (上位 ${unreviewedSummary.count} 件 / 先頭: ${unreviewedSummary.head ? `${unreviewedSummary.head.PR} 起票 ${unreviewedSummary.head.作成日時}・経過 ${unreviewedSummary.headElapsedDays ?? "-"} 日` : unreviewedTruncated ? "走査上限到達・未確定" : "該当なし"})${unreviewedTruncatedNote}`,
     );
     if (unreviewedBottom.length === 0 && unreviewedTruncated) {
       log("  走査上限に到達し、未走査の PR が残っているため有無は未確定です");

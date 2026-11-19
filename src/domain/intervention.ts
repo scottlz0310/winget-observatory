@@ -11,6 +11,7 @@ import type {
   PrInterventionReviewInput,
   PrInterventionSummary,
 } from "../models/depths";
+import { isPrivilegedAuthorAssociation } from "./first-timer";
 import { calculateNumericMedian, DAY_MS, round1 } from "./formatters";
 
 /** 主戦場ライン（初回介入コホート中央値）のモード識別子 */
@@ -267,6 +268,12 @@ function isEligibleThirdPartyAssignedEvent(
 /**
  * PR の reviews / comments / assignees / timelineItems を統合評価し、
  * 「未レビュー（完全未着手）」と「レビュー・介入済み」の判定結果・代表バッジ・最初の人間介入日時を生成する。
+ *
+ * - `Deterministic automation` を含むコメントでも、発言者が特権ロール（COLLABORATOR / MEMBER / OWNER）
+ *   かつ非ボット・非作成者である場合は「トリアージ反応あり（`PrivilegedAutomationCommentCount`）」として
+ *   `Intervened = true`（未レビュー前線から除外）とする。
+ * - 一方、`FirstHumanInterventionAt`（主戦場ライン用）には一斉バッチ（build 1830 等）や自動検証投稿による
+ *   時刻逆戻りを防ぐため、人間の手動レビュー・手動コメント・第三者アサインのみを算入する。
  */
 export function classifyPrIntervention(input: PrInterventionInput): PrInterventionSummary {
   const prAuthorLogin = input.author?.login ?? null;
@@ -278,12 +285,25 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
   );
 
   const comments = unwrapNodes<PrInterventionCommentInput>(input.comments);
-  const manualComments = comments.filter((c) => {
+  const manualComments: PrInterventionCommentInput[] = [];
+  const privilegedAutomationComments: PrInterventionCommentInput[] = [];
+  for (const c of comments) {
     if (isDeterministicAutomationComment(c.body)) {
-      return hasDeterministicAutomationManualEdit(c, prAuthorLogin);
+      if (hasDeterministicAutomationManualEdit(c, prAuthorLogin)) {
+        manualComments.push(c);
+      } else if (
+        !isBotActor(c.author) &&
+        !isSameActorLogin(c.author?.login, prAuthorLogin) &&
+        isPrivilegedAuthorAssociation(c.authorAssociation)
+      ) {
+        privilegedAutomationComments.push(c);
+      }
+      continue;
     }
-    return !isBotActor(c.author) && !isSameActorLogin(c.author?.login, prAuthorLogin);
-  });
+    if (!isBotActor(c.author) && !isSameActorLogin(c.author?.login, prAuthorLogin)) {
+      manualComments.push(c);
+    }
+  }
 
   const assignedEvents = unwrapNodes<PrInterventionAssignedEventInput>(input.timelineItems).filter(
     (e) => isEligibleThirdPartyAssignedEvent(e, prAuthorLogin),
@@ -350,14 +370,28 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
       Actor: thirdPartyAssignees[0],
       Label: `アサイン済: ${thirdPartyAssignees.join(", ")}`,
     };
+  } else if (privilegedAutomationComments.length > 0) {
+    const latestPrivAuto = privilegedAutomationComments[privilegedAutomationComments.length - 1];
+    const actor = resolveCommentActor(latestPrivAuto);
+    primaryBadge = {
+      Kind: "comment",
+      Actor: actor,
+      Label: `自動指摘済: ${actor}`,
+    };
   }
 
   return {
     Intervened:
-      humanReviews.length > 0 || manualComments.length > 0 || thirdPartyAssignees.length > 0,
+      humanReviews.length > 0 ||
+      manualComments.length > 0 ||
+      thirdPartyAssignees.length > 0 ||
+      privilegedAutomationComments.length > 0,
     ThirdPartyAssignees: thirdPartyAssignees,
     HumanReviewCount: humanReviews.length,
     ManualCommentCount: manualComments.length,
+    ...(privilegedAutomationComments.length > 0
+      ? { PrivilegedAutomationCommentCount: privilegedAutomationComments.length }
+      : {}),
     ...(primaryBadge ? { PrimaryBadge: primaryBadge } : {}),
     ...(earliestIntervention
       ? {
