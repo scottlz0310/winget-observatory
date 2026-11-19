@@ -3,21 +3,21 @@
  * 外部 I/O を行わず、src/models の型定義のみに依存する。
  */
 
-/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版, 5: Validation-Guide 阻害ラベル化・ReadyAt 再計測版, 6: 特権ロール・Bot 除外版） */
-export const CURRENT_FIRST_TIMER_VERSION = 6;
+/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版, 5: Validation-Guide 阻害ラベル化・ReadyAt 再計測版, 6: 特権ロール・Bot 除外版, 7: 未捕捉阻害ラベル補強・Publisher-Verified 除外版） */
+export const CURRENT_FIRST_TIMER_VERSION = 7;
 
 /** Waived-* 免除ラベルを健康体扱いとして no-ready を評価した最低バージョン */
 export const MIN_WAIVED_READY_VERSION = 3;
 
-/** Validation-Guide 阻害ラベル化を反映した ReadyAt / ReadyDays を持つ最低バージョン */
-export const MIN_VALIDATION_GUIDE_READY_VERSION = 5;
+/** 現行の阻害ラベル・高速枠除外定義を反映した ReadyAt / 健全性基準の最低バージョン */
+export const MIN_VALID_READY_VERSION = 7;
 
 /**
  * 判定バージョンが、タイムライン・ReadyAt 再計測不要な最低基準を満たしているか判定する。
  */
 export function hasValidatedReadyVersion(
   version: number | undefined,
-  minReadyVersion: number = MIN_VALIDATION_GUIDE_READY_VERSION,
+  minReadyVersion: number = MIN_VALID_READY_VERSION,
 ): boolean {
   return version !== undefined && version >= minReadyVersion;
 }
@@ -350,9 +350,9 @@ export async function resolveAuthorMergedCounts(
 /**
  * キャッシュ済みのサンプルが、判定ロジックの改定に伴い再評価（タイムライン・詳細の再取得）を必要とするか判定する純粋関数。
  *
- * - FirstTimerVersion >= CURRENT_FIRST_TIMER_VERSION (5) のエントリは最新ルールで計測済みのため再評価不要。
- * - Validation-Guide 阻害化（v5）より前の版（未設定または FirstTimerVersion < MIN_VALIDATION_GUIDE_READY_VERSION）では
- *   Validation-Guide 一時付与区間が非 Ready 扱いにならず ReadyAt / ReadyDays が誤って早い値で記録されている可能性があるため、
+ * - FirstTimerVersion >= CURRENT_FIRST_TIMER_VERSION (7) のエントリは最新ルールで計測済みのため再評価不要。
+ * - Ready 判定改定（v7）より前の版（未設定または FirstTimerVersion < MIN_VALID_READY_VERSION）では
+ *   新規阻害ラベル（Needs-Attention 等）の付与区間が非 Ready 扱いにならず ReadyAt / ReadyDays が誤って早い値で記録されている可能性があるため、
  *   すべての sample エントリをタイムラインごと再取得して再計測する。
  */
 export function shouldReevaluateCachedSample(params: {
@@ -362,18 +362,17 @@ export function shouldReevaluateCachedSample(params: {
   commitCount: number;
   authorCountInCandidates: number;
   author?: string;
+  minReadyVersion?: number;
+  currentVersion?: number;
 }): boolean {
-  if (
-    params.firstTimerVersion !== undefined &&
-    params.firstTimerVersion >= CURRENT_FIRST_TIMER_VERSION
-  ) {
+  const currentVersion = params.currentVersion ?? CURRENT_FIRST_TIMER_VERSION;
+  const minReadyVersion = params.minReadyVersion ?? MIN_VALID_READY_VERSION;
+
+  if (params.firstTimerVersion !== undefined && params.firstTimerVersion >= currentVersion) {
     return false;
   }
 
-  if (
-    params.firstTimerVersion === undefined ||
-    params.firstTimerVersion < MIN_VALIDATION_GUIDE_READY_VERSION
-  ) {
+  if (params.firstTimerVersion === undefined || params.firstTimerVersion < minReadyVersion) {
     return true;
   }
 
@@ -399,8 +398,8 @@ export function shouldReevaluateCachedSample(params: {
 
 /**
  * タイムライン・詳細の再取得を行わず、保存済み Author を用いた初回提出者判定の再評価のみ行うべきか判定する純粋関数。
- * ReadyAt 再計測済みの MIN_VALIDATION_GUIDE_READY_VERSION 以上かつ CURRENT_FIRST_TIMER_VERSION 未満の
- * timeline-blocking エントリのみを対象とし、v5 未満は ReadyAt 再計測を伴うタイムライン再取得に委ねる。
+ * ReadyAt 再計測済みの MIN_VALID_READY_VERSION 以上かつ CURRENT_FIRST_TIMER_VERSION 未満の
+ * timeline-blocking エントリのみを対象とし、MIN_VALID_READY_VERSION 未満はタイムライン再取得に委ねる。
  */
 export function shouldReevaluateAuthorFirstTimer(params: {
   firstTimerReason?: string;
@@ -409,7 +408,7 @@ export function shouldReevaluateAuthorFirstTimer(params: {
 }): boolean {
   if (
     params.firstTimerVersion === undefined ||
-    params.firstTimerVersion < MIN_VALIDATION_GUIDE_READY_VERSION ||
+    params.firstTimerVersion < MIN_VALID_READY_VERSION ||
     params.firstTimerVersion >= CURRENT_FIRST_TIMER_VERSION
   ) {
     return false;

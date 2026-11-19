@@ -13,7 +13,7 @@ import {
   CURRENT_FIRST_TIMER_VERSION,
   hasValidatedReadyVersion,
   isPrivilegedOrBotAuthor,
-  MIN_VALIDATION_GUIDE_READY_VERSION,
+  MIN_VALID_READY_VERSION,
   shouldReevaluateCachedSample,
 } from "./first-timer";
 import { DAY_MS } from "./formatters";
@@ -205,8 +205,8 @@ export const FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS = 90;
 /** バイパス即マージを除外するための条件成立後経過日数（ReadyDays）の下限 */
 export const FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS = 0.5;
 
-/** v4 以前のゾンビキャッシュ（Validation-Guide 阻害化前）を除外するための最低判定バージョン */
-export const FIRST_TIMER_FASTEST_RANKING_MIN_VERSION = MIN_VALIDATION_GUIDE_READY_VERSION;
+/** 旧判定基準のゾンビキャッシュ（Ready 基準更新前）を除外するための最低判定バージョン */
+export const FIRST_TIMER_FASTEST_RANKING_MIN_VERSION = MIN_VALID_READY_VERSION;
 
 /** 初回提出者 最速マージランキング抽出オプション */
 export interface ExtractFirstTimerFastestRankingOptions {
@@ -321,7 +321,7 @@ export interface PruneSampleCacheOptions {
   scanComplete?: boolean;
   /** 検索走査の開始日時（この日時〜now の間に MergedAt がある未ヒット旧版のみパージ対象） */
   scanSinceDate?: Date;
-  /** 再計測不要とみなす判定バージョン下限（既定: MIN_VALIDATION_GUIDE_READY_VERSION） */
+  /** 再計測不要とみなす判定バージョン下限（既定: MIN_VALID_READY_VERSION） */
   minReadyVersion?: number;
 }
 
@@ -356,7 +356,7 @@ export function pruneSampleCache(
     }
   }
 
-  const minReadyVersion = options.minReadyVersion ?? MIN_VALIDATION_GUIDE_READY_VERSION;
+  const minReadyVersion = options.minReadyVersion ?? MIN_VALID_READY_VERSION;
   const retentionCutoffMs =
     retentionDays > 0 ? nowMs - retentionDays * DAY_MS : Number.NEGATIVE_INFINITY;
   const canPruneOutsideCandidates =
@@ -406,7 +406,7 @@ export interface SelectMetadataRefreshOptions {
   windowDays?: number;
   /** 最大抽出件数（既定: 100） */
   budget?: number;
-  /** ReadyAt 再計測が不要な最低バージョン（既定: MIN_VALIDATION_GUIDE_READY_VERSION） */
+  /** ReadyAt 再計測が不要な最低バージョン（既定: MIN_VALID_READY_VERSION） */
   minReadyVersion?: number;
   /** 到達目標とする最新バージョン（既定: CURRENT_FIRST_TIMER_VERSION） */
   targetVersion?: number;
@@ -440,7 +440,7 @@ export function selectMetadataRefreshCandidates(
     return [];
   }
 
-  const minReadyVersion = options.minReadyVersion ?? MIN_VALIDATION_GUIDE_READY_VERSION;
+  const minReadyVersion = options.minReadyVersion ?? MIN_VALID_READY_VERSION;
   const targetVersion = options.targetVersion ?? CURRENT_FIRST_TIMER_VERSION;
   const cutoffMs = windowDays > 0 ? nowMs - windowDays * DAY_MS : Number.NEGATIVE_INFINITY;
 
@@ -461,6 +461,8 @@ export function selectMetadataRefreshCandidates(
         commitCount: entry.CommitCount,
         authorCountInCandidates: 1,
         author: entry.Author,
+        minReadyVersion,
+        currentVersion: targetVersion,
       })
     ) {
       return false;
@@ -519,7 +521,7 @@ export function summarizeSampleCacheVersions(
     throw new RangeError(`windowDays は 0 以上の有限数値を指定してください: ${windowDays}`);
   }
 
-  const minReadyVersion = options.minReadyVersion ?? MIN_VALIDATION_GUIDE_READY_VERSION;
+  const minReadyVersion = options.minReadyVersion ?? MIN_VALID_READY_VERSION;
   const targetVersion = options.targetVersion ?? CURRENT_FIRST_TIMER_VERSION;
   const cutoffMs = windowDays > 0 ? nowMs - windowDays * DAY_MS : Number.NEGATIVE_INFINITY;
 
@@ -548,6 +550,8 @@ export function summarizeSampleCacheVersions(
         commitCount: entry.CommitCount,
         authorCountInCandidates: 1,
         author: entry.Author,
+        minReadyVersion,
+        currentVersion: targetVersion,
       });
       if (requiresFirstTimerReeval) {
         legacyBeforeReadyCount++;

@@ -591,6 +591,10 @@ export interface RefreshLegacyAuthorMetadataParams {
   windowDays?: number;
   budget?: number;
   batchSize?: number;
+  /** ReadyAt 再計測不要とみなす最低バージョン（テスト等で将来バージョン切替検証用） */
+  minReadyVersion?: number;
+  /** 到達目標とする最新バージョン（既定: CURRENT_FIRST_TIMER_VERSION） */
+  targetVersion?: number;
 }
 
 export interface RefreshLegacyAuthorMetadataResult {
@@ -615,12 +619,16 @@ export async function refreshLegacyAuthorMetadata(
     windowDays,
     budget = DEFAULT_METADATA_REFRESH_BUDGET,
     batchSize = DEFAULT_AUTHOR_METADATA_BATCH_SIZE,
+    minReadyVersion,
+    targetVersion = CURRENT_FIRST_TIMER_VERSION,
   } = params;
 
   const targets = selectMetadataRefreshCandidates(Array.from(cacheIndex.values()), {
     now,
     windowDays,
     budget,
+    minReadyVersion,
+    targetVersion,
   });
   if (targets.length === 0) {
     return { updatedCount: 0, privilegedDemotedCount: 0, cacheModified: false };
@@ -676,7 +684,7 @@ export async function refreshLegacyAuthorMetadata(
       ...(nextAuthor !== undefined ? { Author: nextAuthor } : {}),
       ...(nextAuthorType !== undefined ? { AuthorType: nextAuthorType } : {}),
       ...(nextAuthorAssociation !== undefined ? { AuthorAssociation: nextAuthorAssociation } : {}),
-      ...(requiresFirstTimerReeval ? {} : { FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION }),
+      ...(requiresFirstTimerReeval ? {} : { FirstTimerVersion: targetVersion }),
     };
 
     if (privilegedOrBot) {
@@ -695,7 +703,7 @@ export async function refreshLegacyAuthorMetadata(
       if (nextAuthor !== undefined) sample.author = nextAuthor;
       if (nextAuthorType !== undefined) sample.authorType = nextAuthorType;
       if (nextAuthorAssociation !== undefined) sample.authorAssociation = nextAuthorAssociation;
-      sample.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+      sample.firstTimerVersion = targetVersion;
       if (privilegedOrBot) {
         sample.isFirstTimer = false;
         sample.firstTimerReason = "privileged-or-bot";

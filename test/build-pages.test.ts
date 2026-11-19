@@ -1713,16 +1713,17 @@ describe("buildDashboard: 過去実績との比較", () => {
       AuthorType: "User",
       AuthorAssociation: "CONTRIBUTOR",
       IsFirstTimer: isFirstTimer,
-      FirstTimerVersion: 6,
+      FirstTimerVersion: 7,
       ...overrides,
     });
 
-    // 11 件の初回提出者 + 常連 + 後続行上書き + 不純物（v4ゾンビ / ReadyDays<0.5 / 90日窓外 / MEMBER / Bot）
+    // 11 件の初回提出者 + 常連 + 後続行上書き + 不純物（v4/v6旧版 / ReadyDays<0.5 / 90日窓外 / MEMBER / Bot）
     const cacheLines = [
       makeCacheSample(410001, 0.8, true, "Should be excluded later"),
       makeCacheSample(410002, 50.0, false, "Old false row"),
       makeCacheSample(410003, 0.8, false, "Regular contributor"),
       makeCacheSample(410004, 0.04, true, "v4 zombie cache", { FirstTimerVersion: 4 }),
+      makeCacheSample(410009, 0.05, true, "v6 legacy cache", { FirstTimerVersion: 6 }),
       makeCacheSample(410005, 0.6, true, "Bypass ready < 0.5", { ReadyDays: 0.1 }),
       makeCacheSample(410006, 0.7, true, "Too old createdAt (>90d)", {
         CreatedAt: "2026-07-01T00:00:00Z",
@@ -1756,7 +1757,8 @@ describe("buildDashboard: 過去実績との比較", () => {
       // 該当全件数 = 11 + 1 (#410002) = 12 件のうち TOP 10
       expect(rankingSection).toContain("全 12 件");
       expect(rankingSection).toContain("上位 10 件");
-      expect(rankingSection).toContain("成立後 0.5 日以上・v5 以上・特権ロール/Bot 除外");
+      expect(rankingSection).toContain("成立後 0.5 日以上・v7 以上・特権ロール/Bot 除外");
+      expect(rankingSection).not.toContain("v6 legacy cache");
       expect(rankingSection).toContain("<th>順位</th>");
       expect(rankingSection).toContain("<th>PR 番号</th>");
       expect(rankingSection).toContain("<th>コミット数</th>");

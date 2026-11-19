@@ -1737,7 +1737,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
         ReadyDays: 44,
         Author: "cached-ft",
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       })}\n`,
       "utf-8",
     );
@@ -1927,7 +1927,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           Author: "known-repeater",
           IsFirstTimer: false,
           FirstTimerReason: "lifetime-merged",
-          FirstTimerVersion: 5,
+          FirstTimerVersion: 7,
         }),
       ].join("\n"),
       "utf-8",
@@ -2192,7 +2192,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           IsFirstTimer: true,
           FirstTimerVersion: 4,
         }),
-        // #982: v5 MEMBER (IsFirstTimer: true) -> 特権ロールのため除外（knownNonFirstTimer 扱い）
+        // #982: v7 MEMBER (IsFirstTimer: true) -> 特権ロールのため除外（knownNonFirstTimer 扱い）
         JSON.stringify({
           Type: "sample",
           Number: 982,
@@ -2208,9 +2208,9 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           Author: "asklar",
           AuthorAssociation: "MEMBER",
           IsFirstTimer: true,
-          FirstTimerVersion: 5,
+          FirstTimerVersion: 7,
         }),
-        // #983: v6 有効な初回提出者 -> 採用
+        // #983: v7 有効な初回提出者 -> 採用
         JSON.stringify({
           Type: "sample",
           Number: 983,
@@ -2227,7 +2227,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           AuthorType: "User",
           AuthorAssociation: "CONTRIBUTOR",
           IsFirstTimer: true,
-          FirstTimerVersion: 6,
+          FirstTimerVersion: 7,
         }),
       ].join("\n"),
       "utf-8",
