@@ -9,12 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `merged-samples.jsonl` の汎用的な自己修復・段階ロールパイプラインを追加（#119）:
+  - `src/domain/sample-cache.ts`, `src/cli/progress.ts`: 保持期間超過の自動パージ（`pruneSampleCache`, `--cache-retention-days` 既定 120 日）および走査完了時の検索候補外・旧世代ゾンビ自動削除、さらに世代別内訳・補完残件数サマリの CLI ログ出力を追加
+  - `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`, `src/cli/progress.ts`: `MIN_VALIDATION_GUIDE_READY_VERSION` 以上かつ `CURRENT_FIRST_TIMER_VERSION` 未満の中間世代（`v5` 等）を 50 件/クエリの軽量 GraphQL alias バッチ（`resolvePullRequestAuthorMetadata` / `refreshLegacyAuthorMetadata`, `--metadata-refresh-budget` 既定 100 件）で段階的に最新世代へ自動昇格・特権ロール/Bot 降格する仕組みを追加
 - 統合処理バンドモデル（前線・本命中央値・大底）の算出および履歴記録・答え合わせバンド評価を追加（#113）:
   - `src/models/forecast-band.ts`, `src/domain/forecast-band.ts`: `buildForecastBandSource` と `calculateForecastBand` を新設し、前線（初回提出者コホート P50〜優等生の底）、本命中央値バンド（作成順全体 P50・初回提出者 P75・① 順位消化 168h・主戦場ライン定常換算の統合帯）、大底（健康的大底の定常換算）および全体レンジを統一算出（基準 PR が介入済み・到達済みの場合は `mainstream-steady` を除外し、欠損・到達済み時は安全に縮退・クランプ）
   - `src/models/forecast-history.ts`, `src/domain/forecast-history.ts`, `src/cli/record-forecast.ts`: `ForecastRecord` への `Band`（`ForecastBandRecord`）記録と、`scoreForecasts` による JST 暦日基準の本命中央値バンド的中率・全体レンジ包含率・中央値誤差採点（`ForecastBandScore`）を追加（既存 `Estimates` のみ・旧 `update-order` 履歴との後方互換を維持）
 
 ### Changed
 
+- `src/cli/explore-depths.ts`: `fetchFirstReviewMainstreamFrontier` の `merged-samples.jsonl` キャッシュ参照時に `hasValidatedReadyVersion`（v5 以上）および非特権/非 Bot ガードを適用（#119）
 - 初回提出者 最速マージランキングから不純物を除外し、特権ロール・Bot 除外判定（v6）を導入（#117）:
   - `src/api/graphql-queries.ts`, `src/api/graphql-adapters.ts`, `src/models/`, `src/domain/first-timer.ts`, `src/domain/sample-collector.ts`: `GET_PULL_REQUEST_SAMPLE_QUERY` で `author { __typename login }` と `authorAssociation` を取得・保存し、`MEMBER` / `OWNER` / `COLLABORATOR` / `Bot`（`AuthorType === "Bot"` / `[bot]`）を `privileged-or-bot` として初回判定から除外（`CURRENT_FIRST_TIMER_VERSION = 6`。既存 v5 キャッシュは `MIN_VALIDATION_GUIDE_READY_VERSION = 5` を維持して遡及再取得しない）
   - `src/domain/sample-cache.ts`, `scripts/build-pages.ts`, `scripts/pages/sections/stats-and-samples.ts`: `extractFirstTimerFastestRanking` に `ReadyDays >= 0.5`（バイパス即マージ除外）・`FirstTimerVersion >= 5`（v4 ゾンビキャッシュ除外）・`CreatedAt` 直近 90 日窓（定数・オプションで調整可能）・特権ロール/Bot 二重除外を追加し、ダッシュボード見出し・注記を最新仕様へ更新（複数コミットの通常調整ケースは許容維持）

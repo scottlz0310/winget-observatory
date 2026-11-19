@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildAuthorMergedCountQuery,
+  buildPullRequestAuthorMetadataQuery,
   CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
+  hasValidatedReadyVersion,
   isCandidateEligibleForFirstTimerDetail,
   isPrivilegedOrBotAuthor,
   MIN_VALIDATION_GUIDE_READY_VERSION,
   MIN_WAIVED_READY_VERSION,
   parseAuthorMergedCounts,
+  parsePullRequestAuthorMetadata,
   resolveAuthorMergedCounts,
+  resolvePullRequestAuthorMetadata,
   shouldReevaluateAuthorFirstTimer,
   shouldReevaluateCachedSample,
   shouldReevaluateSkippedCandidate,
@@ -460,6 +464,91 @@ describe("Domain: resolveAuthorMergedCounts", () => {
   test("batchSize が正の整数でない場合は RangeError を投げる", async () => {
     await expect(
       resolveAuthorMergedCounts("microsoft/winget-pkgs", ["alice"], async () => ({}), {
+        batchSize: 0,
+      }),
+    ).rejects.toThrow(RangeError);
+  });
+});
+
+describe("Domain: hasValidatedReadyVersion & 汎用作者メタデータバッチ", () => {
+  test.each([
+    [undefined, false],
+    [4, false],
+    [5, true],
+    [6, true],
+  ])("hasValidatedReadyVersion(%p) => %p", (version, expected) => {
+    expect(hasValidatedReadyVersion(version)).toBe(expected);
+  });
+
+  test("buildPullRequestAuthorMetadataQuery は repository をサニタイズし alias クエリを構築する", () => {
+    expect(buildPullRequestAuthorMetadataQuery("", [1])).toBe("");
+    expect(buildPullRequestAuthorMetadataQuery("microsoft/winget-pkgs", [])).toBe("");
+    const query = buildPullRequestAuthorMetadataQuery("microsoft/winget-pkgs", [101, 102]);
+    expect(query).toContain('repository(owner: "microsoft", name: "winget-pkgs")');
+    expect(query).toContain("p_0: pullRequest(number: 101)");
+    expect(query).toContain("p_1: pullRequest(number: 102)");
+    expect(query).toContain("authorAssociation");
+    expect(() => buildPullRequestAuthorMetadataQuery("microsoft/winget-pkgs", [0])).toThrow(
+      RangeError,
+    );
+  });
+
+  test("parsePullRequestAuthorMetadata は null ノードをスキップしつつ User / Bot / ghost を復元する", () => {
+    const parsed = parsePullRequestAuthorMetadata([101, 102, 103, 104], {
+      repository: {
+        p_0: { author: { __typename: "User", login: "asklar" }, authorAssociation: "MEMBER" },
+        p_1: { author: { __typename: "Bot", login: "wingetbot" }, authorAssociation: "NONE" },
+        p_2: null,
+        p_3: { author: null, authorAssociation: "CONTRIBUTOR" },
+      },
+    });
+    expect(parsed.get(101)).toEqual({
+      author: "asklar",
+      authorType: "User",
+      authorAssociation: "MEMBER",
+    });
+    expect(parsed.get(102)).toEqual({
+      author: "wingetbot",
+      authorType: "Bot",
+      authorAssociation: "NONE",
+    });
+    expect(parsed.has(103)).toBe(false);
+    expect(parsed.get(104)).toEqual({ authorAssociation: "CONTRIBUTOR" });
+  });
+
+  test("resolvePullRequestAuthorMetadata は重複排除・チャンク分割して取得し、不正 batchSize を拒否する", async () => {
+    const executed: string[] = [];
+    const result = await resolvePullRequestAuthorMetadata(
+      "microsoft/winget-pkgs",
+      [10, 20, 10, 30],
+      async (query) => {
+        executed.push(query);
+        if (query.includes("number: 10")) {
+          return {
+            repository: {
+              p_0: {
+                author: { __typename: "User", login: "u10" },
+                authorAssociation: "CONTRIBUTOR",
+              },
+              p_1: { author: { __typename: "User", login: "u20" }, authorAssociation: "MEMBER" },
+            },
+          };
+        }
+        return {
+          repository: {
+            p_0: { author: { __typename: "Bot", login: "b30" }, authorAssociation: "NONE" },
+          },
+        };
+      },
+      { batchSize: 2 },
+    );
+    expect(executed).toHaveLength(2);
+    expect(result.get(10)?.authorAssociation).toBe("CONTRIBUTOR");
+    expect(result.get(20)?.authorAssociation).toBe("MEMBER");
+    expect(result.get(30)?.authorType).toBe("Bot");
+
+    await expect(
+      resolvePullRequestAuthorMetadata("microsoft/winget-pkgs", [1], async () => undefined, {
         batchSize: 0,
       }),
     ).rejects.toThrow(RangeError);

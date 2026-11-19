@@ -4,7 +4,10 @@ import {
   fromCachedSample,
   indexSampleCache,
   parseSampleCache,
+  pruneSampleCache,
+  selectMetadataRefreshCandidates,
   serializeSampleCacheEntries,
+  summarizeSampleCacheVersions,
   toCachedSample,
 } from "../../src/domain/sample-cache";
 import type { MergedCandidateSample } from "../../src/models/progress";
@@ -428,5 +431,231 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
     expect(() => extractFirstTimerFastestRanking([], { now: new Date("invalid-date") })).toThrow(
       RangeError,
     );
+  });
+});
+
+describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadataRefreshCandidates / summarizeSampleCacheVersions）", () => {
+  const fixedNow = new Date("2026-11-19T00:00:00Z");
+
+  test("pruneSampleCache は TTL 超過（120日超）と走査完了時の検索対象外旧版（v4以下）のみを削除する", () => {
+    const entries: SampleCacheEntry[] = [
+      // 130日前 (TTL 超過で削除)
+      entry({
+        Number: 1,
+        MergedAt: "2026-07-10T00:00:00Z",
+        FirstTimerVersion: 5,
+      }),
+      // 130日前の skipped (TTL 超過で削除)
+      {
+        Type: "skipped",
+        Number: 2,
+        MergedAt: "2026-07-10T00:00:00Z",
+        Reason: "not-first-timer-candidate",
+      },
+      // 10日前・検索候補外・v4 -> 走査完了時は削除される
+      entry({
+        Number: 3,
+        MergedAt: "2026-11-09T00:00:00Z",
+        FirstTimerVersion: 4,
+      }),
+      // 10日前・検索候補内・v4 (budget 待ち等で残った想定) -> 保持される
+      entry({
+        Number: 4,
+        MergedAt: "2026-11-09T00:00:00Z",
+        FirstTimerVersion: 4,
+      }),
+      // 100日前（scanSince=90日前 より前かつ TTL=120日 内）・検索候補外・v4 -> scanSince 前なので保持
+      entry({
+        Number: 5,
+        MergedAt: "2026-08-10T00:00:00Z",
+        FirstTimerVersion: 4,
+      }),
+      // 10日前・検索候補外・v5 -> v5 以上なので保持
+      entry({
+        Number: 6,
+        MergedAt: "2026-11-09T00:00:00Z",
+        FirstTimerVersion: 5,
+      }),
+    ];
+
+    // 走査不完全（scanComplete: false）の場合は TTL 超過のみ削除し、候補外旧版 #3 は残す
+    const incomplete = pruneSampleCache(entries, {
+      now: fixedNow,
+      retentionDays: 120,
+      scannedCandidateNumbers: new Set([4]),
+      scanComplete: false,
+      scanSinceDate: new Date("2026-08-21T00:00:00Z"),
+    });
+    expect(incomplete.ttlRemovedCount).toBe(2);
+    expect(incomplete.staleRemovedCount).toBe(0);
+    expect(incomplete.entries.map((e) => e.Number)).toEqual([3, 4, 5, 6]);
+
+    // 走査完了（scanComplete: true）の場合は候補外旧版 #3 も安全に削除される
+    const complete = pruneSampleCache(entries, {
+      now: fixedNow,
+      retentionDays: 120,
+      scannedCandidateNumbers: new Set([4]),
+      scanComplete: true,
+      scanSinceDate: new Date("2026-08-21T00:00:00Z"),
+    });
+    expect(complete.ttlRemovedCount).toBe(2);
+    expect(complete.staleRemovedCount).toBe(1);
+    expect(complete.entries.map((e) => e.Number)).toEqual([4, 5, 6]);
+  });
+
+  test("pruneSampleCache は retentionDays=0 で TTL を無効化し、不正値で RangeError を投げる", () => {
+    const oldEntry = entry({ Number: 10, MergedAt: "2025-01-01T00:00:00Z", FirstTimerVersion: 6 });
+    const res = pruneSampleCache([oldEntry], { now: fixedNow, retentionDays: 0 });
+    expect(res.ttlRemovedCount).toBe(0);
+    expect(res.entries).toHaveLength(1);
+
+    expect(() => pruneSampleCache([], { retentionDays: -1 })).toThrow(RangeError);
+    expect(() => pruneSampleCache([], { now: new Date("invalid") })).toThrow(RangeError);
+    expect(() => pruneSampleCache([], { scanSinceDate: new Date("invalid") })).toThrow(RangeError);
+  });
+
+  test("selectMetadataRefreshCandidates は中間世代（v5 等）から初回候補・新着優先で budget 件抽出し、将来バージョン（v7等）にも汎用対応する", () => {
+    const list: SampleCacheEntry[] = [
+      entry({
+        Number: 1,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 4,
+        IsFirstTimer: true,
+      }),
+      entry({
+        Number: 2,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 6,
+        IsFirstTimer: true,
+      }),
+      entry({
+        Number: 3,
+        MergedAt: "2026-07-01T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: true,
+      }),
+      entry({
+        Number: 4,
+        MergedAt: "2026-11-10T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: false,
+        FirstTimerReason: "lifetime-merged",
+      }),
+      entry({
+        Number: 5,
+        MergedAt: "2026-11-12T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: true,
+      }),
+      entry({
+        Number: 6,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: true,
+      }),
+      { Type: "skipped", Number: 7, MergedAt: "2026-11-18T00:00:00Z", Reason: "no-ready" },
+    ];
+
+    expect(
+      selectMetadataRefreshCandidates(list, { now: fixedNow, windowDays: 90, budget: 0 }),
+    ).toEqual([]);
+
+    const picked = selectMetadataRefreshCandidates(list, {
+      now: fixedNow,
+      windowDays: 90,
+      budget: 2,
+    });
+    expect(picked.map((e) => e.Number)).toEqual([6, 5]);
+
+    const pickedAll = selectMetadataRefreshCandidates(list, {
+      now: fixedNow,
+      windowDays: 90,
+      budget: 10,
+    });
+    expect(pickedAll.map((e) => e.Number)).toEqual([6, 5, 4]);
+
+    // 将来 targetVersion: 7 へ上げた場合、v6 (#2) も自動的に段階移行対象として選ばれる
+    const futurePicked = selectMetadataRefreshCandidates(list, {
+      now: fixedNow,
+      windowDays: 90,
+      budget: 10,
+      targetVersion: 7,
+    });
+    expect(futurePicked.map((e) => e.Number)).toEqual([6, 2, 5, 4]);
+  });
+
+  test("summarizeSampleCacheVersions は世代別内訳と直近窓内の補完残件数を正しく集計する", () => {
+    const list: SampleCacheEntry[] = [
+      entry({ Number: 1, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 4 }),
+      entry({ Number: 2, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 5 }),
+      entry({ Number: 3, MergedAt: "2026-07-01T00:00:00Z", FirstTimerVersion: 5 }),
+      entry({ Number: 4, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 6 }),
+      { Type: "skipped", Number: 5, MergedAt: "2026-11-18T00:00:00Z", Reason: "no-ready" },
+    ];
+
+    expect(summarizeSampleCacheVersions(list, { now: fixedNow, windowDays: 90 })).toEqual({
+      totalUnique: 5,
+      sampleCount: 4,
+      skippedCount: 1,
+      legacyBeforeReadyCount: 1,
+      intermediateCount: 2,
+      currentCount: 1,
+      windowRefreshRemainingCount: 1,
+    });
+  });
+
+  test("selectMetadataRefreshCandidates と summarizeSampleCacheVersions は再評価待ち（timeline-blocking 等）を補完対象から除外する", () => {
+    const fixedNow = new Date("2026-11-20T00:00:00Z");
+    const list: SampleCacheEntry[] = [
+      // タイムライン阻害中で再評価待ちの v5 -> 軽量補完で v6 昇格させてはいけない
+      entry({
+        Number: 10,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: false,
+        FirstTimerReason: "timeline-blocking",
+      }),
+      // 旧版複数コミット理由未確定（要再評価）の v5 -> 除外
+      entry({
+        Number: 11,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: false,
+        CommitCount: 3,
+      }),
+      // 初回提出者確定済みの v5 -> 補完対象
+      entry({
+        Number: 12,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: true,
+        FirstTimerReason: "first-timer",
+      }),
+      // 常連理由確定済みの v5 -> 補完対象
+      entry({
+        Number: 13,
+        MergedAt: "2026-11-17T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: false,
+        FirstTimerReason: "lifetime-merged",
+      }),
+    ];
+
+    const picked = selectMetadataRefreshCandidates(list, {
+      now: fixedNow,
+      windowDays: 90,
+      budget: 10,
+    });
+    expect(picked.map((e) => e.Number)).toEqual([12, 13]);
+
+    expect(summarizeSampleCacheVersions(list, { now: fixedNow, windowDays: 90 })).toEqual({
+      totalUnique: 4,
+      sampleCount: 4,
+      skippedCount: 0,
+      legacyBeforeReadyCount: 2,
+      intermediateCount: 2,
+      currentCount: 0,
+      windowRefreshRemainingCount: 2,
+    });
   });
 });

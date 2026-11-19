@@ -23,9 +23,20 @@ import {
   logRivals,
   reportSkippedObservation,
 } from "../domain/progress-format";
-import { parseSampleCache, serializeSampleCacheEntries } from "../domain/sample-cache";
-import { orchestrateSampleCollection } from "../domain/sample-collector";
-import { collectMergedCandidates } from "../domain/search-window";
+import {
+  DEFAULT_METADATA_REFRESH_BUDGET,
+  DEFAULT_SAMPLE_CACHE_RETENTION_DAYS,
+  indexSampleCache,
+  parseSampleCache,
+  pruneSampleCache,
+  serializeSampleCacheEntries,
+  summarizeSampleCacheVersions,
+} from "../domain/sample-cache";
+import {
+  orchestrateSampleCollection,
+  refreshLegacyAuthorMetadata,
+} from "../domain/sample-collector";
+import { collectMergedCandidatesWithStatus } from "../domain/search-window";
 import { simulateReadySince } from "../domain/timeline";
 import type {
   ProgressHistoryRow,
@@ -54,6 +65,10 @@ export interface ProgressCliOptions {
   /** 1 回の実行で新規に取得するマージ済み PR の上限（キャッシュ済みの分は数えない） */
   fetchBudget: number;
   fetchLimit: number;
+  /** 軽量メタデータバッチで中間世代を段階更新する上限件数（省略時は DEFAULT_METADATA_REFRESH_BUDGET、0 で無効） */
+  metadataRefreshBudget?: number;
+  /** キャッシュの保持日数（MergedAt TTL、省略時は DEFAULT_SAMPLE_CACHE_RETENTION_DAYS、0 で無効） */
+  cacheRetentionDays?: number;
   /** マージ済み PR のサンプルキャッシュ（JSONL）。省略時はキャッシュを使わない */
   cachePath?: string;
   logPath?: string;
@@ -71,6 +86,8 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
   let firstTimerLookbackDays = 90;
   let fetchBudget = 300;
   let fetchLimit = 5000;
+  let metadataRefreshBudget = DEFAULT_METADATA_REFRESH_BUDGET;
+  let cacheRetentionDays = DEFAULT_SAMPLE_CACHE_RETENTION_DAYS;
   let logPath: string | undefined = process.env.WINGET_LOG_PATH;
   let snapshotPath: string | undefined = process.env.WINGET_SNAPSHOT_PATH;
   let cachePath: string | undefined = process.env.WINGET_CACHE_PATH;
@@ -96,6 +113,20 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
       fetchBudget = parseBoundedInt(readOptionValue(argv, i++), "fetch-budget", 1, 1000);
     } else if (arg === "--fetch-limit") {
       fetchLimit = parseBoundedInt(readOptionValue(argv, i++), "fetch-limit", 1, 10000);
+    } else if (arg === "--metadata-refresh-budget") {
+      metadataRefreshBudget = parseBoundedInt(
+        readOptionValue(argv, i++),
+        "metadata-refresh-budget",
+        0,
+        1000,
+      );
+    } else if (arg === "--cache-retention-days") {
+      cacheRetentionDays = parseBoundedInt(
+        readOptionValue(argv, i++),
+        "cache-retention-days",
+        0,
+        3650,
+      );
     } else if (arg === "--log-path") {
       logPath = readOptionValue(argv, i++, "ファイルパス");
     } else if (arg === "--snapshot-path") {
@@ -118,6 +149,8 @@ export function parseArgs(argv: string[]): ProgressCliOptions {
     firstTimerLookbackDays,
     fetchBudget,
     fetchLimit,
+    metadataRefreshBudget,
+    cacheRetentionDays,
     logPath,
     snapshotPath,
     cachePath,
@@ -461,7 +494,7 @@ export async function runProgressCli(
   const sinceDate = new Date(now.getTime() - maxLookbackDays * DAY_MS);
   const overallSinceDate = new Date(now.getTime() - options.lookbackDays * DAY_MS);
 
-  const candidates = await collectMergedCandidates({
+  const candidateScan = await collectMergedCandidatesWithStatus({
     client,
     repository: options.repository,
     since: sinceDate,
@@ -470,6 +503,7 @@ export async function runProgressCli(
     requiredLabels: REQUIRED_LABELS,
     fetchLimit: options.fetchLimit,
   });
+  const candidates = candidateScan.items;
 
   const rawCache = options.cachePath ? readSampleCache(options.cachePath) : [];
   const {
@@ -478,6 +512,7 @@ export async function runProgressCli(
     skippedCount: skipped,
     fetchedCount: fetched,
     deferredCount: deferred,
+    finalCache,
   } = await orchestrateSampleCollection({
     client,
     repository: options.repository,
@@ -491,6 +526,51 @@ export async function runProgressCli(
       }
     },
   });
+
+  if (options.cachePath) {
+    const scannedCandidateNumbers = new Set(candidates.map((c) => c.number));
+    const scanComplete = candidateScan.complete && candidates.length > 0;
+    const retentionDays = options.cacheRetentionDays ?? DEFAULT_SAMPLE_CACHE_RETENTION_DAYS;
+    const pruned = pruneSampleCache(finalCache, {
+      now,
+      retentionDays,
+      scannedCandidateNumbers,
+      scanComplete,
+      scanSinceDate: sinceDate,
+    });
+    const cacheIndex = indexSampleCache(pruned.entries);
+    const refreshBudget = options.metadataRefreshBudget ?? DEFAULT_METADATA_REFRESH_BUDGET;
+    const refreshResult = await refreshLegacyAuthorMetadata({
+      cacheIndex,
+      samples,
+      client,
+      repository: options.repository,
+      now,
+      windowDays: maxLookbackDays,
+      budget: refreshBudget,
+    });
+
+    const latestEntries = Array.from(cacheIndex.values());
+    if (pruned.ttlRemovedCount > 0 || pruned.staleRemovedCount > 0 || refreshResult.cacheModified) {
+      saveSampleCache(options.cachePath, latestEntries);
+    }
+    const cacheSummary = summarizeSampleCacheVersions(latestEntries, {
+      now,
+      windowDays: maxLookbackDays,
+    });
+    if (
+      pruned.ttlRemovedCount > 0 ||
+      pruned.staleRemovedCount > 0 ||
+      refreshResult.updatedCount > 0
+    ) {
+      log(
+        `キャッシュ自己修復 : TTL削除 ${pruned.ttlRemovedCount} 件・検索外旧版削除 ${pruned.staleRemovedCount} 件・軽量メタデータ補完 ${refreshResult.updatedCount} 件（うち特権/Bot降格 ${refreshResult.privilegedDemotedCount} 件）`,
+      );
+    }
+    log(
+      `キャッシュ世代     : 全 ${cacheSummary.totalUnique} 件（最新: ${cacheSummary.currentCount} / 中間版: ${cacheSummary.intermediateCount} / 要再計測旧版: ${cacheSummary.legacyBeforeReadyCount} / skipped: ${cacheSummary.skippedCount} / 直近${maxLookbackDays}日 補完待ち: ${cacheSummary.windowRefreshRemainingCount} 件）`,
+    );
+  }
 
   log(
     `サンプル         : 採用 ${samples.length} 件・除外 ${skipped} 件（キャッシュ ${samples.length + skipped - fetched} 件を再利用、今回の新規取得 ${fetched} 件／予算 ${options.fetchBudget} 件）`,
