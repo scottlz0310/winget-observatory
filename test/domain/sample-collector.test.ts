@@ -62,7 +62,7 @@ describe("orchestrateSampleCollection", () => {
       Title: "Cached PR",
       Author: "cachedUser",
       IsFirstTimer: true,
-      FirstTimerVersion: 5,
+      FirstTimerVersion: 7,
     };
 
     let apiCalled = false;
@@ -489,7 +489,7 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples[0]?.days).toBe(4);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(6);
+    expect(result.samples[0]?.firstTimerVersion).toBe(7);
   });
 
   it("新版（FirstTimerVersion: 3）で記録済みの no-ready キャッシュは再取得せずスキップを維持する", async () => {
@@ -703,11 +703,11 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples).toHaveLength(1);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(6);
+    expect(result.samples[0]?.firstTimerVersion).toBe(7);
     const saved = result.finalCache.find((e) => e.Number === 449315);
     expect(saved?.Type === "sample" && saved.IsFirstTimer).toBeTrue();
     expect(saved?.Type === "sample" && saved.FirstTimerReason).toBeUndefined();
-    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(6);
+    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(7);
   });
 
   it("Validation-Guide 阻害化に伴う v4 キャッシュ再評価: 一時付与→解除サンプルと未解除サンプルが、空キャッシュ時と同一の ReadyAt / ReadyDays / skipped になる", async () => {
@@ -846,7 +846,7 @@ describe("orchestrateSampleCollection", () => {
     expect(migratedResult.samples[0]?.number).toBe(1201);
     expect(migratedResult.samples[0]?.readyAt).toBe("2026-11-15T00:00:00.000Z");
     expect(migratedResult.samples[0]?.days).toBe(2);
-    expect(migratedResult.samples[0]?.firstTimerVersion).toBe(6);
+    expect(migratedResult.samples[0]?.firstTimerVersion).toBe(7);
     expect(migratedResult.finalCache).toEqual(emptyResult.finalCache);
   });
 
@@ -952,13 +952,13 @@ describe("orchestrateSampleCollection", () => {
       expect(s.days).toBe(2);
       expect(s.isFirstTimer).toBeFalse();
       expect(s.firstTimerReason).toBe("recurring-author");
-      expect(s.firstTimerVersion).toBe(6);
+      expect(s.firstTimerVersion).toBe(7);
     }
     for (const num of [1211, 1212]) {
       const saved = secondRun.finalCache.find((e) => e.Number === num);
       expect(saved?.Type === "sample" && saved.ReadyAt).toBe("2026-11-15T00:00:00.000Z");
       expect(saved?.Type === "sample" && saved.ReadyDays).toBe(2);
-      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(6);
+      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(7);
     }
   });
 
@@ -1032,7 +1032,7 @@ describe("orchestrateSampleCollection", () => {
     const s449315 = result.samples.find((s) => s.number === 449315);
     expect(s449315?.isFirstTimer).toBeTrue();
     expect(s449315?.firstTimerReason).toBeUndefined();
-    expect(s449315?.firstTimerVersion).toBe(6);
+    expect(s449315?.firstTimerVersion).toBe(7);
 
     const c411138 = result.finalCache.find((e) => e.Number === 411138);
     expect(c411138?.Type === "sample" && c411138.FirstTimerVersion).toBe(3);
@@ -1139,7 +1139,7 @@ describe("orchestrateSampleCollection", () => {
     expect(restoredResult.samples[0]?.days).toBe(4);
     expect(restoredResult.samples[0]?.isFirstTimer).toBeTrue();
     expect(restoredResult.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(6);
+    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(7);
   });
 
   it("特権ロール (MEMBER/OWNER/COLLABORATOR) と Bot は累計マージ照会を行わず privileged-or-bot (v6) で除外し、CONTRIBUTOR は許容する", async () => {
@@ -1195,33 +1195,63 @@ describe("orchestrateSampleCollection", () => {
       const s = result.samples.find((item) => item.number === num);
       expect(s?.isFirstTimer).toBeFalse();
       expect(s?.firstTimerReason).toBe("privileged-or-bot");
-      expect(s?.firstTimerVersion).toBe(6);
+      expect(s?.firstTimerVersion).toBe(7);
       const cached = result.finalCache.find((e) => e.Number === num);
       expect(cached?.Type === "sample" && cached.FirstTimerReason).toBe("privileged-or-bot");
-      expect(cached?.Type === "sample" && cached.FirstTimerVersion).toBe(6);
+      expect(cached?.Type === "sample" && cached.FirstTimerVersion).toBe(7);
     }
 
     const normal = result.samples.find((item) => item.number === 1304);
     expect(normal?.isFirstTimer).toBeTrue();
     expect(normal?.authorAssociation).toBe("CONTRIBUTOR");
-    expect(normal?.firstTimerVersion).toBe(6);
+    expect(normal?.firstTimerVersion).toBe(7);
   });
 
-  it("既存の FirstTimerVersion: 5 キャッシュ（AuthorAssociation 未記録）は fetchBudget を消費して遡及再取得しない", async () => {
+  it("旧 FirstTimerVersion: 6 キャッシュ（Needs-Attention 等の一時付与を見落とした ReadyAt）を再取得して解除後の ReadyAt と v7 へ修復する（レビュー指摘回帰テスト）", async () => {
     let fetched = 0;
-    let graphqlCalled = 0;
     const client: SampleCollectorClient = {
       getPullRequestSampleData: async () => {
         fetched++;
-        return {} as ProgressPrSampleData;
+        return {
+          createdAt: "2026-11-01T00:00:00Z",
+          commitCount: 1,
+          latestCommittedDate: "2026-11-01T00:00:00Z",
+          author: "v6-user",
+          authorType: "User",
+          authorAssociation: "CONTRIBUTOR",
+          timeline: [
+            {
+              event: "labeled",
+              created_at: "2026-11-01T01:00:00Z",
+              label: { name: "New-Package" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-11-01T01:00:00Z",
+              label: { name: "Azure-Pipeline-Passed" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-11-01T01:00:00Z",
+              label: { name: "Needs-Attention" },
+            },
+            {
+              event: "labeled",
+              created_at: "2026-11-01T01:00:00Z",
+              label: { name: "Validation-Completed" },
+            },
+            {
+              event: "unlabeled",
+              created_at: "2026-11-09T00:00:00Z",
+              label: { name: "Needs-Attention" },
+            },
+          ],
+        };
       },
-      graphql: async <T = unknown>() => {
-        graphqlCalled++;
-        return {} as T;
-      },
+      graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
     };
 
-    const v5Cache: SampleCacheEntry[] = [
+    const v6Cache: SampleCacheEntry[] = [
       {
         Type: "sample",
         Number: 1401,
@@ -1234,30 +1264,36 @@ describe("orchestrateSampleCollection", () => {
         TotalDays: 9,
         TurnDays: 9,
         ReadyDays: 8.96,
-        Author: "v5-user",
+        Author: "v6-user",
+        AuthorType: "User",
+        AuthorAssociation: "CONTRIBUTOR",
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 6,
       },
     ];
 
     const result = await orchestrateSampleCollection({
       client,
       repository: "microsoft/winget-pkgs",
-      candidates: [createSearchItem(1401, "2026-11-10T00:00:00.000Z", "v5-user")],
+      candidates: [createSearchItem(1401, "2026-11-10T00:00:00.000Z", "v6-user")],
       overallSinceDate: new Date("2026-10-18T00:00:00Z"),
       fetchBudget: 10,
-      initialCache: v5Cache,
+      initialCache: v6Cache,
     });
 
-    expect(fetched).toBe(0);
-    expect(graphqlCalled).toBe(0);
-    expect(result.fetchedCount).toBe(0);
-    expect(result.samples[0]?.firstTimerVersion).toBe(5);
+    expect(fetched).toBe(1);
+    expect(result.fetchedCount).toBe(1);
+    expect(result.samples[0]?.readyAt).toBe("2026-11-09T00:00:00.000Z");
+    expect(result.samples[0]?.days).toBe(1);
+    expect(result.samples[0]?.firstTimerVersion).toBe(7);
+    const saved = result.finalCache.find((e) => e.Number === 1401);
+    expect(saved?.Type === "sample" && saved.ReadyAt).toBe("2026-11-09T00:00:00.000Z");
+    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(7);
   });
 });
 
 describe("refreshLegacyAuthorMetadata", () => {
-  it("中間世代（v5）キャッシュの作者メタデータを軽量バッチで補完し、特権ロール/Bot は降格しつつ v6 へ昇格させる", async () => {
+  it("中間世代（v7 -> targetVersion: 8 想定）キャッシュの作者メタデータを軽量バッチで補完し、特権ロール/Bot は降格しつつ上位版へ昇格させる", async () => {
     const fixedNow = new Date("2026-11-19T00:00:00Z");
     const initialEntries: SampleCacheEntry[] = [
       {
@@ -1274,7 +1310,7 @@ describe("refreshLegacyAuthorMetadata", () => {
         ReadyDays: 8.96,
         Author: "asklar",
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       },
       {
         Type: "sample",
@@ -1290,7 +1326,7 @@ describe("refreshLegacyAuthorMetadata", () => {
         ReadyDays: 7.96,
         Author: "normal-dev",
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       },
     ];
     const cacheIndex = indexSampleCache(initialEntries);
@@ -1308,7 +1344,7 @@ describe("refreshLegacyAuthorMetadata", () => {
         days: 8.96,
         author: "asklar",
         isFirstTimer: true,
-        firstTimerVersion: 5,
+        firstTimerVersion: 7,
       },
     ];
 
@@ -1336,6 +1372,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       now: fixedNow,
       windowDays: 90,
       budget: 0,
+      targetVersion: 8,
     });
     expect(queryCount).toBe(0);
     expect(disabled.cacheModified).toBeFalse();
@@ -1348,6 +1385,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       now: fixedNow,
       windowDays: 90,
       budget: 10,
+      targetVersion: 8,
     });
     expect(queryCount).toBe(1);
     expect(result).toEqual({ updatedCount: 2, privilegedDemotedCount: 1, cacheModified: true });
@@ -1356,20 +1394,20 @@ describe("refreshLegacyAuthorMetadata", () => {
     expect(c1501?.Type === "sample" && c1501.IsFirstTimer).toBeFalse();
     expect(c1501?.Type === "sample" && c1501.FirstTimerReason).toBe("privileged-or-bot");
     expect(c1501?.Type === "sample" && c1501.AuthorAssociation).toBe("MEMBER");
-    expect(c1501?.Type === "sample" && c1501.FirstTimerVersion).toBe(6);
+    expect(c1501?.Type === "sample" && c1501.FirstTimerVersion).toBe(8);
 
     const c1502 = cacheIndex.get(1502);
     expect(c1502?.Type === "sample" && c1502.IsFirstTimer).toBeTrue();
     expect(c1502?.Type === "sample" && c1502.AuthorAssociation).toBe("CONTRIBUTOR");
-    expect(c1502?.Type === "sample" && c1502.FirstTimerVersion).toBe(6);
+    expect(c1502?.Type === "sample" && c1502.FirstTimerVersion).toBe(8);
 
     // メモリ上の samples 配列へも同期されている
     expect(samples[0]?.isFirstTimer).toBeFalse();
     expect(samples[0]?.firstTimerReason).toBe("privileged-or-bot");
-    expect(samples[0]?.firstTimerVersion).toBe(6);
+    expect(samples[0]?.firstTimerVersion).toBe(8);
   });
 
-  it("budget 切れで保留された timeline-blocking の v5 レコードは軽量補完で v6 に昇格せず、次回 budget 回復時に再評価される（レビュー指摘回帰テスト）", async () => {
+  it("budget 切れで保留された timeline-blocking の旧レコードは軽量補完で昇格せず、次回 budget 回復時に再評価される（レビュー指摘回帰テスト）", async () => {
     const fixedNow = new Date("2026-11-20T00:00:00Z");
     const initialCache: SampleCacheEntry[] = [
       {
@@ -1387,7 +1425,7 @@ describe("refreshLegacyAuthorMetadata", () => {
         Author: "first-time-user",
         IsFirstTimer: false,
         FirstTimerReason: "timeline-blocking",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 6,
       },
     ];
     const candidates: GitHubDetailedSearchItem[] = [
@@ -1447,7 +1485,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       },
     };
 
-    // 1回目: fetchBudget: 0 のため通常再評価が保留され、既存の v5/timeline-blocking のまま残る
+    // 1回目: fetchBudget: 0 のため通常再評価が保留され、既存の v6/timeline-blocking のまま残る
     const firstRun = await orchestrateSampleCollection({
       client,
       repository: "microsoft/winget-pkgs",
@@ -1459,7 +1497,7 @@ describe("refreshLegacyAuthorMetadata", () => {
     expect(firstRun.fetchedCount).toBe(0);
     expect(firstRun.samples[0]?.isFirstTimer).toBeFalse();
     expect(firstRun.samples[0]?.firstTimerReason).toBe("timeline-blocking");
-    expect(firstRun.samples[0]?.firstTimerVersion).toBe(5);
+    expect(firstRun.samples[0]?.firstTimerVersion).toBe(6);
 
     const cacheIndex = indexSampleCache(firstRun.finalCache);
     const refreshResult = await refreshLegacyAuthorMetadata({
@@ -1470,6 +1508,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       now: fixedNow,
       windowDays: 90,
       budget: 10,
+      targetVersion: 8,
     });
     expect(refreshResult).toEqual({
       updatedCount: 0,
@@ -1478,13 +1517,13 @@ describe("refreshLegacyAuthorMetadata", () => {
     });
 
     const afterRefresh = cacheIndex.get(1601);
-    expect(afterRefresh?.Type === "sample" && afterRefresh.FirstTimerVersion).toBe(5);
+    expect(afterRefresh?.Type === "sample" && afterRefresh.FirstTimerVersion).toBe(6);
     expect(afterRefresh?.Type === "sample" && afterRefresh.IsFirstTimer).toBeFalse();
     expect(afterRefresh?.Type === "sample" && afterRefresh.FirstTimerReason).toBe(
       "timeline-blocking",
     );
 
-    // 2回目: budget 回復後、v5 のまま残っているため正しく初回提出者 v6 として再評価される
+    // 2回目: budget 回復後、v6 のまま残っているため正しく初回提出者 v7 として再評価される
     const secondRun = await orchestrateSampleCollection({
       client,
       repository: "microsoft/winget-pkgs",
@@ -1496,6 +1535,6 @@ describe("refreshLegacyAuthorMetadata", () => {
     expect(secondRun.fetchedCount).toBe(1);
     expect(secondRun.samples[0]?.isFirstTimer).toBeTrue();
     expect(secondRun.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(secondRun.samples[0]?.firstTimerVersion).toBe(6);
+    expect(secondRun.samples[0]?.firstTimerVersion).toBe(7);
   });
 });

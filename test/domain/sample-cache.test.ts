@@ -230,7 +230,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TurnDays: 1.5,
         ReadyDays: 1.0,
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         CreatedAt: "2026-10-15T00:00:00.000Z", // 90日窓内
         MergedAt: "2026-11-01T00:00:00.000Z",
       }),
@@ -244,7 +244,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TotalDays: 0.6,
         ReadyDays: 0.6,
         IsFirstTimer: true,
-        FirstTimerVersion: 6,
+        FirstTimerVersion: 7,
       }),
       // 先に IsFirstTimer=false だったが、後続行で true かつ TotalDays=0.8 に更新 -> 採用され1位になること
       entry({
@@ -253,7 +253,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TotalDays: 50,
         ReadyDays: 1.0,
         IsFirstTimer: false,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 6,
       }),
       // skipped 行、IsFirstTimer=false、IsFirstTimer 未設定 -> 除外
       { Type: "skipped", Number: 203, MergedAt: "2026-10-01T00:00:00Z", Reason: "no-ready" },
@@ -262,9 +262,9 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TotalDays: 0.8,
         ReadyDays: 0.8,
         IsFirstTimer: false,
-        FirstTimerVersion: 6,
+        FirstTimerVersion: 7,
       }),
-      entry({ Number: 205, TotalDays: 0.8, ReadyDays: 0.8, FirstTimerVersion: 6 }), // IsFirstTimer undefined
+      entry({ Number: 205, TotalDays: 0.8, ReadyDays: 0.8, FirstTimerVersion: 7 }), // IsFirstTimer undefined
       ...firstTimerEntries,
       // 後続行の上書き
       entry({
@@ -273,7 +273,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TotalDays: 0.6,
         ReadyDays: 0.6,
         IsFirstTimer: false,
-        FirstTimerVersion: 6,
+        FirstTimerVersion: 7,
       }),
       entry({
         Number: 202,
@@ -283,7 +283,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         CommitCount: 2,
         AuthorAssociation: "CONTRIBUTOR",
         IsFirstTimer: true,
-        FirstTimerVersion: 6,
+        FirstTimerVersion: 7,
       }),
     ];
 
@@ -307,7 +307,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TurnDays: 1.5,
         ReadyDays: 1.0,
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       }),
       entry({
         Number: 301,
@@ -315,7 +315,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TurnDays: 1.5,
         ReadyDays: 1.0,
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       }),
       entry({
         Number: 303,
@@ -323,7 +323,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         TurnDays: 1.0,
         ReadyDays: 1.0,
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       }),
     ];
 
@@ -340,33 +340,37 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
   test.each([
     ["v4 ゾンビキャッシュ (FirstTimerVersion: 4)", { Number: 401, FirstTimerVersion: 4 }],
     [
+      "v6 旧ラベル定義キャッシュ（高速枠混入防止）(FirstTimerVersion: 6)",
+      { Number: 412, FirstTimerVersion: 6 },
+    ],
+    [
       "バージョン未設定 (FirstTimerVersion: undefined)",
       { Number: 402, FirstTimerVersion: undefined },
     ],
-    ["バイパス即マージ (ReadyDays: 0.49)", { Number: 403, ReadyDays: 0.49, FirstTimerVersion: 6 }],
-    ["バイパス即マージ (ReadyDays: 0)", { Number: 404, ReadyDays: 0, FirstTimerVersion: 6 }],
+    ["バイパス即マージ (ReadyDays: 0.49)", { Number: 403, ReadyDays: 0.49, FirstTimerVersion: 7 }],
+    ["バイパス即マージ (ReadyDays: 0)", { Number: 404, ReadyDays: 0, FirstTimerVersion: 7 }],
     [
       "90日起票窓外 (91日前起票)",
-      { Number: 405, CreatedAt: "2026-08-20T00:00:00Z", FirstTimerVersion: 6 },
+      { Number: 405, CreatedAt: "2026-08-20T00:00:00Z", FirstTimerVersion: 7 },
     ],
-    ["不正な CreatedAt", { Number: 406, CreatedAt: "invalid-date", FirstTimerVersion: 6 }],
+    ["不正な CreatedAt", { Number: 406, CreatedAt: "invalid-date", FirstTimerVersion: 7 }],
     [
       "特権ロール MEMBER",
-      { Number: 407, Author: "asklar", AuthorAssociation: "MEMBER", FirstTimerVersion: 5 },
+      { Number: 407, Author: "asklar", AuthorAssociation: "MEMBER", FirstTimerVersion: 7 },
     ],
     [
       "特権ロール OWNER",
-      { Number: 408, Author: "owner", AuthorAssociation: "OWNER", FirstTimerVersion: 5 },
+      { Number: 408, Author: "owner", AuthorAssociation: "OWNER", FirstTimerVersion: 7 },
     ],
     [
       "特権ロール COLLABORATOR",
-      { Number: 409, Author: "collab", AuthorAssociation: "COLLABORATOR", FirstTimerVersion: 5 },
+      { Number: 409, Author: "collab", AuthorAssociation: "COLLABORATOR", FirstTimerVersion: 7 },
     ],
     [
       "Bot (AuthorType: Bot)",
-      { Number: 410, Author: "helper", AuthorType: "Bot", FirstTimerVersion: 5 },
+      { Number: 410, Author: "helper", AuthorType: "Bot", FirstTimerVersion: 7 },
     ],
-    ["Bot (login 末尾 [bot])", { Number: 411, Author: "renovate[bot]", FirstTimerVersion: 5 }],
+    ["Bot (login 末尾 [bot])", { Number: 411, Author: "renovate[bot]", FirstTimerVersion: 7 }],
   ])("不純物はランキングから除外される: %s", (_name, overrides) => {
     const target = entry({
       TotalDays: 0.6,
@@ -381,9 +385,9 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
     expect(ranking.items).toEqual([]);
   });
 
-  test("境界値（ReadyDays=0.5 / v5 / ちょうど90日前 / CONTRIBUTOR / 複数コミット）とオプション上書きが正しく動作する", () => {
+  test("境界値（ReadyDays=0.5 / v7 / ちょうど90日前 / CONTRIBUTOR / 複数コミット）とオプション上書きが正しく動作する", () => {
     const boundaryEntries: SampleCacheEntry[] = [
-      // ちょうど 90 日前（2026-08-21T00:00:00Z）かつ ReadyDays === 0.5, v5, CONTRIBUTOR, 3コミット -> 採用
+      // ちょうど 90 日前（2026-08-21T00:00:00Z）かつ ReadyDays === 0.5, v7, CONTRIBUTOR, 3コミット -> 採用
       entry({
         Number: 501,
         CommitCount: 3,
@@ -395,7 +399,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         AuthorType: "User",
         AuthorAssociation: "CONTRIBUTOR",
         IsFirstTimer: true,
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       }),
       // 90日より古い（120日前）
       entry({
@@ -406,7 +410,7 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
         ReadyDays: 0.6,
         CreatedAt: "2026-07-22T00:00:00Z",
         IsFirstTimer: true,
-        FirstTimerVersion: 6,
+        FirstTimerVersion: 7,
       }),
     ];
 
@@ -437,13 +441,13 @@ describe("Domain: extractFirstTimerFastestRanking", () => {
 describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadataRefreshCandidates / summarizeSampleCacheVersions）", () => {
   const fixedNow = new Date("2026-11-19T00:00:00Z");
 
-  test("pruneSampleCache は TTL 超過（120日超）と走査完了時の検索対象外旧版（v4以下）のみを削除する", () => {
+  test("pruneSampleCache は TTL 超過（120日超）と走査完了時の検索対象外旧版（v6以下、高速枠除外前等）を削除し、v7は保持する", () => {
     const entries: SampleCacheEntry[] = [
       // 130日前 (TTL 超過で削除)
       entry({
         Number: 1,
         MergedAt: "2026-07-10T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       }),
       // 130日前の skipped (TTL 超過で削除)
       {
@@ -452,17 +456,17 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
         MergedAt: "2026-07-10T00:00:00Z",
         Reason: "not-first-timer-candidate",
       },
-      // 10日前・検索候補外・v4 -> 走査完了時は削除される
+      // 10日前・検索候補外（Publisher-Verified 等で新クエリ除外）・v6 -> 走査完了時は削除される
       entry({
         Number: 3,
         MergedAt: "2026-11-09T00:00:00Z",
-        FirstTimerVersion: 4,
+        FirstTimerVersion: 6,
       }),
-      // 10日前・検索候補内・v4 (budget 待ち等で残った想定) -> 保持される
+      // 10日前・検索候補内・v6 (budget 待ち等で残った想定) -> 保持される
       entry({
         Number: 4,
         MergedAt: "2026-11-09T00:00:00Z",
-        FirstTimerVersion: 4,
+        FirstTimerVersion: 6,
       }),
       // 100日前（scanSince=90日前 より前かつ TTL=120日 内）・検索候補外・v4 -> scanSince 前なので保持
       entry({
@@ -470,11 +474,11 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
         MergedAt: "2026-08-10T00:00:00Z",
         FirstTimerVersion: 4,
       }),
-      // 10日前・検索候補外・v5 -> v5 以上なので保持
+      // 10日前・検索候補外・v7 -> v7 以上なので保持
       entry({
         Number: 6,
         MergedAt: "2026-11-09T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       }),
     ];
 
@@ -490,7 +494,7 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
     expect(incomplete.staleRemovedCount).toBe(0);
     expect(incomplete.entries.map((e) => e.Number)).toEqual([3, 4, 5, 6]);
 
-    // 走査完了（scanComplete: true）の場合は候補外旧版 #3 も安全に削除される
+    // 走査完了（scanComplete: true）の場合は候補外旧版 #3 (v6) も安全に削除される
     const complete = pruneSampleCache(entries, {
       now: fixedNow,
       retentionDays: 120,
@@ -514,43 +518,43 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
     expect(() => pruneSampleCache([], { scanSinceDate: new Date("invalid") })).toThrow(RangeError);
   });
 
-  test("selectMetadataRefreshCandidates は中間世代（v5 等）から初回候補・新着優先で budget 件抽出し、将来バージョン（v7等）にも汎用対応する", () => {
+  test("selectMetadataRefreshCandidates は中間世代から初回候補・新着優先で budget 件抽出し、将来バージョン（v8等）にも汎用対応する", () => {
     const list: SampleCacheEntry[] = [
       entry({
         Number: 1,
-        MergedAt: "2026-11-18T00:00:00Z",
-        FirstTimerVersion: 4,
-        IsFirstTimer: true,
-      }),
-      entry({
-        Number: 2,
         MergedAt: "2026-11-18T00:00:00Z",
         FirstTimerVersion: 6,
         IsFirstTimer: true,
       }),
       entry({
+        Number: 2,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 8,
+        IsFirstTimer: true,
+      }),
+      entry({
         Number: 3,
         MergedAt: "2026-07-01T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: true,
       }),
       entry({
         Number: 4,
         MergedAt: "2026-11-10T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: false,
         FirstTimerReason: "lifetime-merged",
       }),
       entry({
         Number: 5,
         MergedAt: "2026-11-12T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: true,
       }),
       entry({
         Number: 6,
         MergedAt: "2026-11-18T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: true,
       }),
       { Type: "skipped", Number: 7, MergedAt: "2026-11-18T00:00:00Z", Reason: "no-ready" },
@@ -560,10 +564,17 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
       selectMetadataRefreshCandidates(list, { now: fixedNow, windowDays: 90, budget: 0 }),
     ).toEqual([]);
 
+    // 現行既定値（minReadyVersion: 7, targetVersion: 7）では中間世代は 0 件（v6 以下は要再計測）
+    expect(
+      selectMetadataRefreshCandidates(list, { now: fixedNow, windowDays: 90, budget: 10 }),
+    ).toEqual([]);
+
+    // 将来 targetVersion: 8 へ上げた場合、v7 (#6, #5, #4) が初回・新着優先で段階移行対象として選ばれる
     const picked = selectMetadataRefreshCandidates(list, {
       now: fixedNow,
       windowDays: 90,
       budget: 2,
+      targetVersion: 8,
     });
     expect(picked.map((e) => e.Number)).toEqual([6, 5]);
 
@@ -571,29 +582,43 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
       now: fixedNow,
       windowDays: 90,
       budget: 10,
+      targetVersion: 8,
     });
     expect(pickedAll.map((e) => e.Number)).toEqual([6, 5, 4]);
 
-    // 将来 targetVersion: 7 へ上げた場合、v6 (#2) も自動的に段階移行対象として選ばれる
+    // 将来 targetVersion: 9 へ上げた場合、v8 (#2) も自動的に対象に含まれる
     const futurePicked = selectMetadataRefreshCandidates(list, {
       now: fixedNow,
       windowDays: 90,
       budget: 10,
-      targetVersion: 7,
+      targetVersion: 9,
     });
     expect(futurePicked.map((e) => e.Number)).toEqual([6, 2, 5, 4]);
   });
 
   test("summarizeSampleCacheVersions は世代別内訳と直近窓内の補完残件数を正しく集計する", () => {
     const list: SampleCacheEntry[] = [
-      entry({ Number: 1, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 4 }),
-      entry({ Number: 2, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 5 }),
-      entry({ Number: 3, MergedAt: "2026-07-01T00:00:00Z", FirstTimerVersion: 5 }),
-      entry({ Number: 4, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 6 }),
+      entry({ Number: 1, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 6 }),
+      entry({ Number: 2, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 7 }),
+      entry({ Number: 3, MergedAt: "2026-07-01T00:00:00Z", FirstTimerVersion: 7 }),
+      entry({ Number: 4, MergedAt: "2026-11-18T00:00:00Z", FirstTimerVersion: 8 }),
       { Type: "skipped", Number: 5, MergedAt: "2026-11-18T00:00:00Z", Reason: "no-ready" },
     ];
 
     expect(summarizeSampleCacheVersions(list, { now: fixedNow, windowDays: 90 })).toEqual({
+      totalUnique: 5,
+      sampleCount: 4,
+      skippedCount: 1,
+      legacyBeforeReadyCount: 1,
+      intermediateCount: 0,
+      currentCount: 3,
+      windowRefreshRemainingCount: 0,
+    });
+
+    // 将来 targetVersion: 8 移行時の中間世代内訳も正しく集計する
+    expect(
+      summarizeSampleCacheVersions(list, { now: fixedNow, windowDays: 90, targetVersion: 8 }),
+    ).toEqual({
       totalUnique: 5,
       sampleCount: 4,
       skippedCount: 1,
@@ -607,35 +632,35 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
   test("selectMetadataRefreshCandidates と summarizeSampleCacheVersions は再評価待ち（timeline-blocking 等）を補完対象から除外する", () => {
     const fixedNow = new Date("2026-11-20T00:00:00Z");
     const list: SampleCacheEntry[] = [
-      // タイムライン阻害中で再評価待ちの v5 -> 軽量補完で v6 昇格させてはいけない
+      // タイムライン阻害中で再評価待ち -> 軽量補完だけで上位版へ昇格させてはいけない
       entry({
         Number: 10,
         MergedAt: "2026-11-18T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: false,
         FirstTimerReason: "timeline-blocking",
       }),
-      // 旧版複数コミット理由未確定（要再評価）の v5 -> 除外
+      // 複数コミット理由未確定（要再評価） -> 除外
       entry({
         Number: 11,
         MergedAt: "2026-11-18T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: false,
         CommitCount: 3,
       }),
-      // 初回提出者確定済みの v5 -> 補完対象
+      // 初回提出者確定済みの中間版（将来 targetVersion: 8 移行時） -> 補完対象
       entry({
         Number: 12,
         MergedAt: "2026-11-18T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: true,
         FirstTimerReason: "first-timer",
       }),
-      // 常連理由確定済みの v5 -> 補完対象
+      // 常連理由確定済みの中間版（将来 targetVersion: 8 移行時） -> 補完対象
       entry({
         Number: 13,
         MergedAt: "2026-11-17T00:00:00Z",
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
         IsFirstTimer: false,
         FirstTimerReason: "lifetime-merged",
       }),
@@ -645,10 +670,13 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
       now: fixedNow,
       windowDays: 90,
       budget: 10,
+      targetVersion: 8,
     });
     expect(picked.map((e) => e.Number)).toEqual([12, 13]);
 
-    expect(summarizeSampleCacheVersions(list, { now: fixedNow, windowDays: 90 })).toEqual({
+    expect(
+      summarizeSampleCacheVersions(list, { now: fixedNow, windowDays: 90, targetVersion: 8 }),
+    ).toEqual({
       totalUnique: 4,
       sampleCount: 4,
       skippedCount: 0,

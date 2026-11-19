@@ -2243,7 +2243,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         ReadyDays: 3,
         Author: "repeat-author",
         IsFirstTimer: true, // キャッシュ時点では初回扱い
-        FirstTimerVersion: 5,
+        FirstTimerVersion: 7,
       };
       writeFileSync(cachePath, serializeSampleCacheEntries([initialCachedEntry]), "utf-8");
 
@@ -2678,13 +2678,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(15.0);
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(5.0);
 
-      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 6 で更新されたこと
+      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 7 で更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached801 = savedCache.find((e) => e.Number === 801);
       expect(cached801?.Type).toBe("sample");
       if (cached801?.Type === "sample") {
         expect(cached801.IsFirstTimer).toBe(true);
-        expect(cached801.FirstTimerVersion).toBe(6);
+        expect(cached801.FirstTimerVersion).toBe(7);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -2845,14 +2845,14 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(graphqlCalled).toBe(true);
       expect(snapshot?.FirstTimerSampleCount).toBe(1);
 
-      // キャッシュファイルで IsFirstTimer: true, FirstTimerVersion: 6 に更新されたこと
+      // キャッシュファイルで IsFirstTimer: true, FirstTimerVersion: 7 に更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached802 = savedCache.find((e) => e.Number === 802);
       expect(cached802?.Type).toBe("sample");
       if (cached802?.Type === "sample") {
         expect(cached802.IsFirstTimer).toBe(true);
         expect(cached802.FirstTimerReason).toBeUndefined();
-        expect(cached802.FirstTimerVersion).toBe(6);
+        expect(cached802.FirstTimerVersion).toBe(7);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -2977,13 +2977,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(10.0); // 通算 10日
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(3.0); // Turn Latency 3日
 
-      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 6 で記録されたこと
+      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 7 で記録されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached803 = savedCache.find((e) => e.Number === 803);
       expect(cached803?.Type).toBe("sample");
       if (cached803?.Type === "sample") {
         expect(cached803.IsFirstTimer).toBe(true);
-        expect(cached803.FirstTimerVersion).toBe(6);
+        expect(cached803.FirstTimerVersion).toBe(7);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -3117,7 +3117,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
-  test("自己修復パイプライン: TTL超過・検索外v4ゾンビのローカル削除と、v5中間世代の軽量バッチ補完・特権ロール降格および世代ログ出力を行う", async () => {
+  test("自己修復パイプライン: TTL超過・検索外v6旧版（高速枠等）のローカル削除と、候補内v6のタイムライン再計測・特権ロール降格および世代ログ出力を行う", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-self-heal-"));
     try {
       const cachePath = join(tmpDir, "merged-samples.jsonl");
@@ -3146,13 +3146,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           ReadyDays: 4,
           Author: "old-ttl-user",
           IsFirstTimer: true,
-          FirstTimerVersion: 5,
+          FirstTimerVersion: 7,
         },
-        // #851: 10日前・検索候補外・v4 -> 検索外旧世代ゾンビとして削除
+        // #851: 10日前・検索候補外（Publisher-Verified 等で新検索除外）・v6 -> 検索外旧版として削除
         {
           Type: "sample",
           Number: 851,
-          Title: "PR 851 (v4 zombie outside search)",
+          Title: "PR 851 (v6 publisher-verified outside search)",
           CreatedAt: new Date(now.getTime() - 15 * dayMs).toISOString(),
           LatestCommittedDate: new Date(now.getTime() - 15 * dayMs).toISOString(),
           CommitCount: 1,
@@ -3161,15 +3161,15 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           TotalDays: 5,
           TurnDays: 5,
           ReadyDays: 5,
-          Author: "zombie-v4-user",
+          Author: "publisher-verified-user",
           IsFirstTimer: true,
-          FirstTimerVersion: 4,
+          FirstTimerVersion: 6,
         },
-        // #852: 5日前・検索候補内・v5 (MEMBER) -> 軽量バッチで privileged-or-bot へ降格＆v6昇格
+        // #852: 5日前・検索候補内・v6 (MEMBER) -> タイムライン再評価で privileged-or-bot へ降格＆v7昇格
         {
           Type: "sample",
           Number: 852,
-          Title: "PR 852 (v5 MEMBER)",
+          Title: "PR 852 (v6 MEMBER)",
           CreatedAt: new Date(now.getTime() - 6 * dayMs).toISOString(),
           LatestCommittedDate: new Date(now.getTime() - 6 * dayMs).toISOString(),
           CommitCount: 1,
@@ -3180,13 +3180,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           ReadyDays: 1,
           Author: "asklar",
           IsFirstTimer: true,
-          FirstTimerVersion: 5,
+          FirstTimerVersion: 6,
         },
-        // #853: 4日前・検索候補内・v5 (CONTRIBUTOR) -> 軽量バッチで v6 昇格・IsFirstTimer: true 維持
+        // #853: 4日前・検索候補内・v6 (Needs-Attention 一時付与の見落とし旧版) -> 解除日時で ReadyAt 再計測 & v7 昇格
         {
           Type: "sample",
           Number: 853,
-          Title: "PR 853 (v5 CONTRIBUTOR)",
+          Title: "PR 853 (v6 Needs-Attention missed)",
           CreatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
           LatestCommittedDate: new Date(now.getTime() - 20 * dayMs).toISOString(),
           CommitCount: 1,
@@ -3197,7 +3197,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           ReadyDays: 16,
           Author: "normal-ft",
           IsFirstTimer: true,
-          FirstTimerVersion: 5,
+          FirstTimerVersion: 6,
         },
       ];
       writeFileSync(cachePath, serializeSampleCacheEntries(initialEntries), "utf-8");
@@ -3261,24 +3261,53 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
             created_at: "2026-11-01T00:00:00Z",
             label: { name: l.name },
           })),
-        getPullRequestSampleData: async () => {
-          throw new Error("v5 キャッシュは単体サンプル再取得しないはず");
+        getPullRequestSampleData: async (_repo: string, num: number) => {
+          if (num === 852) {
+            return {
+              createdAt: new Date(now.getTime() - 6 * dayMs).toISOString(),
+              latestCommittedDate: new Date(now.getTime() - 6 * dayMs).toISOString(),
+              commitCount: 1,
+              author: "asklar",
+              authorType: "User",
+              authorAssociation: "MEMBER",
+              timeline: labels.map((l) => ({
+                event: "labeled" as const,
+                created_at: new Date(now.getTime() - 6 * dayMs).toISOString(),
+                label: { name: l.name },
+              })),
+            };
+          }
+          return {
+            createdAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            latestCommittedDate: new Date(now.getTime() - 20 * dayMs).toISOString(),
+            commitCount: 1,
+            author: "normal-ft",
+            authorType: "User",
+            authorAssociation: "CONTRIBUTOR",
+            timeline: [
+              ...labels.map((l) => ({
+                event: "labeled" as const,
+                created_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
+                label: { name: l.name },
+              })),
+              {
+                event: "labeled" as const,
+                created_at: new Date(now.getTime() - 19 * dayMs).toISOString(),
+                label: { name: "Needs-Attention" },
+              },
+              {
+                event: "unlabeled" as const,
+                created_at: new Date(now.getTime() - 8 * dayMs).toISOString(),
+                label: { name: "Needs-Attention" },
+              },
+            ],
+          };
         },
         graphql: async (query: string) => {
-          const nums = [...query.matchAll(/pullRequest\(number:\s*(\d+)\)/g)].map((m) =>
-            Number(m[1]),
-          );
-          const repo: Record<string, unknown> = {};
-          nums.forEach((num, idx) => {
-            repo[`p_${idx}`] =
-              num === 852
-                ? { author: { __typename: "User", login: "asklar" }, authorAssociation: "MEMBER" }
-                : {
-                    author: { __typename: "User", login: "normal-ft" },
-                    authorAssociation: "CONTRIBUTOR",
-                  };
-          });
-          return { repository: repo };
+          if (query.includes("u_0")) {
+            return { u_0: { issueCount: 1 } };
+          }
+          return { repository: {} };
         },
       } as unknown as GitHubApiClient;
 
@@ -3299,7 +3328,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         (m) => logs.push(m),
       );
 
-      // 軽量バッチ補完の降格結果が即座に snapshot の初回提出者統計へ反映されている（#852 除外で #853 のみ）
+      // 特権ロール #852 は除外、#853 は Needs-Attention 解除（8日前）〜 マージ（4日前）の ReadyDays=4・TotalDays=16 になる
       expect(snapshot?.FirstTimerSampleCount).toBe(1);
       expect(snapshot?.FirstTimerMedianDays).toBe(16.0);
 
@@ -3310,17 +3339,16 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const c852 = savedCache.find((e) => e.Number === 852);
       expect(c852?.Type === "sample" && c852.IsFirstTimer).toBeFalse();
       expect(c852?.Type === "sample" && c852.FirstTimerReason).toBe("privileged-or-bot");
-      expect(c852?.Type === "sample" && c852.FirstTimerVersion).toBe(6);
+      expect(c852?.Type === "sample" && c852.FirstTimerVersion).toBe(7);
 
       const c853 = savedCache.find((e) => e.Number === 853);
       expect(c853?.Type === "sample" && c853.IsFirstTimer).toBeTrue();
       expect(c853?.Type === "sample" && c853.AuthorAssociation).toBe("CONTRIBUTOR");
-      expect(c853?.Type === "sample" && c853.FirstTimerVersion).toBe(6);
+      expect(c853?.Type === "sample" && c853.ReadyDays).toBe(4);
+      expect(c853?.Type === "sample" && c853.FirstTimerVersion).toBe(7);
 
       const logText = logs.join("\n");
-      expect(logText).toContain(
-        "キャッシュ自己修復 : TTL削除 1 件・検索外旧版削除 1 件・軽量メタデータ補完 2 件（うち特権/Bot降格 1 件）",
-      );
+      expect(logText).toContain("キャッシュ自己修復 : TTL削除 1 件・検索外旧版削除 1 件");
       expect(logText).toContain(
         "キャッシュ世代     : 全 2 件（最新: 2 / 中間版: 0 / 要再計測旧版: 0 / skipped: 0 / 直近90日 補完待ち: 0 件）",
       );

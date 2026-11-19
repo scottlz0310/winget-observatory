@@ -9,7 +9,7 @@ import {
   isCandidateEligibleForFirstTimerDetail,
   isPrivilegedAuthorAssociation,
   isPrivilegedOrBotAuthor,
-  MIN_VALIDATION_GUIDE_READY_VERSION,
+  MIN_VALID_READY_VERSION,
   MIN_WAIVED_READY_VERSION,
   parseAuthorMergedCounts,
   parsePullRequestAuthorMetadata,
@@ -180,7 +180,25 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     ).toBe(false);
   });
 
-  test("v5 未満（v4 / v3 / v2 / 未設定）は Validation-Guide 阻害化に伴う ReadyAt 再検証のため再評価対象", () => {
+  test("v7（MIN_VALID_READY_VERSION）未満（v6 / v5 / v4 / 未設定）はラベル定義更新に伴う ReadyAt 再検証のため再評価対象", () => {
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: true,
+        firstTimerVersion: 6,
+        commitCount: 1,
+        authorCountInCandidates: 1,
+        author: "v6-user",
+      }),
+    ).toBe(true);
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerReason: "lifetime-merged",
+        firstTimerVersion: 5,
+        commitCount: 1,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(true);
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: true,
@@ -211,7 +229,14 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     ).toBe(true);
   });
 
-  test("v5 未満や v5 以降のレコードは shouldReevaluateAuthorFirstTimer が false を返す", () => {
+  test("MIN_VALID_READY_VERSION 未満や CURRENT_FIRST_TIMER_VERSION 以降のレコードは shouldReevaluateAuthorFirstTimer が false を返す", () => {
+    expect(
+      shouldReevaluateAuthorFirstTimer({
+        firstTimerReason: "timeline-blocking",
+        firstTimerVersion: 6,
+        author: "v6-user",
+      }),
+    ).toBe(false);
     expect(
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: "timeline-blocking",
@@ -249,18 +274,18 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     expect(
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: "lifetime-merged",
-        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
+        firstTimerVersion: MIN_VALID_READY_VERSION,
         author: "repeat-user",
       }),
     ).toBe(false);
   });
 
-  test("v5（MIN_VALIDATION_GUIDE_READY_VERSION 以上）で累計マージ数理由（lifetime-merged）または IsFirstTimer=true が確定している場合は再評価不要", () => {
+  test("MIN_VALID_READY_VERSION 以上で累計マージ数理由（lifetime-merged）または IsFirstTimer=true が確定している場合は再評価不要", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
         firstTimerReason: "lifetime-merged",
-        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
+        firstTimerVersion: MIN_VALID_READY_VERSION,
         commitCount: 3,
         authorCountInCandidates: 1,
       }),
@@ -268,7 +293,7 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: false,
-        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
+        firstTimerVersion: MIN_VALID_READY_VERSION,
         commitCount: 1,
         authorCountInCandidates: 1,
       }),
@@ -276,7 +301,7 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: true,
-        firstTimerVersion: MIN_VALIDATION_GUIDE_READY_VERSION,
+        firstTimerVersion: MIN_VALID_READY_VERSION,
         commitCount: 3,
         authorCountInCandidates: 1,
       }),
@@ -501,8 +526,9 @@ describe("Domain: hasValidatedReadyVersion & 汎用作者メタデータバッ�
   test.each([
     [undefined, false],
     [4, false],
-    [5, true],
-    [6, true],
+    [5, false],
+    [6, false],
+    [7, true],
   ])("hasValidatedReadyVersion(%p) => %p", (version, expected) => {
     expect(hasValidatedReadyVersion(version)).toBe(expected);
   });
