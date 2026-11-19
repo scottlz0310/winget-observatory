@@ -5,7 +5,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { GitHubApiClient } from "../api/github";
 import { selectComparableHistory } from "../domain/dashboard";
-import { buildForecastSource, calculateForecastComparison } from "../domain/forecast-comparison";
+import { extractMainstreamFrontierSamples, parseDepthsHistory } from "../domain/forecast";
+import { buildForecastBandSource, calculateForecastBand } from "../domain/forecast-band";
 import {
   findOutcome,
   hasForecastRecord,
@@ -149,20 +150,31 @@ export async function runRecordForecast(
     "キュー境界スナップショット",
     join(dataDir, "latest-depths.json"),
   );
+  const depthsHistory = readText(
+    "キュー境界履歴",
+    join(dataDir, "depths-history.jsonl"),
+    parseDepthsHistory,
+    [],
+  );
   const csvRows = readText("履歴 CSV", join(dataDir, "progress-history.csv"), parseCsvRows, []);
 
-  const comparison = calculateForecastComparison(
-    buildForecastSource({
+  const bandSnapshot = calculateForecastBand(
+    buildForecastBandSource({
       progress,
       depths,
       history: selectComparableHistory(csvRows, targetPr),
+      mainstreamFrontierSamples: extractMainstreamFrontierSamples(depthsHistory),
     }),
   );
-  const record = toForecastRecord(comparison, {
-    repository,
-    targetPr,
-    timestamp: progress.Timestamp,
-  });
+  const record = toForecastRecord(
+    bandSnapshot.comparison,
+    {
+      repository,
+      targetPr,
+      timestamp: progress.Timestamp,
+    },
+    bandSnapshot,
+  );
   if (!record) {
     const reason = "予想日を出せる仮説がないため、記録しません";
     log(`[Forecast] ${reason}`);
@@ -170,8 +182,11 @@ export async function runRecordForecast(
   }
 
   appendJsonLine(historyPath, record);
+  const bandNote = record.Band?.MainstreamMedianDate
+    ? `, band-median=${record.Band.MainstreamMedianDate.slice(0, 10)}`
+    : "";
   log(
-    `[Forecast] 予想日を ${record.Estimates.length} 件記録しました (${record.Estimates.map((e) => `${e.Key}=${e.Date.slice(0, 10)}`).join(", ")})`,
+    `[Forecast] 予想日を ${record.Estimates.length} 件記録しました (${record.Estimates.map((e) => `${e.Key}=${e.Date.slice(0, 10)}`).join(", ")}${bandNote})`,
   );
   return { action: "recorded", record };
 }

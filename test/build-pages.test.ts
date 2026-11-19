@@ -1409,11 +1409,10 @@ describe("buildDashboard: 過去実績との比較", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
-      // 初回レビュー到達予想パネル
-      expect(html).toContain("👀 初回レビュー到達予想（主戦場ライン・7日初回介入コホート中央値）");
-      expect(html).toContain("実測速度ベース");
-      expect(html).toContain("約 4.5 日後");
-      expect(html).toContain("2 日/日");
+      // 初回レビュー現在位置パネル（外挿廃止・定常換算）
+      expect(html).toContain("👀 主戦場ライン現在位置（7日初回介入コホート中央値）");
+      expect(html).toContain("現在位置・定常目安");
+      expect(html).toContain("約 9 日後");
       expect(html).toContain("直近7日初回介入 12件の中央値");
       expect(html).toContain("Open 5・Merged 7");
 

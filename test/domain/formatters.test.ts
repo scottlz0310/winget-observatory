@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  calculateNumericMedian,
   DAY_MS,
   formatDateTimeWithDay,
   formatDelta,
@@ -11,6 +12,7 @@ import {
   JST_OFFSET_MS,
   round1,
   round2,
+  toJstEpochDay,
 } from "../../src/domain/formatters";
 
 describe("Domain: formatters constants & rounding", () => {
@@ -111,5 +113,19 @@ describe("Domain: human days & delta formatters", () => {
     [5, 3, "日", "[前回比 +2 日]"],
   ])("formatDelta(%p, %p, %p) は %s を返す", (current, previous, unit, expected) => {
     expect(formatDelta(current, previous, unit)).toBe(expected);
+  });
+
+  test("toJstEpochDay は JST 日付境界 (UTC 15:00) で暦日番号を切り替える", () => {
+    const beforeMidnightJst = Date.parse("2026-11-06T14:59:59Z"); // JST 11-06 23:59:59
+    const midnightJst = Date.parse("2026-11-06T15:00:00Z"); // JST 11-07 00:00:00
+    expect(toJstEpochDay(midnightJst) - toJstEpochDay(beforeMidnightJst)).toBe(1);
+  });
+
+  test.each([
+    ["空配列", [], null],
+    ["奇数件", [10, 20, 30], 20],
+    ["偶数件", [10, 20, 30, 40], 25],
+  ])("calculateNumericMedian(%s)", (_name, values, expected) => {
+    expect(calculateNumericMedian(values)).toBe(expected);
   });
 });

@@ -316,13 +316,14 @@ describe("Domain: extractMainstreamFrontierSamples", () => {
     expect(samples[0].createdMs).toBe(Date.parse("2026-10-11T00:00:00Z"));
     expect(samples[1].createdMs).toBe(Date.parse("2026-10-12T00:00:00Z"));
 
-    // 旧 v3 履歴と混在しても旧値 (09-01) から偽の高速速度が算出されないこと
+    // 旧 v3 履歴と混在しても旧値 (09-01) は使われず、v4 主戦場ライン位置の定常換算が返ること
     const forecast = calculateFirstReviewForecast(
       samples.slice(0, 1),
       Date.parse("2026-10-20T00:00:00Z"),
     );
-    expect(forecast.status).toBe("insufficient-window");
-    expect(forecast.observedSpeed).toBeNull();
+    expect(forecast.status).toBe("steady");
+    expect(forecast.gapDays).toBe(9);
+    expect(forecast.steadyEtaDays).toBe(9);
   });
 });
 
@@ -345,7 +346,8 @@ describe("Domain: calculateFirstReviewForecast", () => {
     const result = calculateFirstReviewForecast([], targetCreated);
     expect(result.status).toBe("no-samples");
     expect(result.frontier).toBeNull();
-    expect(result.observedEtaDays).toBeNull();
+    expect(result.steadyEtaDays).toBeNull();
+    expect(result.steadyDateMs).toBeNull();
   });
 
   test("基準 PR の起票時刻が不明なら no-target と現在位置を返す", () => {
@@ -353,42 +355,34 @@ describe("Domain: calculateFirstReviewForecast", () => {
     expect(result.status).toBe("no-target");
     expect(result.lagDays).toBe(20);
     expect(result.frontier?.cohortCount).toBe(42);
-    expect(result.observedEtaDays).toBeNull();
-  });
-
-  test("最小間隔（6 時間）未満の観測だけでは insufficient-window となり定常目安を返す", () => {
-    const result = calculateFirstReviewForecast(
-      [mainstreamSample(0, 20.1), mainstreamSample(5, 20)],
-      targetCreated,
-    );
-    expect(result.status).toBe("insufficient-window");
-    expect(result.steadyEtaDays).toBe(10);
-    expect(result.observedEtaDays).toBeNull();
-    expect(result.observedUnavailable).toBe("insufficient-window");
+    expect(result.steadyEtaDays).toBeNull();
+    expect(result.steadyDateMs).toBeNull();
   });
 
   test.each([
-    ["実時間と同じ速度（1 日/日）", [mainstreamSample(0, 21), mainstreamSample(24, 20)], 1, 10],
-    ["実時間の半分の速度", [mainstreamSample(0, 20.5), mainstreamSample(24, 20)], 0.5, 20],
-    ["実時間の 2 倍の速度", [mainstreamSample(0, 22), mainstreamSample(24, 20)], 2, 5],
-  ])("実測進行速度に基づく到達予想: %s", (_name, samples, speed, eta) => {
-    const result = calculateFirstReviewForecast(samples, targetCreated);
-    expect(result.status).toBe("forecasted");
-    expect(result.observedSpeed).toBe(speed);
-    expect(result.observedEtaDays).toBe(eta);
-    expect(result.observedDateMs).toBe(samples[samples.length - 1].timestampMs + eta * DAY);
-    expect(result.observedUnavailable).toBeNull();
-  });
-
-  test.each([
-    ["停滞（進みなし）", [mainstreamSample(0, 20), mainstreamSample(24, 20)]],
-    ["後退", [mainstreamSample(0, 20), mainstreamSample(24, 21)]],
-  ])("観測期間内に進みが無ければ no-progress を返す: %s", (_name, samples) => {
-    const result = calculateFirstReviewForecast(samples, targetCreated);
-    expect(result.status).toBe("no-progress");
-    expect(result.observedEtaDays).toBeNull();
-    expect(result.steadyEtaDays).toBeGreaterThan(0);
-  });
+    ["観測 1 点のみ", [mainstreamSample(0, 20)], 10],
+    [
+      "進行速度が 0.5 日/日のように遅い場合も短期外挿せず定常 1.0 日/日換算",
+      [mainstreamSample(0, 20.5), mainstreamSample(24, 20)],
+      10,
+    ],
+    [
+      "進行が停滞・後退していても割り算外挿せずスナップショット＋定常換算",
+      [mainstreamSample(0, 20), mainstreamSample(24, 21)],
+      11,
+    ],
+  ])(
+    "主戦場ラインは短期速度外挿を廃止しスナップショット＋定常換算を返す: %s",
+    (_name, samples, expectedGapDays) => {
+      const result = calculateFirstReviewForecast(samples, targetCreated);
+      expect(result.status).toBe("steady");
+      expect(result.gapDays).toBe(expectedGapDays);
+      expect(result.steadyEtaDays).toBe(expectedGapDays);
+      expect(result.steadyDateMs).toBe(
+        samples[samples.length - 1].timestampMs + expectedGapDays * DAY,
+      );
+    },
+  );
 
   test("主戦場ラインが基準 PR の起票日時に到達済み（gap <= 0）なら reached（残り 0 日）を返す", () => {
     const result = calculateFirstReviewForecast(
@@ -398,7 +392,7 @@ describe("Domain: calculateFirstReviewForecast", () => {
     expect(result.status).toBe("reached");
     expect(result.gapDays).toBe(-1);
     expect(result.steadyEtaDays).toBe(0);
-    expect(result.observedEtaDays).toBe(0);
+    expect(result.steadyDateMs).toBe(T0 + 24 * HOUR);
   });
 
   test("基準 PR 自身が介入済み（コメント/レビュー/第三者アサイン）の場合は target-intervened を返す", () => {
@@ -424,13 +418,13 @@ describe("Domain: calculateFirstReviewForecast", () => {
       "コメント済: stephengillie",
     );
     expect(resultByComment.steadyEtaDays).toBe(0);
-    expect(resultByComment.observedEtaDays).toBe(0);
+    expect(resultByComment.steadyDateMs).toBe(T0 + 24 * HOUR);
 
     const noSamplesAssignedFallback = calculateFirstReviewForecast([], targetCreated, {
       targetThirdPartyAssignees: ["stephengillie"],
     });
     expect(noSamplesAssignedFallback.status).toBe("target-intervened");
     expect(noSamplesAssignedFallback.targetAssignees).toEqual(["stephengillie"]);
-    expect(noSamplesAssignedFallback.observedEtaDays).toBe(0);
+    expect(noSamplesAssignedFallback.steadyEtaDays).toBe(0);
   });
 });

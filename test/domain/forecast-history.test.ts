@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildForecastBandSource, calculateForecastBand } from "../../src/domain/forecast-band";
 import {
   findOutcome,
   hasForecastRecord,
@@ -229,5 +230,114 @@ describe("Domain: scoreForecasts", () => {
 
   test("結果の MergedAt を解釈できなければ握りつぶさず例外にする", () => {
     expect(() => scoreForecasts([outcome("not-a-date")])).toThrow("MergedAt を解釈できません");
+  });
+
+  test("処理バンド記録（Band）がある場合は JST 暦日基準で本命バンド的中率・全体包含率・中央値誤差を採点する", () => {
+    // MERGED = 2026-12-10T00:00:00Z = JST 2026-12-10 09:00
+    // 観測1: 本命バンド 12-06 ~ 12-10 (同日 JST 23:00 終わり)、中央値 12-08 (-2日) -> 本命的中 & 全体的中
+    // 観測2: 本命バンド 12-11 ~ 12-14 (JST)、全体 12-05 ~ 12-20、中央値 12-12 (+2日) -> 本命外れ & 全体的中
+    const rec1: ForecastRecord = {
+      Type: "forecast",
+      Timestamp: "2026-11-18T00:00:00Z",
+      Repository: "o/r",
+      TargetPr: 1,
+      Estimates: [],
+      Band: {
+        FrontDate: "2026-12-02T00:00:00Z",
+        MainstreamStartDate: "2026-12-06T00:00:00Z",
+        // UTC 12-10T14:00Z = JST 12-10 23:00 (MERGED UTC 00:00Z = JST 09:00 と同 JST 暦日)
+        // さらに UTC 12-10T00:00Z が下限の場合でも暦日同日扱いになることを検証
+        MainstreamEndDate: "2026-12-10T14:00:00Z",
+        MainstreamMedianDate: "2026-12-08T00:00:00Z",
+        BottomDate: "2026-12-25T00:00:00Z",
+        OverallStartDate: "2026-12-02T00:00:00Z",
+        OverallEndDate: "2026-12-25T00:00:00Z",
+      },
+    };
+    const rec2: ForecastRecord = {
+      Type: "forecast",
+      Timestamp: "2026-11-25T00:00:00Z",
+      Repository: "o/r",
+      TargetPr: 1,
+      Estimates: [],
+      Band: {
+        FrontDate: "2026-12-05T00:00:00Z",
+        MainstreamStartDate: "2026-12-11T00:00:00Z", // JST 12-11 09:00
+        MainstreamEndDate: "2026-12-14T00:00:00Z",
+        MainstreamMedianDate: "2026-12-12T00:00:00Z",
+        BottomDate: "2026-12-20T00:00:00Z",
+        OverallStartDate: "2026-12-05T00:00:00Z",
+        OverallEndDate: "2026-12-20T00:00:00Z",
+      },
+    };
+
+    const scores = scoreForecasts([rec1, rec2, outcome()]);
+    expect(scores).toHaveLength(1);
+    expect(scores[0].bandScore).toEqual({
+      count: 2,
+      mainstreamHitCount: 1,
+      mainstreamHitRatePct: 50,
+      lastInMainstreamBand: false,
+      medianMeanErrorDays: 0,
+      medianMeanAbsErrorDays: 2,
+      medianLastErrorDays: 2,
+      overallCount: 2,
+      overallHitCount: 2,
+      overallHitRatePct: 100,
+    });
+  });
+
+  test("本命バンド上限と実マージが JST 同日だが時刻だけ遅い場合でも的中と判定する", () => {
+    // 2026-12-10 18:00 JST (= 2026-12-10T09:00:00Z) にマージ
+    const mergedLaterSameJstDay = outcome("2026-12-10T09:00:00Z");
+    const rec: ForecastRecord = {
+      Type: "forecast",
+      Timestamp: "2026-11-18T00:00:00Z",
+      Repository: "o/r",
+      TargetPr: 1,
+      Estimates: [],
+      Band: {
+        FrontDate: "2026-12-01T00:00:00Z",
+        MainstreamStartDate: "2026-12-05T00:00:00Z", // JST 12-05
+        MainstreamEndDate: "2026-12-10T01:00:00Z", // JST 12-10 10:00 (時刻は早いが暦日は同じ 12-10)
+        MainstreamMedianDate: "2026-12-08T00:00:00Z",
+        BottomDate: "2026-12-20T00:00:00Z",
+      },
+    };
+    const scores = scoreForecasts([rec, mergedLaterSameJstDay]);
+    expect(scores[0].bandScore?.mainstreamHitCount).toBe(1);
+    expect(scores[0].bandScore?.lastInMainstreamBand).toBe(true);
+    expect(scores[0].bandScore?.overallHitCount).toBe(1);
+  });
+
+  test("toForecastRecord は既存 Estimates が空でも Band が算出できていれば記録する", () => {
+    const band = calculateForecastBand(
+      buildForecastBandSource({
+        progress: {
+          Timestamp: "2026-11-18T20:00:00Z",
+          TargetPr: 1,
+          FirstTimerMedianDays: 30,
+        },
+        depths: {
+          TargetPr: {
+            Number: 1,
+            Title: "t",
+            Url: "u",
+            CreatedAt: "2026-10-29T00:00:00Z",
+            CreatedAtJst: "2026-10-29 09:00",
+            UpdatedAt: "2026-11-01T00:00:00Z",
+          },
+        },
+        history: [],
+      }),
+    );
+    const rec = toForecastRecord(
+      band.comparison,
+      { repository: "o/r", targetPr: 1, timestamp: "2026-11-18T20:00:00Z" },
+      band,
+    );
+    expect(rec).not.toBeNull();
+    expect(rec?.Estimates).toEqual([]);
+    expect(rec?.Band?.FrontDate).toBe("2026-11-28T00:00:00.000Z");
   });
 });

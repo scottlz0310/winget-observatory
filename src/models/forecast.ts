@@ -64,16 +64,17 @@ export type ForecastUnavailableReason =
   | "no-progress";
 
 export type FirstReviewForecastStatus =
-  | ForecastUnavailableReason
+  | "no-samples"
+  | "no-target"
   /** 基準 PR 自身に人間レビュー・手動コメント・第三者 Assignees のいずれかが付与済み（初回レビュー・介入到達済み） */
   | "target-intervened"
   /** 主戦場ライン（起票日時中央値）が基準 PR の起票時刻に到達済み */
   | "reached"
-  /** 実測速度に基づく初回レビュー到達予想日を算出済み */
-  | "forecasted";
+  /** 主戦場ラインを現在位置スナップショット＋定常ペース（1.0 日/日）換算で観測中 */
+  | "steady";
 
 export interface FirstReviewForecast {
-  /** 到達予想の状態 */
+  /** 主戦場ライン（初回人間介入コホート）のスナップショット状態 */
   status: FirstReviewForecastStatus;
   /** 最新の主戦場ライン位置（旧互換で pr はオプショナル） */
   frontier: {
@@ -92,20 +93,10 @@ export interface FirstReviewForecast {
   targetIntervention: PrInterventionSummary | null;
   /** 基準 PR 自身の第三者 Assignees 一覧（互換・補助表示用） */
   targetAssignees: string[];
-  /** 定常ペース（速度 1 日/日）仮定での目安日数 */
+  /** 定常ペース（速度 1.0 日/日）仮定での目安日数 */
   steadyEtaDays: number | null;
-  /** 定常ペース（速度 1 日/日）仮定での到達目安日（UTC ミリ秒） */
+  /** 定常ペース（速度 1.0 日/日）仮定での到達目安日（UTC ミリ秒） */
   steadyDateMs: number | null;
-  /** 観測速度モデル: 未レビュー前線の起票時刻の進み（日/日）。測れない場合は null */
-  observedSpeed: number | null;
-  /** 観測速度モデルに基づく初回レビュー到達予想日数 */
-  observedEtaDays: number | null;
-  /** 観測速度モデルに基づく初回レビュー到達予想日（UTC ミリ秒） */
-  observedDateMs: number | null;
-  /** 観測速度の算出に使った期間（時間） */
-  windowHours: number;
-  /** 観測速度が算出できない理由（算出できた場合は null） */
-  observedUnavailable: ForecastUnavailableReason | null;
 }
 
 export interface StaleFrontierForecast {

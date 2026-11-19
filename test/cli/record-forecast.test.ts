@@ -103,6 +103,9 @@ describe("CLI: runRecordForecast", () => {
         DepthsVersion: CURRENT_DEPTHS_VERSION,
         Timestamp: t,
         StaleBottom: [{ Number: 10, UpdatedAt: "2026-10-09T00:00:00Z" }],
+        HealthyBottom: [
+          { Number: 5, CreatedAt: "2026-09-17T00:00:00Z", UpdatedAt: "2026-11-01T00:00:00Z" },
+        ],
       });
     writeFileSync(
       join(dir, "depths-history.jsonl"),
@@ -142,6 +145,65 @@ describe("CLI: runRecordForecast", () => {
     // 仮説②（更新順）は記録対象外
     expect(byKey["update-order:steady"]).toBeUndefined();
     expect(byKey["update-order:observed"]).toBeUndefined();
+  });
+
+  test("スナップショットに処理バンドの材料が揃っていれば Band も同時に forecast-history.jsonl へ記録する", async () => {
+    writeSnapshots();
+    writeFileSync(
+      join(dir, "latest-progress.json"),
+      JSON.stringify({
+        Timestamp: "2026-11-08T00:00:00Z",
+        TargetPr: 123,
+        FrontNumber: 5,
+        FrontCreatedAt: "2026-09-17(木) 09:00",
+        ActiveAhead: 2400,
+        TotalMedianDays: 44,
+        TotalP75Days: 45,
+        FirstTimerMedianDays: 31,
+        FirstTimerP75Days: 39,
+      }),
+      "utf-8",
+    );
+    writeFileSync(
+      join(dir, "latest-depths.json"),
+      JSON.stringify({
+        DepthsVersion: CURRENT_DEPTHS_VERSION,
+        Timestamp: "2026-11-08T00:00:00Z",
+        TargetPr: {
+          Number: 123,
+          CreatedAt: "2026-10-29T00:00:00Z",
+          UpdatedAt: "2026-11-05T00:00:00Z",
+        },
+        HealthyBottom: [
+          {
+            Number: 5,
+            CreatedAt: "2026-09-17T00:00:00Z",
+            UpdatedAt: "2026-11-01T00:00:00Z",
+          },
+        ],
+        StaleBottom: [
+          {
+            Number: 10,
+            CreatedAt: "2026-10-09T00:00:00Z",
+            UpdatedAt: "2026-10-09T00:00:00Z",
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const result = await runRecordForecast(options, clientOf(pr({})), () => {});
+    expect(result.action).toBe("recorded");
+    const [record] = lines();
+    expect(record.Band).toBeDefined();
+    // 前線: 10-29 + 31日 = 11-29 (または staleBottom: 11-08 + 20日 = 11-28) -> 11-28
+    expect(record.Band.FrontDate.slice(0, 10)).toBe("2026-11-28");
+    // 大底: 11-08 + (10-29 - 09-17 = 42日) = 12-20
+    expect(record.Band.BottomDate.slice(0, 10)).toBe("2026-12-20");
+    // 本命中央値バンドが記録されている
+    expect(record.Band.MainstreamStartDate).toBeTruthy();
+    expect(record.Band.MainstreamEndDate).toBeTruthy();
+    expect(record.Band.MainstreamMedianDate).toBeTruthy();
   });
 
   test("同じ観測時刻の予想は二重に記録しない（古いスナップショットの再実行に備える）", async () => {

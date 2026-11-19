@@ -13,6 +13,26 @@ export const DAY_MS = 86_400_000;
 export const JST_OFFSET_MS = 9 * HOUR_MS;
 
 /**
+ * UTC ミリ秒を JST (UTC+9) のエポック日数（整数）に変換する。
+ */
+export function toJstEpochDay(timeMs: number): number {
+  return Math.floor((timeMs + JST_OFFSET_MS) / DAY_MS);
+}
+
+/**
+ * 数値配列の中央値を計算する（昇順ソート済み配列を受け取り、0 件は null、偶数件は中央 2 件の平均）。
+ */
+export function calculateNumericMedian(sortedValues: readonly number[]): number | null {
+  const n = sortedValues.length;
+  if (n === 0) return null;
+  const mid = Math.floor(n / 2);
+  if (n % 2 === 1) {
+    return sortedValues[mid];
+  }
+  return (sortedValues[mid - 1] + sortedValues[mid]) / 2;
+}
+
+/**
  * 数値を小数第 1 位で四捨五入する。
  */
 export function round1(value: number): number {
