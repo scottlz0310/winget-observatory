@@ -268,7 +268,7 @@ function loadTargetHistory(historyCsvPath: string, targetPr: number): ProgressHi
 }
 
 /**
- * 現在の Open レビュー待ち行列（前線・実質待ち・累積待ち・直前ライバル PR）を集計する。
+ * 現在の Open レビュー待ち行列（健康的大底・実質待ち・累積待ち・直前ライバル PR）を集計する。
  */
 async function collectOpenQueueInfo(
   client: GitHubApiClient,
@@ -280,11 +280,13 @@ async function collectOpenQueueInfo(
   const baseParts = buildHealthyQueryParts(repository);
   const eligibleQuery = baseParts.join(" ");
 
-  // 1. 前線（健康な最古の未マージ PR）と全体の健康な PR 数
+  // 1. 健康的大底（健康な最古の未マージ PR）と全体の健康な PR 数
   const frontRes = await client.searchIssuesDetailed(eligibleQuery, "created", "asc", 1);
   const frontItem = frontRes.items[0];
   if (!frontItem) {
-    throw new Error("前線（条件を満たす最古の未マージ PR）を検索結果から特定できませんでした。");
+    throw new Error(
+      "健康的大底（条件を満たす最古の未マージ PR）を検索結果から特定できませんでした。",
+    );
   }
   const allTotal = frontRes.totalCount;
 
@@ -337,7 +339,7 @@ function logQueueSummary(
       : "";
 
   log(
-    `消化前線（最古の健康なPR）  : #${front.number} (作成: ${formatDateTimeWithDay(front.createdAt)})${frontDeltaText}`,
+    `健康的大底（最古の健康なPR）: #${front.number} (作成: ${formatDateTimeWithDay(front.createdAt)})${frontDeltaText}`,
   );
   log(
     `実質待ちPR（更新順の順位）  : 約 ${queueInfo.activeAheadCount} 件${deltaOf(queueInfo.activeAheadCount, prev?.ActiveAhead)} （あなたのPRより更新が古い健康なPR。指摘なく順番待ちしているPR）`,

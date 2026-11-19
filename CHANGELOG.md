@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ダッシュボード最上部を「統合処理バンド」ヒーローカードへ再編し、「消化前線」呼称を「健康的大底」へ統一（#114）:
+  - `scripts/pages/sections/hero-and-kpi.ts`, `scripts/pages/template.ts`, `scripts/pages/styles.ts`, `src/domain/chart.ts`: 縦 3 段のトップカードを `renderIntegratedForecastHero`（本命中央値バンド・全体レンジ・前線/本命/大底 統合タイムライン SVG・現在の処理帯スナップショット・折りたたみ詳細）へ統合し、`renderTimelineSvg` に全体レンジ補助帯 `overallBand` を追加
+  - `scripts/pages/sections/stats-and-samples.ts`: トップカードから重複していた追い越し分離内訳を下部 `renderOvertakeSection` へ集約
+  - `scripts/pages/sections/depths-and-history.ts`: `renderForecastScoreSection` に JST 暦日基準の統合処理バンド評価（本命バンド的中率・全体レンジ包含率・中央値誤差）表示を追加
+  - `scripts/pages/sections/`, `src/cli/progress.ts`, `src/domain/progress-format.ts`, `src/domain/dashboard.ts`, `README.md`: 最古健康 PR（`FrontNumber`）の呼称を「消化前線」から「健康的大底」へ統一（永続化データキー名は後方互換維持）
 - 主戦場ライン（`calculateFirstReviewForecast`）から短期実測速度による割り算外挿を廃止し、現在の作業位置スナップショット＋定常ペース（1.0 日/日）換算へ変更（#113）:
   - `src/models/forecast.ts`, `src/domain/forecast.ts`, `scripts/pages/sections/hero-and-kpi.ts`: `FirstReviewForecast` の `observedSpeed` / `observedEtaDays` / `observedDateMs` 外挿経路を廃止して `status: "steady"` へ統合整理し、短期進行速度のブレによる時間軸逆転を解消
   - `src/domain/formatters.ts`, `src/domain/intervention.ts`, `scripts/pages/sections/stats-and-samples.ts`: `toJstEpochDay` と `calculateNumericMedian` を共通フォーマッタへ集約

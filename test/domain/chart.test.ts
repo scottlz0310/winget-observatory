@@ -55,17 +55,18 @@ describe("Domain: renderTimelineSvg", () => {
     expect(ys[1]).not.toBe(ys[2]);
   });
 
-  test("今日以前の印は今日の位置（軸の左端）に寄せ、範囲の帯を描ける", () => {
+  test("今日以前の印は今日の位置（軸の左端）に寄せ、本命範囲帯と全体レンジ帯を描ける", () => {
     const svg = renderTimelineSvg({
       title: "t",
       nowMs: T0,
       markers: [marker("超過", -3), marker("先", 10)],
       band: { startMs: T0 + 2 * DAY, endMs: T0 + 8 * DAY },
+      overallBand: { startMs: T0 + 1 * DAY, endMs: T0 + 12 * DAY },
     }) as string;
     const xs = circleXs(svg);
     expect(xs[0]).toBe(28);
     expect(xs[1]).toBeGreaterThan(xs[0]);
-    expect(svg).toContain("<rect");
+    expect(svg.match(/<rect /g)?.length).toBe(2);
   });
 
   test("ラベルは XML エスケープする", () => {

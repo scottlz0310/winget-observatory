@@ -13,11 +13,7 @@ import {
   selectComparableHistory,
 } from "../../src/domain/dashboard";
 import { calculateExitBreakdown } from "../../src/domain/exit-breakdown";
-import { calculateFirstReviewForecast } from "../../src/domain/forecast";
-import {
-  buildForecastSource,
-  calculateForecastComparison,
-} from "../../src/domain/forecast-comparison";
+import { buildForecastBandSource, calculateForecastBand } from "../../src/domain/forecast-band";
 import { scoreForecasts } from "../../src/domain/forecast-history";
 import { DAY_MS, formatHumanDays } from "../../src/domain/formatters";
 import { escapeHtml } from "./formatters";
@@ -30,10 +26,8 @@ import {
   renderRecentHistorySection,
 } from "./sections/depths-and-history";
 import {
-  buildForecastTimelineMarkers,
-  renderFirstReviewForecastPanel,
-  renderFirstTimerHeroSummary,
-  renderForecastPanel,
+  buildBandTimelineMarkers,
+  renderIntegratedForecastHero,
   renderKpiGridSection,
   renderTriageFlowSection,
 } from "./sections/hero-and-kpi";
@@ -147,9 +141,6 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     rightDecimals: 1,
   });
 
-  const comparison = calculateForecastComparison(
-    buildForecastSource({ progress, depths, history: historyRecords }),
-  );
   const parsedTargetCreatedMs = depths?.TargetPr?.CreatedAt
     ? Date.parse(depths.TargetPr.CreatedAt)
     : depths?.TargetPr?.CreatedAtJst
@@ -163,21 +154,20 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
   const isLatestCohortEmpty =
     depths?.FirstReviewFrontier?.Mode === "cohort-median-7d" &&
     depths.FirstReviewFrontier.CohortCount === 0;
-  const firstReviewForecast = calculateFirstReviewForecast(
-    isLatestCohortEmpty ? [] : mainstreamFrontierSamples,
-    Number.isNaN(parsedTargetCreatedMs) ? null : parsedTargetCreatedMs,
-    {
-      targetIntervention: depths?.TargetPr?.Intervention,
-      targetThirdPartyAssignees: depths?.TargetPr?.ThirdPartyAssignees,
-    },
+  const bandSnapshot = calculateForecastBand(
+    buildForecastBandSource({
+      progress,
+      depths,
+      history: historyRecords,
+      mainstreamFrontierSamples: isLatestCohortEmpty ? [] : mainstreamFrontierSamples,
+    }),
   );
   const timelineSvg = renderTimelineSvg({
-    title: "2 つの仮説による予想マージ日",
-    nowMs: comparison.nowMs,
-    markers: buildForecastTimelineMarkers(comparison),
-    band: comparison.range
-      ? { startMs: comparison.range.startMs, endMs: comparison.range.endMs }
-      : undefined,
+    title: "統合処理バンドによる着地予想タイムライン",
+    nowMs: bandSnapshot.nowMs,
+    markers: buildBandTimelineMarkers(bandSnapshot),
+    band: bandSnapshot.mainstream?.range,
+    overallBand: bandSnapshot.overallRange ?? undefined,
   });
 
   const forecastScores = scoreForecasts(forecastHistory);
@@ -208,11 +198,13 @@ ${DASHBOARD_CSS}
       </div>
     </header>
 
-    ${renderFirstTimerHeroSummary(progress, depths)}
-
-    ${renderForecastPanel(comparison, timelineSvg)}
-
-    ${renderFirstReviewForecastPanel(firstReviewForecast)}
+    ${renderIntegratedForecastHero({
+      targetPrNum,
+      repo,
+      progress,
+      band: bandSnapshot,
+      timelineSvg,
+    })}
 
     ${renderKpiGridSection({
       progress,

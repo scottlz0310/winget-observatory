@@ -102,4 +102,49 @@ describe("buildDashboard: 予想の答え合わせ", () => {
     expect(existsSync(join(outputDir, "data", "forecast-history.jsonl"))).toBe(true);
     expect(html).toContain('href="data/forecast-history.jsonl"');
   });
+
+  test("統合処理バンド記録（Band）がある場合は本命バンド的中率・全体レンジ包含率・誤差を表示する", () => {
+    const bandForecast = (
+      timestamp: string,
+      mainStartOffset: number,
+      mainEndOffset: number,
+      medianOffset: number,
+    ) =>
+      JSON.stringify({
+        Type: "forecast",
+        Timestamp: timestamp,
+        Repository: "microsoft/winget-pkgs",
+        TargetPr: 123,
+        Estimates: [
+          {
+            Key: "rank-velocity",
+            Hypothesis: "rank-velocity",
+            Date: new Date(MERGED + medianOffset * DAY).toISOString(),
+            EtaDays: 1,
+            Primary: true,
+          },
+        ],
+        Band: {
+          FrontDate: new Date(MERGED - 5 * DAY).toISOString(),
+          MainstreamStartDate: new Date(MERGED + mainStartOffset * DAY).toISOString(),
+          MainstreamEndDate: new Date(MERGED + mainEndOffset * DAY).toISOString(),
+          MainstreamMedianDate: new Date(MERGED + medianOffset * DAY).toISOString(),
+          BottomDate: new Date(MERGED + 10 * DAY).toISOString(),
+          OverallStartDate: new Date(MERGED - 5 * DAY).toISOString(),
+          OverallEndDate: new Date(MERGED + 10 * DAY).toISOString(),
+        },
+      });
+
+    writeFileSync(
+      join(dataDir, "forecast-history.jsonl"),
+      `${bandForecast("2026-11-08T00:00:00Z", -3, 2, -1)}\n${bandForecast("2026-11-15T00:00:00Z", 1, 4, 2)}\n${outcome}\n`,
+      "utf-8",
+    );
+    const html = build();
+    expect(html).toContain("統合処理バンド評価 (JST暦日基準)");
+    expect(html).toContain("50% (1/2 回)");
+    expect(html).toContain("100% (2/2 回)");
+    expect(html).toContain("+0.5 日 / 1.5 日");
+    expect(html).toContain("❌ バンド外 (+2 日)");
+  });
 });

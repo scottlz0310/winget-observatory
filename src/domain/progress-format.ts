@@ -19,7 +19,7 @@ export interface CurrentDaysMetrics {
   waitDays: number;
 }
 
-/** 前回の消化前線番号との差分テキストを生成する */
+/** 前回の健康的大底 PR 番号との差分テキストを生成する */
 export function formatFrontDeltaText(
   currentFrontNumber: number,
   prevFrontNumber: number | undefined,
