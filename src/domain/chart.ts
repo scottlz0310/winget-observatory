@@ -253,7 +253,14 @@ export function renderTimelineSvg(options: TimelineOptions): string | null {
     .sort((a, b) => a.dateMs - b.dateMs);
   if (!Number.isFinite(options.nowMs) || markers.length === 0) return null;
 
-  const endMs = Math.max(...markers.map((m) => m.dateMs), options.nowMs + DAY_MS);
+  const bandEndpoints = [
+    options.band?.startMs,
+    options.band?.endMs,
+    options.overallBand?.startMs,
+    options.overallBand?.endMs,
+  ].filter((ms): ms is number => typeof ms === "number" && Number.isFinite(ms));
+
+  const endMs = Math.max(...markers.map((m) => m.dateMs), ...bandEndpoints, options.nowMs + DAY_MS);
   const span = endMs - options.nowMs;
   const domainEnd = endMs + span * 0.05;
   const plotW = TL_WIDTH - TL_MARGIN.left - TL_MARGIN.right;
@@ -264,13 +271,30 @@ export function renderTimelineSvg(options: TimelineOptions): string | null {
       plotW;
   const num = (value: number): string => String(round1(value));
 
-  const overallBand = options.overallBand
-    ? `<rect x="${num(px(options.overallBand.startMs))}" y="${TL_AXIS_Y - 3}" width="${num(Math.max(px(options.overallBand.endMs) - px(options.overallBand.startMs), 2))}" height="6" rx="3" style="fill: var(--text-muted); opacity: 0.25" />`
-    : "";
+  const renderBandRect = (
+    range: { startMs: number; endMs: number } | undefined,
+    y: number,
+    height: number,
+    style: string,
+  ): string => {
+    if (!range || !Number.isFinite(range.startMs) || !Number.isFinite(range.endMs)) return "";
+    const startX = px(Math.min(range.startMs, range.endMs));
+    const endX = px(Math.max(range.startMs, range.endMs));
+    return `<rect x="${num(startX)}" y="${y}" width="${num(Math.max(endX - startX, 2))}" height="${height}" rx="3" style="${style}" />`;
+  };
 
-  const band = options.band
-    ? `<rect x="${num(px(options.band.startMs))}" y="${TL_AXIS_Y - 7}" width="${num(Math.max(px(options.band.endMs) - px(options.band.startMs), 2))}" height="14" rx="3" style="fill: var(--primary); opacity: 0.2" />`
-    : "";
+  const overallBand = renderBandRect(
+    options.overallBand,
+    TL_AXIS_Y - 3,
+    6,
+    "fill: var(--text-muted); opacity: 0.25",
+  );
+  const band = renderBandRect(
+    options.band,
+    TL_AXIS_Y - 7,
+    14,
+    "fill: var(--primary); opacity: 0.2",
+  );
 
   const ticks = Array.from({ length: 4 }, (_, i) => {
     const ms = options.nowMs + (domainEnd - options.nowMs) * (i / 3);

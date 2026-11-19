@@ -69,6 +69,33 @@ describe("Domain: renderTimelineSvg", () => {
     expect(svg.match(/<rect /g)?.length).toBe(2);
   });
 
+  test("band や overallBand の終端が全マーカーより遅い場合でも横軸と帯の終端が切り詰められない", () => {
+    // マーカー最大は 55 日後だが、本命バンド・全体レンジの終端は 100 日後
+    const svg = renderTimelineSvg({
+      title: "バンド拡張",
+      nowMs: T0,
+      markers: [marker("▼前線", 5), marker("▼大底", 20), marker("★本命", 55)],
+      band: { startMs: T0 + 10 * DAY, endMs: T0 + 100 * DAY },
+      overallBand: { startMs: T0 + 5 * DAY, endMs: T0 + 100 * DAY },
+    }) as string;
+
+    const xs = circleXs(svg);
+    const maxMarkerX = Math.max(...xs);
+    const rects = [...svg.matchAll(/<rect x="([\d.]+)" y="\d+" width="([\d.]+)"/g)].map((m) => ({
+      x: Number(m[1]),
+      endX: Number(m[1]) + Number(m[2]),
+    }));
+    expect(rects).toHaveLength(2);
+    // 100 日後の終端は 55 日後のマーカー位置より大幅に右側にあること
+    for (const rect of rects) {
+      expect(rect.endX).toBeGreaterThan(maxMarkerX + 100);
+      expect(rect.endX).toBeLessThanOrEqual(640 - 28);
+    }
+    // 右端の軸目盛りは 100 日後（2027-02-15）+ 5%余白付近（02/20）まで伸びていること（55日後の 01/01 付近で切れない）
+    expect(svg).toContain("02/20");
+    expect(svg).not.toContain("01/03");
+  });
+
   test("ラベルは XML エスケープする", () => {
     const svg = renderTimelineSvg({
       title: "a<b",
