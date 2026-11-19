@@ -17,17 +17,26 @@ import {
   CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
   DEFAULT_AUTHOR_MERGED_BATCH_SIZE,
+  DEFAULT_AUTHOR_METADATA_BATCH_SIZE,
   extractSingleHitCandidateLogins,
+  hasValidatedReadyVersion,
   isCandidateEligibleForFirstTimerDetail,
   isPrivilegedOrBotAuthor,
-  MIN_VALIDATION_GUIDE_READY_VERSION,
+  type PullRequestAuthorMetadataQueryResponse,
   resolveAuthorMergedCounts,
+  resolvePullRequestAuthorMetadata,
   shouldReevaluateAuthorFirstTimer,
   shouldReevaluateCachedSample,
   shouldReevaluateSkippedCandidate,
 } from "./first-timer";
 import { DAY_MS, round2 } from "./formatters";
-import { fromCachedSample, indexSampleCache, toCachedSample } from "./sample-cache";
+import {
+  DEFAULT_METADATA_REFRESH_BUDGET,
+  fromCachedSample,
+  indexSampleCache,
+  selectMetadataRefreshCandidates,
+  toCachedSample,
+} from "./sample-cache";
 import { simulateReadySince } from "./timeline";
 
 export interface SampleCollectorClient {
@@ -63,10 +72,6 @@ interface CachedCandidateResolution {
   needsReevaluation: boolean;
   needsAuthorReevaluation?: boolean;
   updatedEntry?: SampleCacheEntry;
-}
-
-function hasValidatedReadyVersion(version: number | undefined): boolean {
-  return version !== undefined && version >= MIN_VALIDATION_GUIDE_READY_VERSION;
 }
 
 function createSkippedEntry(
@@ -574,5 +579,123 @@ export async function orchestrateSampleCollection(
     deferredCount: deferred,
     cacheModified,
     finalCache: Array.from(cacheIndex.values()),
+  };
+}
+
+export interface RefreshLegacyAuthorMetadataParams {
+  cacheIndex: Map<number, SampleCacheEntry>;
+  samples?: MergedCandidateSample[];
+  client: Pick<SampleCollectorClient, "graphql">;
+  repository: string;
+  now?: Date;
+  windowDays?: number;
+  budget?: number;
+  batchSize?: number;
+}
+
+export interface RefreshLegacyAuthorMetadataResult {
+  updatedCount: number;
+  privilegedDemotedCount: number;
+  cacheModified: boolean;
+}
+
+/**
+ * タイムライン再計算不要で最新バージョンの作者メタデータが未補完なサンプルを
+ * 軽量 GraphQL alias バッチで段階的に補完・昇格する。
+ */
+export async function refreshLegacyAuthorMetadata(
+  params: RefreshLegacyAuthorMetadataParams,
+): Promise<RefreshLegacyAuthorMetadataResult> {
+  const {
+    cacheIndex,
+    samples,
+    client,
+    repository,
+    now = new Date(),
+    windowDays,
+    budget = DEFAULT_METADATA_REFRESH_BUDGET,
+    batchSize = DEFAULT_AUTHOR_METADATA_BATCH_SIZE,
+  } = params;
+
+  const targets = selectMetadataRefreshCandidates(Array.from(cacheIndex.values()), {
+    now,
+    windowDays,
+    budget,
+  });
+  if (targets.length === 0) {
+    return { updatedCount: 0, privilegedDemotedCount: 0, cacheModified: false };
+  }
+
+  const targetNumbers = targets.map((entry) => entry.Number);
+  const resolved = await resolvePullRequestAuthorMetadata(
+    repository,
+    targetNumbers,
+    (query) => client.graphql<PullRequestAuthorMetadataQueryResponse>(query),
+    { batchSize },
+  );
+
+  if (resolved.size === 0) {
+    return { updatedCount: 0, privilegedDemotedCount: 0, cacheModified: false };
+  }
+
+  const sampleByNumber = new Map<number, MergedCandidateSample>();
+  if (samples) {
+    for (const s of samples) {
+      sampleByNumber.set(s.number, s);
+    }
+  }
+
+  let updatedCount = 0;
+  let privilegedDemotedCount = 0;
+
+  for (const existing of targets) {
+    const meta = resolved.get(existing.Number);
+    if (!meta) continue;
+
+    const nextAuthor = meta.author ?? existing.Author;
+    const nextAuthorType = meta.authorType ?? existing.AuthorType;
+    const nextAuthorAssociation = meta.authorAssociation ?? existing.AuthorAssociation;
+    const privilegedOrBot = isPrivilegedOrBotAuthor({
+      author: nextAuthor,
+      authorType: nextAuthorType,
+      authorAssociation: nextAuthorAssociation,
+    });
+
+    const updated: CachedSampleEntry = {
+      ...existing,
+      ...(nextAuthor !== undefined ? { Author: nextAuthor } : {}),
+      ...(nextAuthorType !== undefined ? { AuthorType: nextAuthorType } : {}),
+      ...(nextAuthorAssociation !== undefined ? { AuthorAssociation: nextAuthorAssociation } : {}),
+      FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+    };
+
+    if (privilegedOrBot) {
+      if (existing.IsFirstTimer !== false) {
+        privilegedDemotedCount++;
+      }
+      updated.IsFirstTimer = false;
+      updated.FirstTimerReason = "privileged-or-bot";
+    }
+
+    cacheIndex.set(existing.Number, updated);
+    updatedCount++;
+
+    const sample = sampleByNumber.get(existing.Number);
+    if (sample) {
+      if (nextAuthor !== undefined) sample.author = nextAuthor;
+      if (nextAuthorType !== undefined) sample.authorType = nextAuthorType;
+      if (nextAuthorAssociation !== undefined) sample.authorAssociation = nextAuthorAssociation;
+      sample.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+      if (privilegedOrBot) {
+        sample.isFirstTimer = false;
+        sample.firstTimerReason = "privileged-or-bot";
+      }
+    }
+  }
+
+  return {
+    updatedCount,
+    privilegedDemotedCount,
+    cacheModified: updatedCount > 0,
   };
 }

@@ -32,6 +32,8 @@ describe("CLI: progress parseArgs", () => {
       expect(opts.firstTimerLookbackDays).toBe(90);
       expect(opts.fetchBudget).toBe(300);
       expect(opts.fetchLimit).toBe(5000);
+      expect(opts.metadataRefreshBudget).toBe(100);
+      expect(opts.cacheRetentionDays).toBe(120);
       expect(opts.noLog).toBeFalse();
       expect(opts.asJson).toBeFalse();
     } finally {
@@ -57,6 +59,10 @@ describe("CLI: progress parseArgs", () => {
       "20",
       "--fetch-limit",
       "200",
+      "--metadata-refresh-budget",
+      "50",
+      "--cache-retention-days",
+      "180",
       "--log-path",
       "custom.csv",
       "--snapshot-path",
@@ -71,6 +77,8 @@ describe("CLI: progress parseArgs", () => {
     expect(opts.firstTimerLookbackDays).toBe(60);
     expect(opts.fetchBudget).toBe(20);
     expect(opts.fetchLimit).toBe(200);
+    expect(opts.metadataRefreshBudget).toBe(50);
+    expect(opts.cacheRetentionDays).toBe(180);
     expect(opts.logPath).toBe("custom.csv");
     expect(opts.snapshotPath).toBe("custom.json");
     expect(opts.noLog).toBeTrue();
@@ -91,6 +99,12 @@ describe("CLI: progress parseArgs", () => {
     [["--cache-path"], "必要です"],
     [["--fetch-limit", "0"], "無効な値"],
     [["--fetch-limit", "10001"], "無効な値"],
+    [["--metadata-refresh-budget", "abc"], "無効な値"],
+    [["--metadata-refresh-budget", "-1"], undefined],
+    [["--metadata-refresh-budget", "1001"], "無効な値"],
+    [["--cache-retention-days", "abc"], "無効な値"],
+    [["--cache-retention-days", "-1"], undefined],
+    [["--cache-retention-days", "3651"], "無効な値"],
     [["--target-pr"], "必要です"],
     [["--target-pr", "--no-log"], "必要です"],
     [["--log-path", "--no-log"], "必要です"],
@@ -3098,6 +3112,218 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached804 = savedCache.find((e) => e.Number === 804);
       expect(cached804?.Type).toBe("skipped");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("自己修復パイプライン: TTL超過・検索外v4ゾンビのローカル削除と、v5中間世代の軽量バッチ補完・特権ロール降格および世代ログ出力を行う", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-self-heal-"));
+    try {
+      const cachePath = join(tmpDir, "merged-samples.jsonl");
+      const dayMs = 24 * 60 * 60 * 1000;
+      const now = new Date("2026-11-19T00:00:00Z");
+
+      const labels = [
+        { name: "New-Package" },
+        { name: "Azure-Pipeline-Passed" },
+        { name: "Validation-Completed" },
+      ];
+
+      const initialEntries: SampleCacheEntry[] = [
+        // #850: 130日前 -> TTL (120日) 超過で削除
+        {
+          Type: "sample",
+          Number: 850,
+          Title: "PR 850 (Expired TTL)",
+          CreatedAt: new Date(now.getTime() - 140 * dayMs).toISOString(),
+          LatestCommittedDate: new Date(now.getTime() - 135 * dayMs).toISOString(),
+          CommitCount: 1,
+          ReadyAt: new Date(now.getTime() - 134 * dayMs).toISOString(),
+          MergedAt: new Date(now.getTime() - 130 * dayMs).toISOString(),
+          TotalDays: 10,
+          TurnDays: 5,
+          ReadyDays: 4,
+          Author: "old-ttl-user",
+          IsFirstTimer: true,
+          FirstTimerVersion: 5,
+        },
+        // #851: 10日前・検索候補外・v4 -> 検索外旧世代ゾンビとして削除
+        {
+          Type: "sample",
+          Number: 851,
+          Title: "PR 851 (v4 zombie outside search)",
+          CreatedAt: new Date(now.getTime() - 15 * dayMs).toISOString(),
+          LatestCommittedDate: new Date(now.getTime() - 15 * dayMs).toISOString(),
+          CommitCount: 1,
+          ReadyAt: new Date(now.getTime() - 15 * dayMs).toISOString(),
+          MergedAt: new Date(now.getTime() - 10 * dayMs).toISOString(),
+          TotalDays: 5,
+          TurnDays: 5,
+          ReadyDays: 5,
+          Author: "zombie-v4-user",
+          IsFirstTimer: true,
+          FirstTimerVersion: 4,
+        },
+        // #852: 5日前・検索候補内・v5 (MEMBER) -> 軽量バッチで privileged-or-bot へ降格＆v6昇格
+        {
+          Type: "sample",
+          Number: 852,
+          Title: "PR 852 (v5 MEMBER)",
+          CreatedAt: new Date(now.getTime() - 6 * dayMs).toISOString(),
+          LatestCommittedDate: new Date(now.getTime() - 6 * dayMs).toISOString(),
+          CommitCount: 1,
+          ReadyAt: new Date(now.getTime() - 6 * dayMs).toISOString(),
+          MergedAt: new Date(now.getTime() - 5 * dayMs).toISOString(),
+          TotalDays: 1,
+          TurnDays: 1,
+          ReadyDays: 1,
+          Author: "asklar",
+          IsFirstTimer: true,
+          FirstTimerVersion: 5,
+        },
+        // #853: 4日前・検索候補内・v5 (CONTRIBUTOR) -> 軽量バッチで v6 昇格・IsFirstTimer: true 維持
+        {
+          Type: "sample",
+          Number: 853,
+          Title: "PR 853 (v5 CONTRIBUTOR)",
+          CreatedAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+          LatestCommittedDate: new Date(now.getTime() - 20 * dayMs).toISOString(),
+          CommitCount: 1,
+          ReadyAt: new Date(now.getTime() - 20 * dayMs).toISOString(),
+          MergedAt: new Date(now.getTime() - 4 * dayMs).toISOString(),
+          TotalDays: 16,
+          TurnDays: 16,
+          ReadyDays: 16,
+          Author: "normal-ft",
+          IsFirstTimer: true,
+          FirstTimerVersion: 5,
+        },
+      ];
+      writeFileSync(cachePath, serializeSampleCacheEntries(initialEntries), "utf-8");
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            return {
+              totalCount: 2,
+              items: [
+                {
+                  number: 852,
+                  title: "PR 852",
+                  html_url: "https://github.com/test/repo/pull/852",
+                  created_at: new Date(now.getTime() - 6 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                  author: "asklar",
+                  pull_request: { merged_at: new Date(now.getTime() - 5 * dayMs).toISOString() },
+                },
+                {
+                  number: 853,
+                  title: "PR 853",
+                  html_url: "https://github.com/test/repo/pull/853",
+                  created_at: new Date(now.getTime() - 20 * dayMs).toISOString(),
+                  updated_at: new Date(now.getTime() - 4 * dayMs).toISOString(),
+                  author: "normal-ft",
+                  pull_request: { merged_at: new Date(now.getTime() - 4 * dayMs).toISOString() },
+                },
+              ],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: labels.map((l) => l.name),
+              commitCount: 1,
+              commits: [
+                { oid: "o1", messageHeadline: "init", committedDate: "2026-11-01T00:00:00Z" },
+              ],
+            };
+          }
+          throw new Error(`Unexpected PR #${num}`);
+        },
+        getIssueTimeline: async () =>
+          labels.map((l) => ({
+            event: "labeled",
+            created_at: "2026-11-01T00:00:00Z",
+            label: { name: l.name },
+          })),
+        getPullRequestSampleData: async () => {
+          throw new Error("v5 キャッシュは単体サンプル再取得しないはず");
+        },
+        graphql: async (query: string) => {
+          const nums = [...query.matchAll(/pullRequest\(number:\s*(\d+)\)/g)].map((m) =>
+            Number(m[1]),
+          );
+          const repo: Record<string, unknown> = {};
+          nums.forEach((num, idx) => {
+            repo[`p_${idx}`] =
+              num === 852
+                ? { author: { __typename: "User", login: "asklar" }, authorAssociation: "MEMBER" }
+                : {
+                    author: { __typename: "User", login: "normal-ft" },
+                    authorAssociation: "CONTRIBUTOR",
+                  };
+          });
+          return { repository: repo };
+        },
+      } as unknown as GitHubApiClient;
+
+      const logs: string[] = [];
+      const { snapshot } = await runProgressCli(
+        {
+          ...options,
+          now,
+          cachePath,
+          fetchBudget: 10,
+          fetchLimit: 100,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+          metadataRefreshBudget: 10,
+          cacheRetentionDays: 120,
+        },
+        client,
+        (m) => logs.push(m),
+      );
+
+      // 軽量バッチ補完の降格結果が即座に snapshot の初回提出者統計へ反映されている（#852 除外で #853 のみ）
+      expect(snapshot?.FirstTimerSampleCount).toBe(1);
+      expect(snapshot?.FirstTimerMedianDays).toBe(16.0);
+
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      expect(savedCache.find((e) => e.Number === 850)).toBeUndefined();
+      expect(savedCache.find((e) => e.Number === 851)).toBeUndefined();
+
+      const c852 = savedCache.find((e) => e.Number === 852);
+      expect(c852?.Type === "sample" && c852.IsFirstTimer).toBeFalse();
+      expect(c852?.Type === "sample" && c852.FirstTimerReason).toBe("privileged-or-bot");
+      expect(c852?.Type === "sample" && c852.FirstTimerVersion).toBe(6);
+
+      const c853 = savedCache.find((e) => e.Number === 853);
+      expect(c853?.Type === "sample" && c853.IsFirstTimer).toBeTrue();
+      expect(c853?.Type === "sample" && c853.AuthorAssociation).toBe("CONTRIBUTOR");
+      expect(c853?.Type === "sample" && c853.FirstTimerVersion).toBe(6);
+
+      const logText = logs.join("\n");
+      expect(logText).toContain(
+        "キャッシュ自己修復 : TTL削除 1 件・検索外旧版削除 1 件・軽量メタデータ補完 2 件（うち特権/Bot降格 1 件）",
+      );
+      expect(logText).toContain(
+        "キャッシュ世代     : 全 2 件（最新: 2 / 中間版: 0 / 要再計測旧版: 0 / skipped: 0 / 直近90日 補完待ち: 0 件）",
+      );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

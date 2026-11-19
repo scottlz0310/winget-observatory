@@ -19,7 +19,12 @@ import {
   isFirstTimerCandidate,
   isStaleCandidate,
 } from "../domain/depths";
-import { DEFAULT_AUTHOR_MERGED_BATCH_SIZE, resolveAuthorMergedCounts } from "../domain/first-timer";
+import {
+  DEFAULT_AUTHOR_MERGED_BATCH_SIZE,
+  hasValidatedReadyVersion,
+  isPrivilegedOrBotAuthor,
+  resolveAuthorMergedCounts,
+} from "../domain/first-timer";
 import { DAY_MS } from "../domain/formatters";
 import {
   calculateFirstReviewMainstreamFrontier,
@@ -658,11 +663,19 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
           continue;
         }
         if (entry.Type === "sample") {
-          if (entry.IsFirstTimer === true) {
+          if (!hasValidatedReadyVersion(entry.FirstTimerVersion)) {
+            continue;
+          }
+          const privilegedOrBot = isPrivilegedOrBotAuthor({
+            author: entry.Author,
+            authorType: entry.AuthorType,
+            authorAssociation: entry.AuthorAssociation,
+          });
+          if (privilegedOrBot || entry.IsFirstTimer === false) {
+            knownNonFirstTimerNumbers.add(entry.Number);
+          } else if (entry.IsFirstTimer === true) {
             cachedFirstTimerNumbers.push(entry.Number);
             cachedFirstTimerSet.add(entry.Number);
-          } else if (entry.IsFirstTimer === false) {
-            knownNonFirstTimerNumbers.add(entry.Number);
           }
         } else if (entry.Reason === "not-first-timer-candidate") {
           knownNonFirstTimerNumbers.add(entry.Number);

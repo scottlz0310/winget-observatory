@@ -1666,7 +1666,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
         ReadyDays: 44,
         Author: "cached-ft",
         IsFirstTimer: true,
-        FirstTimerVersion: 4,
+        FirstTimerVersion: 5,
       })}\n`,
       "utf-8",
     );
@@ -1856,7 +1856,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           Author: "known-repeater",
           IsFirstTimer: false,
           FirstTimerReason: "lifetime-merged",
-          FirstTimerVersion: 4,
+          FirstTimerVersion: 5,
         }),
       ].join("\n"),
       "utf-8",
@@ -2094,5 +2094,133 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     expect(batchSizesSeen).toEqual([2, 1]);
     expect(frontier.CohortCount).toBe(3);
     expect(frontier.MedianCreatedAt).toBe("2026-10-05T00:00:00.000Z");
+  });
+
+  test("fetchFirstReviewMainstreamFrontier は merged-samples.jsonl の v4 以下を無視し、MEMBER/Bot キャッシュを除外して処理する", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "winget-mainstream-cache-guard-"));
+    const samplesPath = join(tempDir, "merged-samples.jsonl");
+    const now = new Date("2026-11-17T00:00:00Z");
+
+    writeFileSync(
+      samplesPath,
+      [
+        // #981: v4 ゾンビ (IsFirstTimer: true) -> バージョン不足でキャッシュショートカットから無視される
+        JSON.stringify({
+          Type: "sample",
+          Number: 981,
+          Title: "v4 Zombie 981",
+          CreatedAt: "2026-10-01T00:00:00Z",
+          LatestCommittedDate: "2026-10-01T00:00:00Z",
+          CommitCount: 1,
+          ReadyAt: "2026-10-01T01:00:00Z",
+          MergedAt: "2026-11-14T00:00:00Z",
+          TotalDays: 44,
+          TurnDays: 44,
+          ReadyDays: 44,
+          Author: "zombie-user",
+          IsFirstTimer: true,
+          FirstTimerVersion: 4,
+        }),
+        // #982: v5 MEMBER (IsFirstTimer: true) -> 特権ロールのため除外（knownNonFirstTimer 扱い）
+        JSON.stringify({
+          Type: "sample",
+          Number: 982,
+          Title: "Member 982",
+          CreatedAt: "2026-11-10T00:00:00Z",
+          LatestCommittedDate: "2026-11-10T00:00:00Z",
+          CommitCount: 1,
+          ReadyAt: "2026-11-10T01:00:00Z",
+          MergedAt: "2026-11-15T00:00:00Z",
+          TotalDays: 5,
+          TurnDays: 5,
+          ReadyDays: 5,
+          Author: "asklar",
+          AuthorAssociation: "MEMBER",
+          IsFirstTimer: true,
+          FirstTimerVersion: 5,
+        }),
+        // #983: v6 有効な初回提出者 -> 採用
+        JSON.stringify({
+          Type: "sample",
+          Number: 983,
+          Title: "Valid 983",
+          CreatedAt: "2026-10-10T00:00:00Z",
+          LatestCommittedDate: "2026-10-10T00:00:00Z",
+          CommitCount: 1,
+          ReadyAt: "2026-10-10T01:00:00Z",
+          MergedAt: "2026-11-15T00:00:00Z",
+          TotalDays: 36,
+          TurnDays: 36,
+          ReadyDays: 36,
+          Author: "valid-ft",
+          AuthorType: "User",
+          AuthorAssociation: "CONTRIBUTOR",
+          IsFirstTimer: true,
+          FirstTimerVersion: 6,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const requestedBatches: number[][] = [];
+      const mockClient = {
+        graphql: async <T>(query: string): Promise<T> => {
+          if (query.includes("SearchInterventionLightCandidates")) {
+            return {
+              search: {
+                issueCount: 0,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            } as unknown as T;
+          }
+          if (query.includes("GetPullRequestInterventionBatch")) {
+            const nums = [...query.matchAll(/pullRequest\(number:\s*(\d+)\)/g)].map((m) =>
+              Number(m[1]),
+            );
+            requestedBatches.push(nums);
+            return {
+              repository: {
+                pr0: {
+                  number: 983,
+                  title: "Valid 983",
+                  url: "https://github.com/microsoft/winget-pkgs/pull/983",
+                  state: "MERGED",
+                  createdAt: "2026-10-10T00:00:00Z",
+                  updatedAt: "2026-11-15T00:00:00Z",
+                  author: { __typename: "User", login: "valid-ft" },
+                  authorAssociation: "CONTRIBUTOR",
+                  commits: { totalCount: 1 },
+                  reviews: {
+                    nodes: [
+                      {
+                        author: { __typename: "User", login: "stephengillie" },
+                        state: "APPROVED",
+                        submittedAt: "2026-11-15T00:00:00Z",
+                      },
+                    ],
+                  },
+                },
+              },
+            } as unknown as T;
+          }
+          return {} as T;
+        },
+      } as unknown as GitHubApiClient;
+
+      const frontier = await fetchFirstReviewMainstreamFrontier({
+        client: mockClient,
+        repository: "microsoft/winget-pkgs",
+        now,
+        samplesPath,
+      });
+
+      expect(requestedBatches).toEqual([[983]]);
+      expect(frontier.CohortCount).toBe(1);
+      expect(frontier.MedianCreatedAt).toBe("2026-10-10T00:00:00.000Z");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

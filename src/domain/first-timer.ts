@@ -12,6 +12,16 @@ export const MIN_WAIVED_READY_VERSION = 3;
 /** Validation-Guide 阻害ラベル化を反映した ReadyAt / ReadyDays を持つ最低バージョン */
 export const MIN_VALIDATION_GUIDE_READY_VERSION = 5;
 
+/**
+ * 判定バージョンが、タイムライン・ReadyAt 再計測不要な最低基準を満たしているか判定する。
+ */
+export function hasValidatedReadyVersion(
+  version: number | undefined,
+  minReadyVersion: number = MIN_VALIDATION_GUIDE_READY_VERSION,
+): boolean {
+  return version !== undefined && version >= minReadyVersion;
+}
+
 const PRIVILEGED_AUTHOR_ASSOCIATIONS = new Set(["MEMBER", "OWNER", "COLLABORATOR"]);
 
 /**
@@ -143,6 +153,132 @@ export function parseAuthorMergedCounts(
 
 /** 生涯マージ件数バッチ照会の既定チャンクサイズ（Search alias 過負荷によるセカンダリレート制限抑制のため 15） */
 export const DEFAULT_AUTHOR_MERGED_BATCH_SIZE = 15;
+
+/** 作者メタデータ一括取得（alias クエリ）の既定チャンクサイズ */
+export const DEFAULT_AUTHOR_METADATA_BATCH_SIZE = 50;
+
+export interface PullRequestAuthorMetadata {
+  author?: string;
+  authorType?: string;
+  authorAssociation?: string;
+}
+
+/**
+ * 複数 PR の author（__typename, login）と authorAssociation を 1 クエリで取得する
+ * GraphQL alias クエリを構築する。
+ */
+export function buildPullRequestAuthorMetadataQuery(
+  repository: string,
+  prNumbers: readonly number[],
+): string {
+  const slashIndex = repository.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === repository.length - 1 || prNumbers.length === 0) {
+    return "";
+  }
+  const owner = repository.slice(0, slashIndex).replace(/[^a-zA-Z0-9\-_.]/g, "");
+  const name = repository.slice(slashIndex + 1).replace(/[^a-zA-Z0-9\-_.]/g, "");
+  if (!owner || !name) {
+    return "";
+  }
+
+  const aliases = prNumbers.map((num, index) => {
+    if (!Number.isInteger(num) || num <= 0) {
+      throw new RangeError(`PR 番号は正の整数を指定してください: ${num}`);
+    }
+    return `    p_${index}: pullRequest(number: ${num}) {\n      author {\n        __typename\n        login\n      }\n      authorAssociation\n    }`;
+  });
+
+  return `query {\n  repository(owner: "${owner}", name: "${name}") {\n${aliases.join("\n")}\n  }\n}`;
+}
+
+export interface PullRequestAuthorMetadataQueryResponse {
+  repository?: Record<
+    string,
+    | {
+        author?: {
+          __typename?: string | null;
+          login?: string | null;
+        } | null;
+        authorAssociation?: string | null;
+      }
+    | null
+    | undefined
+  > | null;
+}
+
+/**
+ * GraphQL alias 応答から PR 番号ごとの作者メタデータマップを復元する。
+ * pullRequest ノードが null（未取得・存在しない等）の番号はマップに含めない。
+ */
+export function parsePullRequestAuthorMetadata(
+  prNumbers: readonly number[],
+  data: PullRequestAuthorMetadataQueryResponse | undefined,
+): Map<number, PullRequestAuthorMetadata> {
+  const result = new Map<number, PullRequestAuthorMetadata>();
+  const repoNode = data?.repository;
+  if (!repoNode) {
+    return result;
+  }
+
+  for (let i = 0; i < prNumbers.length; i++) {
+    const num = prNumbers[i];
+    const prNode = repoNode[`p_${i}`];
+    if (!prNode) continue;
+
+    result.set(num, {
+      ...(prNode.author?.login ? { author: String(prNode.author.login) } : {}),
+      ...(prNode.author?.__typename ? { authorType: String(prNode.author.__typename) } : {}),
+      ...(prNode.authorAssociation ? { authorAssociation: String(prNode.authorAssociation) } : {}),
+    });
+  }
+
+  return result;
+}
+
+export type PullRequestAuthorMetadataQueryExecutor = (
+  query: string,
+) => Promise<PullRequestAuthorMetadataQueryResponse | undefined>;
+
+export interface ResolvePullRequestAuthorMetadataOptions {
+  /** 1 バッチあたりの最大 PR 数（既定: 50） */
+  batchSize?: number;
+}
+
+/**
+ * 指定された PR 番号群について、作者メタデータ（author / authorType / authorAssociation）を
+ * チャンク分割の GraphQL alias クエリで一括解決する。
+ */
+export async function resolvePullRequestAuthorMetadata(
+  repository: string,
+  prNumbers: readonly number[],
+  executeGraphql: PullRequestAuthorMetadataQueryExecutor,
+  options: ResolvePullRequestAuthorMetadataOptions = {},
+): Promise<Map<number, PullRequestAuthorMetadata>> {
+  const result = new Map<number, PullRequestAuthorMetadata>();
+  if (!repository) {
+    return result;
+  }
+
+  const batchSize = options.batchSize ?? DEFAULT_AUTHOR_METADATA_BATCH_SIZE;
+  if (!Number.isInteger(batchSize) || batchSize <= 0) {
+    throw new RangeError(`batchSize は 1 以上の整数を指定してください: ${batchSize}`);
+  }
+
+  const uniqueNumbers = Array.from(new Set(prNumbers.filter((n) => Number.isInteger(n) && n > 0)));
+  for (let i = 0; i < uniqueNumbers.length; i += batchSize) {
+    const batch = uniqueNumbers.slice(i, i + batchSize);
+    const query = buildPullRequestAuthorMetadataQuery(repository, batch);
+    if (!query) continue;
+
+    const data = await executeGraphql(query);
+    const parsed = parsePullRequestAuthorMetadata(batch, data);
+    for (const [num, meta] of parsed) {
+      result.set(num, meta);
+    }
+  }
+
+  return result;
+}
 
 export type AuthorMergedCountQueryExecutor = (
   query: string,
