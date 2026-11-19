@@ -19,6 +19,7 @@ import {
   DEFAULT_AUTHOR_MERGED_BATCH_SIZE,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
+  isPrivilegedOrBotAuthor,
   MIN_VALIDATION_GUIDE_READY_VERSION,
   resolveAuthorMergedCounts,
   shouldReevaluateAuthorFirstTimer,
@@ -228,6 +229,10 @@ async function fetchUncachedCandidateSample(
       turnDays: round2(turnDays),
       days: round2(readyDays),
       author: sampleData.author ?? cand.author,
+      ...(sampleData.authorType !== undefined ? { authorType: sampleData.authorType } : {}),
+      ...(sampleData.authorAssociation !== undefined
+        ? { authorAssociation: sampleData.authorAssociation }
+        : {}),
       firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
     };
 
@@ -262,6 +267,32 @@ function syncFirstTimerMetadataToCache(
   }
   cacheIndex.set(sample.number, updated);
   return true;
+}
+
+/**
+ * 特権ロール（MEMBER / OWNER / COLLABORATOR）または Bot のサンプルを初回対象外（privileged-or-bot）として確定する。
+ */
+function markPrivilegedOrBotAuthors(
+  samples: MergedCandidateSample[],
+  cacheIndex: Map<number, SampleCacheEntry>,
+): boolean {
+  let modified = false;
+
+  for (const s of samples) {
+    if (!isPrivilegedOrBotAuthor(s) || s.isFirstTimer === false) {
+      continue;
+    }
+    s.isFirstTimer = false;
+    s.firstTimerReason = "privileged-or-bot";
+    if (hasValidatedReadyVersion(s.firstTimerVersion)) {
+      s.firstTimerVersion = CURRENT_FIRST_TIMER_VERSION;
+    }
+    if (syncFirstTimerMetadataToCache(cacheIndex, s)) {
+      modified = true;
+    }
+  }
+
+  return modified;
 }
 
 /**
@@ -500,6 +531,9 @@ export async function orchestrateSampleCollection(
     }
 
     const authorCountCache = new Map<string, number>();
+    if (markPrivilegedOrBotAuthors(samples, cacheIndex)) {
+      cacheModified = true;
+    }
     if (markRecurringBatchAuthors(samples, candidateAuthorCounts, cacheIndex)) {
       cacheModified = true;
     }

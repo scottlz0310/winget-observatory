@@ -5,6 +5,7 @@ import {
   countCandidateAuthors,
   extractSingleHitCandidateLogins,
   isCandidateEligibleForFirstTimerDetail,
+  isPrivilegedOrBotAuthor,
   MIN_VALIDATION_GUIDE_READY_VERSION,
   MIN_WAIVED_READY_VERSION,
   parseAuthorMergedCounts,
@@ -275,6 +276,51 @@ describe("Domain: shouldReevaluateCachedSample", () => {
         authorCountInCandidates: 1,
       }),
     ).toBe(false);
+    expect(
+      shouldReevaluateCachedSample({
+        isFirstTimer: false,
+        firstTimerReason: "privileged-or-bot",
+        firstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+        commitCount: 1,
+        authorCountInCandidates: 1,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("Domain: isPrivilegedOrBotAuthor", () => {
+  test.each([
+    ["MEMBER は除外", { author: "asklar", authorType: "User", authorAssociation: "MEMBER" }, true],
+    [
+      "OWNER は除外",
+      { author: "owner-user", authorType: "User", authorAssociation: "OWNER" },
+      true,
+    ],
+    [
+      "COLLABORATOR は除外",
+      { author: "collab", authorType: "User", authorAssociation: "COLLABORATOR" },
+      true,
+    ],
+    ["小文字 member も正規化して除外", { author: "ms-dev", authorAssociation: "member" }, true],
+    [
+      "authorType=Bot は除外",
+      { author: "wingetbot", authorType: "Bot", authorAssociation: "NONE" },
+      true,
+    ],
+    ["login が [bot] 末尾は除外", { author: "renovate[bot]", authorType: "User" }, true],
+    [
+      "マージ後の一般コントリビューター (CONTRIBUTOR) は許容",
+      { author: "newbie", authorType: "User", authorAssociation: "CONTRIBUTOR" },
+      false,
+    ],
+    [
+      "FIRST_TIME_CONTRIBUTOR / NONE は許容",
+      { author: "first-user", authorType: "User", authorAssociation: "FIRST_TIME_CONTRIBUTOR" },
+      false,
+    ],
+    ["属性未設定は許容", { author: "legacy-user" }, false],
+  ])("%s", (_label, input, expected) => {
+    expect(isPrivilegedOrBotAuthor(input)).toBe(expected);
   });
 });
 

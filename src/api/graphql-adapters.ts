@@ -176,6 +176,8 @@ export function adaptGraphQLToPrSampleData(
     commitCount,
     latestCommittedDate,
     ...(node.author?.login ? { author: node.author.login } : {}),
+    ...(node.author?.__typename ? { authorType: String(node.author.__typename) } : {}),
+    ...(node.authorAssociation ? { authorAssociation: String(node.authorAssociation) } : {}),
     timeline,
   };
 }

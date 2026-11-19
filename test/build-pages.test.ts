@@ -1696,30 +1696,45 @@ describe("buildDashboard: 過去実績との比較", () => {
       totalDays: number,
       isFirstTimer: boolean,
       title = `New package: Pkg.${num}`,
+      overrides: Record<string, unknown> = {},
     ) => ({
       Type: "sample",
       Number: num,
       Title: title,
-      CreatedAt: "2026-08-01T00:00:00Z",
-      LatestCommittedDate: "2026-08-01T01:00:00.000Z",
+      CreatedAt: "2026-10-01T00:00:00Z",
+      LatestCommittedDate: "2026-10-01T01:00:00.000Z",
       CommitCount: 2,
-      ReadyAt: "2026-08-01T02:00:00.000Z",
-      MergedAt: "2026-08-02T00:00:00.000Z",
+      ReadyAt: "2026-10-01T02:00:00.000Z",
+      MergedAt: "2026-10-02T00:00:00.000Z",
       TotalDays: totalDays,
       TurnDays: Math.max(0.1, totalDays - 0.1),
-      ReadyDays: Math.max(0.05, totalDays - 0.2),
+      ReadyDays: Math.max(0.5, totalDays - 0.2),
       Author: `author-${num}`,
+      AuthorType: "User",
+      AuthorAssociation: "CONTRIBUTOR",
       IsFirstTimer: isFirstTimer,
+      FirstTimerVersion: 6,
+      ...overrides,
     });
 
-    // 11 件の初回提出者 + 常連 + 後続行上書き（#410001 は 0.05 -> false 除外、#410002 は false -> 0.14 採用）
+    // 11 件の初回提出者 + 常連 + 後続行上書き + 不純物（v4ゾンビ / ReadyDays<0.5 / 90日窓外 / MEMBER / Bot）
     const cacheLines = [
-      makeCacheSample(410001, 0.05, true, "Should be excluded later"),
+      makeCacheSample(410001, 0.8, true, "Should be excluded later"),
       makeCacheSample(410002, 50.0, false, "Old false row"),
-      makeCacheSample(410003, 0.2, false, "Regular contributor"),
+      makeCacheSample(410003, 0.8, false, "Regular contributor"),
+      makeCacheSample(410004, 0.04, true, "v4 zombie cache", { FirstTimerVersion: 4 }),
+      makeCacheSample(410005, 0.6, true, "Bypass ready < 0.5", { ReadyDays: 0.1 }),
+      makeCacheSample(410006, 0.7, true, "Too old createdAt (>90d)", {
+        CreatedAt: "2026-07-01T00:00:00Z",
+      }),
+      makeCacheSample(410007, 0.6, true, "Privileged member", { AuthorAssociation: "MEMBER" }),
+      makeCacheSample(410008, 0.6, true, "Bot account", { AuthorType: "Bot" }),
       ...Array.from({ length: 11 }, (_, idx) => makeCacheSample(420000 + idx, idx + 1.0, true)),
-      makeCacheSample(410001, 0.05, false, "Disqualified in later line"),
-      makeCacheSample(410002, 0.14, true, "Fastest updated entry"),
+      makeCacheSample(410001, 0.8, false, "Disqualified in later line"),
+      makeCacheSample(410002, 0.8, true, "Fastest updated entry", {
+        CommitCount: 3,
+        ReadyDays: 0.7,
+      }),
     ];
     writeFileSync(
       join(dataDir, "merged-samples.jsonl"),
@@ -1730,7 +1745,9 @@ describe("buildDashboard: 過去実績との比較", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
-      const rankingPos = html.indexOf("🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）");
+      const rankingPos = html.indexOf(
+        "🏆 初回提出者 最速マージランキング（直近 90 日起票 TOP 10）",
+      );
       const samplesPos = html.indexOf("🧪 比較に使ったサンプル");
       expect(rankingPos).toBeGreaterThan(-1);
       expect(samplesPos).toBeGreaterThan(rankingPos);
@@ -1739,6 +1756,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       // 該当全件数 = 11 + 1 (#410002) = 12 件のうち TOP 10
       expect(rankingSection).toContain("全 12 件");
       expect(rankingSection).toContain("上位 10 件");
+      expect(rankingSection).toContain("成立後 0.5 日以上・v5 以上・特権ロール/Bot 除外");
       expect(rankingSection).toContain("<th>順位</th>");
       expect(rankingSection).toContain("<th>PR 番号</th>");
       expect(rankingSection).toContain("<th>コミット数</th>");
@@ -1753,14 +1771,15 @@ describe("buildDashboard: 過去実績との比較", () => {
         'href="https://github.com/microsoft/winget-pkgs/pull/410002"',
       );
       expect(rankingSection).toContain("Fastest updated entry");
-      expect(rankingSection).toContain("0.1 日");
-      expect(rankingSection).toContain("2026-08-01(土) 09:00");
-      expect(rankingSection).toContain("2026-08-02(日) 09:00");
-      // 後続行で除外された #410001、常連 #410003、11位以下 (#420009, #420010) は含まれない
-      expect(rankingSection).not.toContain("#410001");
-      expect(rankingSection).not.toContain("#410003");
-      expect(rankingSection).not.toContain("#420009");
-      expect(rankingSection).not.toContain("#420010");
+      expect(rankingSection).toContain("0.8 日");
+      expect(rankingSection).toContain("2026-10-01(木) 09:00");
+      expect(rankingSection).toContain("2026-10-02(金) 09:00");
+      // 後続行で除外された #410001、常連 #410003、不純物 #410004〜#410008、11位以下 (#420009, #420010) は含まれない
+      for (const excluded of [
+        410001, 410003, 410004, 410005, 410006, 410007, 410008, 420009, 420010,
+      ]) {
+        expect(rankingSection).not.toContain(`#${excluded}`);
+      }
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1774,7 +1793,7 @@ describe("buildDashboard: 過去実績との比較", () => {
 
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
-      expect(html).toContain("🏆 初回提出者 最速マージランキング（蓄積全件 TOP 10）");
+      expect(html).toContain("🏆 初回提出者 最速マージランキング（直近 90 日起票 TOP 10）");
       expect(html).toContain("対象の初回提出者サンプルがまだありません");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

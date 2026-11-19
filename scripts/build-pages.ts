@@ -155,7 +155,13 @@ export function buildDashboard(options: BuildOptions): { htmlPath: string } {
     [],
   );
   const progress = enrichProgressSamplesWithCache(rawProgress, sampleCacheEntries);
-  const firstTimerFastestRanking = extractFirstTimerFastestRanking(sampleCacheEntries);
+  const progressTimestampMs = progress?.Timestamp ? Date.parse(progress.Timestamp) : Number.NaN;
+  const rankingNow = Number.isFinite(progressTimestampMs)
+    ? new Date(progressTimestampMs)
+    : new Date();
+  const firstTimerFastestRanking = extractFirstTimerFastestRanking(sampleCacheEntries, {
+    now: rankingNow,
+  });
 
   const html = generateDashboardHtml({
     progress,

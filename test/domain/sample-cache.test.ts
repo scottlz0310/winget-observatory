@@ -46,34 +46,42 @@ describe("Domain: サンプルキャッシュの変換", () => {
     expect(fromCachedSample(toCachedSample(sample))).toEqual(sample);
   });
 
-  test("Author と IsFirstTimer を含むサンプルも相互変換できる", () => {
+  test("Author / AuthorType / AuthorAssociation と IsFirstTimer を含むサンプルも相互変換できる", () => {
     const sampleWithFirstTimer: MergedCandidateSample = {
       ...sample,
       author: "firstTimerUser",
+      authorType: "User",
+      authorAssociation: "CONTRIBUTOR",
       isFirstTimer: true,
       firstTimerReason: undefined,
-      firstTimerVersion: 2,
+      firstTimerVersion: 6,
     };
     const cached = toCachedSample(sampleWithFirstTimer);
     expect(cached.Author).toBe("firstTimerUser");
+    expect(cached.AuthorType).toBe("User");
+    expect(cached.AuthorAssociation).toBe("CONTRIBUTOR");
     expect(cached.IsFirstTimer).toBe(true);
-    expect(cached.FirstTimerVersion).toBe(2);
+    expect(cached.FirstTimerVersion).toBe(6);
     expect(fromCachedSample(cached)).toEqual(sampleWithFirstTimer);
   });
 
-  test("FirstTimerReason（timeline-blocking 等）を含む除外サンプルも相互変換できる", () => {
+  test("FirstTimerReason（timeline-blocking / privileged-or-bot 等）を含む除外サンプルも相互変換できる", () => {
     const sampleExcluded: MergedCandidateSample = {
       ...sample,
       author: "blockedUser",
+      authorType: "User",
+      authorAssociation: "MEMBER",
       isFirstTimer: false,
-      firstTimerReason: "timeline-blocking",
-      firstTimerVersion: 2,
+      firstTimerReason: "privileged-or-bot",
+      firstTimerVersion: 6,
     };
     const cached = toCachedSample(sampleExcluded);
     expect(cached.Author).toBe("blockedUser");
+    expect(cached.AuthorType).toBe("User");
+    expect(cached.AuthorAssociation).toBe("MEMBER");
     expect(cached.IsFirstTimer).toBe(false);
-    expect(cached.FirstTimerReason).toBe("timeline-blocking");
-    expect(cached.FirstTimerVersion).toBe(2);
+    expect(cached.FirstTimerReason).toBe("privileged-or-bot");
+    expect(cached.FirstTimerVersion).toBe(6);
     expect(fromCachedSample(cached)).toEqual(sampleExcluded);
   });
 });
@@ -145,6 +153,16 @@ describe("Domain: parseSampleCache", () => {
       "Author が文字列ではありません",
     ],
     [
+      "AuthorType が文字列ではない",
+      `${JSON.stringify(entry({ AuthorType: 123 }))}\n`,
+      "AuthorType が文字列ではありません",
+    ],
+    [
+      "AuthorAssociation が文字列ではない",
+      `${JSON.stringify(entry({ AuthorAssociation: true }))}\n`,
+      "AuthorAssociation が文字列ではありません",
+    ],
+    [
       "IsFirstTimer が真偽値ではない",
       `${JSON.stringify(entry({ IsFirstTimer: "true" }))}\n`,
       "IsFirstTimer が真偽値ではありません",
@@ -197,54 +215,218 @@ describe("Domain: indexSampleCache", () => {
 });
 
 describe("Domain: extractFirstTimerFastestRanking", () => {
-  test("Type=sample のみ対象・Number重複は後続行優先・IsFirstTimer=true のみを TotalDays 昇順 TOP 10 で抽出する", () => {
+  const fixedNow = new Date("2026-11-19T00:00:00Z");
+
+  test("Type=sample のみ対象・Number重複は後続行優先・有効な初回提出者を TotalDays 昇順 TOP 10 で抽出する（複数コミットも許容）", () => {
     const firstTimerEntries: CachedSampleEntry[] = Array.from({ length: 12 }, (_, idx) =>
       entry({
         Number: 100 + idx,
         Title: `FT #${100 + idx}`,
+        CommitCount: (idx % 3) + 1, // 1〜3 コミットの通常調整ケースを混在させる
         TotalDays: 20 - idx, // 20, 19, ..., 9 -> 昇順では 111(9日), 110(10日), ..., 102(18日) が上位10件
         TurnDays: 1.5,
         ReadyDays: 1.0,
         IsFirstTimer: true,
-        MergedAt: "2026-08-01T00:00:00.000Z", // 30日超の古いデータも含める
+        FirstTimerVersion: 5,
+        CreatedAt: "2026-10-15T00:00:00.000Z", // 90日窓内
+        MergedAt: "2026-11-01T00:00:00.000Z",
       }),
     );
 
     const mixedEntries: SampleCacheEntry[] = [
       // 先に IsFirstTimer=true で記録されたが、後続行で false に再評価された -> 除外されること
-      entry({ Number: 201, Title: "Disqualified later", TotalDays: 0.1, IsFirstTimer: true }),
-      // 先に IsFirstTimer=false だったが、後続行で true かつ TotalDays=0.5 に更新 -> 採用され1位になること
-      entry({ Number: 202, Title: "Promoted later old", TotalDays: 50, IsFirstTimer: false }),
+      entry({
+        Number: 201,
+        Title: "Disqualified later",
+        TotalDays: 0.6,
+        ReadyDays: 0.6,
+        IsFirstTimer: true,
+        FirstTimerVersion: 6,
+      }),
+      // 先に IsFirstTimer=false だったが、後続行で true かつ TotalDays=0.8 に更新 -> 採用され1位になること
+      entry({
+        Number: 202,
+        Title: "Promoted later old",
+        TotalDays: 50,
+        ReadyDays: 1.0,
+        IsFirstTimer: false,
+        FirstTimerVersion: 5,
+      }),
       // skipped 行、IsFirstTimer=false、IsFirstTimer 未設定 -> 除外
       { Type: "skipped", Number: 203, MergedAt: "2026-10-01T00:00:00Z", Reason: "no-ready" },
-      entry({ Number: 204, TotalDays: 0.2, IsFirstTimer: false }),
-      entry({ Number: 205, TotalDays: 0.3 }), // IsFirstTimer undefined
+      entry({
+        Number: 204,
+        TotalDays: 0.8,
+        ReadyDays: 0.8,
+        IsFirstTimer: false,
+        FirstTimerVersion: 6,
+      }),
+      entry({ Number: 205, TotalDays: 0.8, ReadyDays: 0.8, FirstTimerVersion: 6 }), // IsFirstTimer undefined
       ...firstTimerEntries,
       // 後続行の上書き
-      entry({ Number: 201, Title: "Disqualified now", TotalDays: 0.1, IsFirstTimer: false }),
-      entry({ Number: 202, Title: "Promoted later new", TotalDays: 0.5, IsFirstTimer: true }),
+      entry({
+        Number: 201,
+        Title: "Disqualified now",
+        TotalDays: 0.6,
+        ReadyDays: 0.6,
+        IsFirstTimer: false,
+        FirstTimerVersion: 6,
+      }),
+      entry({
+        Number: 202,
+        Title: "Promoted later new",
+        TotalDays: 0.8,
+        ReadyDays: 0.7,
+        CommitCount: 2,
+        AuthorAssociation: "CONTRIBUTOR",
+        IsFirstTimer: true,
+        FirstTimerVersion: 6,
+      }),
     ];
 
-    const ranking = extractFirstTimerFastestRanking(mixedEntries);
+    const ranking = extractFirstTimerFastestRanking(mixedEntries, { now: fixedNow });
+    expect(ranking.windowDays).toBe(90);
     expect(ranking.totalCount).toBe(13); // firstTimerEntries 12件 + #202 1件
     expect(ranking.items).toHaveLength(10);
     expect(ranking.items.map((item) => item.Number)).toEqual([
       202, 111, 110, 109, 108, 107, 106, 105, 104, 103,
     ]);
     expect(ranking.items[0].Title).toBe("Promoted later new");
-    expect(ranking.items[0].TotalDays).toBe(0.5);
+    expect(ranking.items[0].TotalDays).toBe(0.8);
+    expect(ranking.items[0].CommitCount).toBe(2);
   });
 
   test("同点の TotalDays は TurnDays / ReadyDays / Number の順で安定ソートし、空入力時は 0 件を返す", () => {
     const tied: SampleCacheEntry[] = [
-      entry({ Number: 302, TotalDays: 2.0, TurnDays: 1.5, ReadyDays: 1.0, IsFirstTimer: true }),
-      entry({ Number: 301, TotalDays: 2.0, TurnDays: 1.5, ReadyDays: 1.0, IsFirstTimer: true }),
-      entry({ Number: 303, TotalDays: 2.0, TurnDays: 1.0, ReadyDays: 1.0, IsFirstTimer: true }),
+      entry({
+        Number: 302,
+        TotalDays: 2.0,
+        TurnDays: 1.5,
+        ReadyDays: 1.0,
+        IsFirstTimer: true,
+        FirstTimerVersion: 5,
+      }),
+      entry({
+        Number: 301,
+        TotalDays: 2.0,
+        TurnDays: 1.5,
+        ReadyDays: 1.0,
+        IsFirstTimer: true,
+        FirstTimerVersion: 5,
+      }),
+      entry({
+        Number: 303,
+        TotalDays: 2.0,
+        TurnDays: 1.0,
+        ReadyDays: 1.0,
+        IsFirstTimer: true,
+        FirstTimerVersion: 5,
+      }),
     ];
 
-    const ranking = extractFirstTimerFastestRanking(tied);
+    const ranking = extractFirstTimerFastestRanking(tied, { now: fixedNow });
     expect(ranking.totalCount).toBe(3);
     expect(ranking.items.map((i) => i.Number)).toEqual([303, 301, 302]);
-    expect(extractFirstTimerFastestRanking([])).toEqual({ totalCount: 0, items: [] });
+    expect(extractFirstTimerFastestRanking([], { now: fixedNow })).toEqual({
+      totalCount: 0,
+      items: [],
+      windowDays: 90,
+    });
+  });
+
+  test.each([
+    ["v4 ゾンビキャッシュ (FirstTimerVersion: 4)", { Number: 401, FirstTimerVersion: 4 }],
+    [
+      "バージョン未設定 (FirstTimerVersion: undefined)",
+      { Number: 402, FirstTimerVersion: undefined },
+    ],
+    ["バイパス即マージ (ReadyDays: 0.49)", { Number: 403, ReadyDays: 0.49, FirstTimerVersion: 6 }],
+    ["バイパス即マージ (ReadyDays: 0)", { Number: 404, ReadyDays: 0, FirstTimerVersion: 6 }],
+    [
+      "90日起票窓外 (91日前起票)",
+      { Number: 405, CreatedAt: "2026-08-20T00:00:00Z", FirstTimerVersion: 6 },
+    ],
+    ["不正な CreatedAt", { Number: 406, CreatedAt: "invalid-date", FirstTimerVersion: 6 }],
+    [
+      "特権ロール MEMBER",
+      { Number: 407, Author: "asklar", AuthorAssociation: "MEMBER", FirstTimerVersion: 5 },
+    ],
+    [
+      "特権ロール OWNER",
+      { Number: 408, Author: "owner", AuthorAssociation: "OWNER", FirstTimerVersion: 5 },
+    ],
+    [
+      "特権ロール COLLABORATOR",
+      { Number: 409, Author: "collab", AuthorAssociation: "COLLABORATOR", FirstTimerVersion: 5 },
+    ],
+    [
+      "Bot (AuthorType: Bot)",
+      { Number: 410, Author: "helper", AuthorType: "Bot", FirstTimerVersion: 5 },
+    ],
+    ["Bot (login 末尾 [bot])", { Number: 411, Author: "renovate[bot]", FirstTimerVersion: 5 }],
+  ])("不純物はランキングから除外される: %s", (_name, overrides) => {
+    const target = entry({
+      TotalDays: 0.6,
+      TurnDays: 0.6,
+      ReadyDays: 0.6,
+      CreatedAt: "2026-10-20T00:00:00Z",
+      IsFirstTimer: true,
+      ...overrides,
+    });
+    const ranking = extractFirstTimerFastestRanking([target], { now: fixedNow });
+    expect(ranking.totalCount).toBe(0);
+    expect(ranking.items).toEqual([]);
+  });
+
+  test("境界値（ReadyDays=0.5 / v5 / ちょうど90日前 / CONTRIBUTOR / 複数コミット）とオプション上書きが正しく動作する", () => {
+    const boundaryEntries: SampleCacheEntry[] = [
+      // ちょうど 90 日前（2026-08-21T00:00:00Z）かつ ReadyDays === 0.5, v5, CONTRIBUTOR, 3コミット -> 採用
+      entry({
+        Number: 501,
+        CommitCount: 3,
+        TotalDays: 1.0,
+        TurnDays: 1.0,
+        ReadyDays: 0.5,
+        CreatedAt: "2026-08-21T00:00:00Z",
+        Author: "contrib",
+        AuthorType: "User",
+        AuthorAssociation: "CONTRIBUTOR",
+        IsFirstTimer: true,
+        FirstTimerVersion: 5,
+      }),
+      // 90日より古い（120日前）
+      entry({
+        Number: 502,
+        CommitCount: 1,
+        TotalDays: 0.7,
+        TurnDays: 0.7,
+        ReadyDays: 0.6,
+        CreatedAt: "2026-07-22T00:00:00Z",
+        IsFirstTimer: true,
+        FirstTimerVersion: 6,
+      }),
+    ];
+
+    const defaultRanking = extractFirstTimerFastestRanking(boundaryEntries, { now: fixedNow });
+    expect(defaultRanking.totalCount).toBe(1);
+    expect(defaultRanking.items.map((i) => i.Number)).toEqual([501]);
+
+    // windowDays: 0 で期間無制限、limit: 1 で上限変更
+    const allTimeRanking = extractFirstTimerFastestRanking(boundaryEntries, {
+      now: fixedNow,
+      windowDays: 0,
+      limit: 1,
+    });
+    expect(allTimeRanking.windowDays).toBe(0);
+    expect(allTimeRanking.totalCount).toBe(2);
+    expect(allTimeRanking.items.map((i) => i.Number)).toEqual([502]);
+  });
+
+  test("不正なオプション（負の windowDays / 負の minReadyDays / 無効な now）は RangeError を投げる", () => {
+    expect(() => extractFirstTimerFastestRanking([], { windowDays: -1 })).toThrow(RangeError);
+    expect(() => extractFirstTimerFastestRanking([], { minReadyDays: -0.1 })).toThrow(RangeError);
+    expect(() => extractFirstTimerFastestRanking([], { now: new Date("invalid-date") })).toThrow(
+      RangeError,
+    );
   });
 });
