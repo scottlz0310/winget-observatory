@@ -6,7 +6,6 @@
 import type { DepthsRow, DepthsSnapshot, PrInterventionSummary } from "../models/depths";
 import type {
   FirstReviewForecast,
-  FirstReviewForecastStatus,
   FirstTimerFrontierSample,
   ForecastUnavailableReason,
   LifetimeForecast,
@@ -289,8 +288,6 @@ export function calculateStaleFrontierForecast(
 }
 
 export interface FirstReviewForecastOptions {
-  /** 速度を測る期間の上限（時間） */
-  windowHours?: number;
   /** 基準 PR 自身の介入判定結果（人間レビュー・手動コメント・第三者アサインの OR） */
   targetIntervention?: PrInterventionSummary | null;
   /** 基準 PR 自身の第三者 Assignees（旧データ互換フォールバック用） */
@@ -321,16 +318,15 @@ function resolveTargetIntervention(
 }
 
 /**
- * 主戦場ライン（直近 7 日間初回人間介入コホートの起票日時中央値）の進みから、
- * 基準 PR へ初回レビュー（メンテナの最初の介入）が到達する見込み日を予想する。
- * モード識別子が異なる混入サンプルは除外して速度スパイクを防ぐ。
+ * 主戦場ライン（直近 7 日間初回人間介入コホートの起票日時中央値）の現在位置を評価し、
+ * 基準 PR との起票日差に基づくスナップショット情報および定常ペース（1.0 日/日）換算目安を返す。
+ * 短期実測速度による割り算外挿はノイズ・時間軸逆転を招くため行わない。
  */
 export function calculateFirstReviewForecast(
   samples: MainstreamFrontierSample[],
   targetCreatedMs: number | null,
   options: FirstReviewForecastOptions = {},
 ): FirstReviewForecast {
-  const windowHours = options.windowHours ?? DEFAULT_WINDOW_HOURS;
   const targetIntervention = resolveTargetIntervention(options);
   const targetAssignees = targetIntervention?.ThirdPartyAssignees ?? [];
   const hasTargetIntervention = Boolean(targetIntervention?.Intervened);
@@ -356,11 +352,6 @@ export function calculateFirstReviewForecast(
       targetAssignees,
       steadyEtaDays: hasTargetIntervention ? 0 : null,
       steadyDateMs: null,
-      observedSpeed: null,
-      observedEtaDays: hasTargetIntervention ? 0 : null,
-      observedDateMs: null,
-      windowHours: 0,
-      observedUnavailable: "no-samples",
     };
   }
 
@@ -372,7 +363,6 @@ export function calculateFirstReviewForecast(
     mergedCount: latest.mergedCount,
   };
   const lagDays = round1((latest.timestampMs - latest.createdMs) / DAY_MS);
-  const velocity = measureFrontierVelocity(validSamples, (s) => s.createdMs, windowHours);
 
   if (targetCreatedMs === null || Number.isNaN(targetCreatedMs)) {
     return {
@@ -384,11 +374,6 @@ export function calculateFirstReviewForecast(
       targetAssignees,
       steadyEtaDays: hasTargetIntervention ? 0 : null,
       steadyDateMs: hasTargetIntervention ? latest.timestampMs : null,
-      observedSpeed: velocity.observedSpeed,
-      observedEtaDays: hasTargetIntervention ? 0 : null,
-      observedDateMs: hasTargetIntervention ? latest.timestampMs : null,
-      windowHours: velocity.windowHours,
-      observedUnavailable: hasTargetIntervention ? velocity.unavailableReason : "no-target",
     };
   }
 
@@ -407,11 +392,6 @@ export function calculateFirstReviewForecast(
       targetAssignees,
       steadyEtaDays: 0,
       steadyDateMs: latest.timestampMs,
-      observedSpeed: velocity.observedSpeed,
-      observedEtaDays: 0,
-      observedDateMs: latest.timestampMs,
-      windowHours: velocity.windowHours,
-      observedUnavailable: velocity.unavailableReason,
     };
   }
 
@@ -425,36 +405,11 @@ export function calculateFirstReviewForecast(
       targetAssignees,
       steadyEtaDays: 0,
       steadyDateMs: latest.timestampMs,
-      observedSpeed: velocity.observedSpeed,
-      observedEtaDays: 0,
-      observedDateMs: latest.timestampMs,
-      windowHours: velocity.windowHours,
-      observedUnavailable: velocity.unavailableReason,
     };
   }
 
-  if (velocity.rawSpeed === null) {
-    const status: FirstReviewForecastStatus = velocity.unavailableReason ?? "insufficient-window";
-    return {
-      status,
-      frontier,
-      lagDays,
-      gapDays,
-      targetIntervention,
-      targetAssignees,
-      steadyEtaDays,
-      steadyDateMs,
-      observedSpeed: null,
-      observedEtaDays: null,
-      observedDateMs: null,
-      windowHours: velocity.windowHours,
-      observedUnavailable: velocity.unavailableReason,
-    };
-  }
-
-  const observedEtaDays = round1(gapMs / DAY_MS / velocity.rawSpeed);
   return {
-    status: "forecasted",
+    status: "steady",
     frontier,
     lagDays,
     gapDays,
@@ -462,11 +417,6 @@ export function calculateFirstReviewForecast(
     targetAssignees,
     steadyEtaDays,
     steadyDateMs,
-    observedSpeed: velocity.observedSpeed,
-    observedEtaDays,
-    observedDateMs: latest.timestampMs + observedEtaDays * DAY_MS,
-    windowHours: velocity.windowHours,
-    observedUnavailable: null,
   };
 }
 

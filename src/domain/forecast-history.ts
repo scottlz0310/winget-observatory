@@ -3,26 +3,53 @@
  * 外部 I/O を行わず、src/models の型定義と同一ドメイン内のモジュールだけに依存する。
  */
 
+import type { ForecastBandSnapshot } from "../models/forecast-band";
 import type { ForecastComparison } from "../models/forecast-comparison";
 import type {
+  ForecastBandRecord,
+  ForecastBandScore,
   ForecastHistoryLine,
   ForecastKeyScore,
   ForecastOutcomeRecord,
   ForecastRecord,
   ForecastScore,
 } from "../models/forecast-history";
-import { DAY_MS, round1 } from "./formatters";
+import { DAY_MS, round1, toJstEpochDay } from "./formatters";
 
 /** 現行 2 仮説・モデルの表示順（採点表の並び）。廃止された update-order は採点対象外 */
 const KEY_ORDER = ["rank-velocity", "creation-order:median", "creation-order:p75"];
 
+function toIsoOrNull(ms: number | undefined | null): string | null {
+  return ms !== undefined && ms !== null && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
 /**
- * 比較結果を、履歴に追記する 1 件の記録にする。
- * 予想日が 1 件も無い観測は記録する意味が無いため null を返す。
+ * 統合処理バンドスナップショットを、forecast-history.jsonl 保存用の表現へ変換する。
+ * すべてのバンド区分が欠損している場合は undefined を返す。
+ */
+export function toForecastBandRecord(band: ForecastBandSnapshot): ForecastBandRecord | undefined {
+  if (!band.front && !band.mainstream && !band.bottom) {
+    return undefined;
+  }
+  return {
+    FrontDate: toIsoOrNull(band.front?.dateMs),
+    MainstreamStartDate: toIsoOrNull(band.mainstream?.range.startMs),
+    MainstreamEndDate: toIsoOrNull(band.mainstream?.range.endMs),
+    MainstreamMedianDate: toIsoOrNull(band.mainstream?.medianDateMs),
+    BottomDate: toIsoOrNull(band.bottom?.dateMs),
+    OverallStartDate: toIsoOrNull(band.overallRange?.startMs),
+    OverallEndDate: toIsoOrNull(band.overallRange?.endMs),
+  };
+}
+
+/**
+ * 比較結果と処理バンド結果を、履歴に追記する 1 件の記録にする。
+ * 予想日も処理バンドも 1 件も無い観測は記録する意味が無いため null を返す。
  */
 export function toForecastRecord(
   comparison: ForecastComparison,
   meta: { repository: string; targetPr: number; timestamp: string },
+  band?: ForecastBandSnapshot,
 ): ForecastRecord | null {
   const estimates = comparison.hypotheses.flatMap((h) =>
     h.estimates.map((e) => ({
@@ -33,13 +60,15 @@ export function toForecastRecord(
       Primary: e.primary,
     })),
   );
-  if (estimates.length === 0) return null;
+  const bandRecord = band ? toForecastBandRecord(band) : undefined;
+  if (estimates.length === 0 && !bandRecord) return null;
   return {
     Type: "forecast",
     Timestamp: meta.timestamp,
     Repository: meta.repository,
     TargetPr: meta.targetPr,
     Estimates: estimates,
+    ...(bandRecord ? { Band: bandRecord } : {}),
   };
 }
 
@@ -96,8 +125,104 @@ export function findOutcome(
   );
 }
 
+function parseFiniteMs(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function resolveOverallSpanMs(band: ForecastBandRecord): [number, number] | null {
+  const startMs = parseFiniteMs(band.OverallStartDate);
+  const endMs = parseFiniteMs(band.OverallEndDate);
+  if (startMs !== null && endMs !== null) {
+    return [Math.min(startMs, endMs), Math.max(startMs, endMs)];
+  }
+  const candidates = [
+    parseFiniteMs(band.FrontDate),
+    parseFiniteMs(band.MainstreamStartDate),
+    parseFiniteMs(band.MainstreamEndDate),
+    parseFiniteMs(band.BottomDate),
+  ].filter((v): v is number => v !== null);
+  if (candidates.length === 0) return null;
+  return [Math.min(...candidates), Math.max(...candidates)];
+}
+
+function scoreBandForecasts(
+  forecasts: ForecastRecord[],
+  mergedAtMs: number,
+): ForecastBandScore | undefined {
+  const mergedDay = toJstEpochDay(mergedAtMs);
+  let mainstreamCount = 0;
+  let mainstreamHitCount = 0;
+  let lastInMainstreamBand: boolean | null = null;
+  const medianErrors: number[] = [];
+
+  let overallCount = 0;
+  let overallHitCount = 0;
+
+  for (const forecast of forecasts) {
+    const band = forecast.Band;
+    if (!band) continue;
+
+    const mStartMs = parseFiniteMs(band.MainstreamStartDate);
+    const mEndMs = parseFiniteMs(band.MainstreamEndDate);
+    if (mStartMs !== null && mEndMs !== null) {
+      const startDay = toJstEpochDay(Math.min(mStartMs, mEndMs));
+      const endDay = toJstEpochDay(Math.max(mStartMs, mEndMs));
+      const hit = mergedDay >= startDay && mergedDay <= endDay;
+      mainstreamCount++;
+      if (hit) mainstreamHitCount++;
+      lastInMainstreamBand = hit;
+    }
+
+    const medianMs = parseFiniteMs(band.MainstreamMedianDate);
+    if (medianMs !== null) {
+      medianErrors.push((medianMs - mergedAtMs) / DAY_MS);
+    }
+
+    const overallSpan = resolveOverallSpanMs(band);
+    if (overallSpan !== null) {
+      const startDay = toJstEpochDay(overallSpan[0]);
+      const endDay = toJstEpochDay(overallSpan[1]);
+      overallCount++;
+      if (mergedDay >= startDay && mergedDay <= endDay) {
+        overallHitCount++;
+      }
+    }
+  }
+
+  if (mainstreamCount === 0 && overallCount === 0 && medianErrors.length === 0) {
+    return undefined;
+  }
+
+  const medianMeanErrorDays =
+    medianErrors.length > 0
+      ? round1(medianErrors.reduce((sum, v) => sum + v, 0) / medianErrors.length)
+      : null;
+  const medianMeanAbsErrorDays =
+    medianErrors.length > 0
+      ? round1(medianErrors.reduce((sum, v) => sum + Math.abs(v), 0) / medianErrors.length)
+      : null;
+  const medianLastErrorDays =
+    medianErrors.length > 0 ? round1(medianErrors[medianErrors.length - 1]) : null;
+
+  return {
+    count: mainstreamCount,
+    mainstreamHitCount,
+    mainstreamHitRatePct:
+      mainstreamCount > 0 ? round1((mainstreamHitCount / mainstreamCount) * 100) : 0,
+    lastInMainstreamBand,
+    medianMeanErrorDays,
+    medianMeanAbsErrorDays,
+    medianLastErrorDays,
+    overallCount,
+    overallHitCount,
+    overallHitRatePct: overallCount > 0 ? round1((overallHitCount / overallCount) * 100) : 0,
+  };
+}
+
 /**
- * マージ結果が記録された基準 PR ごとに、各仮説・モデルの予想の当たり具合を採点する。
+ * マージ結果が記録された基準 PR ごとに、各仮説・モデルおよび処理バンドの予想の当たり具合を採点する。
  * 誤差は「予想日 − 実際のマージ日」（日）。マージ後に記録された予想は採点しない。
  */
 export function scoreForecasts(history: ForecastHistoryLine[]): ForecastScore[] {
@@ -147,12 +272,15 @@ export function scoreForecasts(history: ForecastHistoryLine[]): ForecastScore[] 
       }))
       .sort((a, b) => orderOf(a.key) - orderOf(b.key));
 
+    const bandScore = scoreBandForecasts(forecasts, mergedAtMs);
+
     scores.push({
       repository: outcome.Repository,
       targetPr: outcome.TargetPr,
       mergedAtMs,
       observationCount: forecasts.length,
       keys,
+      ...(bandScore ? { bandScore } : {}),
     });
   }
 

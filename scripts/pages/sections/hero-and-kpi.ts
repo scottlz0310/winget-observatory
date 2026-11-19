@@ -212,12 +212,7 @@ const FIRST_REVIEW_BADGE_MAP: Record<FirstReviewForecastStatus, { label: string;
       style: "background: #dcfce7; color: #15803d;",
     },
     reached: { label: "到達済み", style: "background: #dcfce7; color: #15803d;" },
-    forecasted: { label: "実測速度ベース", style: "background: #e0f2fe; color: #0369a1;" },
-    "insufficient-window": {
-      label: "履歴蓄積中（定常目安）",
-      style: "background: #fef3c7; color: #b45309;",
-    },
-    "no-progress": { label: "停滞中（定常目安）", style: "background: #fee2e2; color: #b91c1c;" },
+    steady: { label: "現在位置・定常目安", style: "background: #e0f2fe; color: #0369a1;" },
     "no-samples": {
       label: "データ不足",
       style: "background: var(--code-bg); color: var(--text-muted);",
@@ -257,45 +252,20 @@ function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
         detailText:
           "主戦場ライン（直近7日初回人間介入コホートの起票日時中央値）が基準 PR の起票日以降に到達しています（基準 PR の起票日ラインに到達済み・残り 0 日）。",
       };
-    case "forecasted": {
-      const dateStr =
-        forecast.observedDateMs !== null ? formatJstDate(forecast.observedDateMs) : "-";
-      const etaStr =
-        forecast.observedEtaDays !== null ? formatEtaDays(forecast.observedEtaDays) : "-";
-      const steadyRef =
-        forecast.steadyDateMs !== null && forecast.steadyEtaDays !== null
-          ? ` / 定常ペース（1 日/日）目安: ${formatJstDate(forecast.steadyDateMs)}（${formatEtaDays(forecast.steadyEtaDays)}）`
-          : "";
+    case "steady": {
+      const dateStr = forecast.steadyDateMs !== null ? formatJstDate(forecast.steadyDateMs) : "-";
+      const etaStr = forecast.steadyEtaDays !== null ? formatEtaDays(forecast.steadyEtaDays) : "-";
       return {
         headlineHtml: `${escapeHtml(dateStr)} <span style="font-size: 1rem; font-weight: normal; color: var(--text-muted);">${escapeHtml(etaStr)}</span>`,
-        detailText: `直近 ${forecast.windowHours} 時間の主戦場ライン進行速度（${forecast.observedSpeed} 日/日）に基づく見込みです${steadyRef}。`,
-      };
-    }
-    case "insufficient-window": {
-      const steadyNote =
-        forecast.steadyDateMs !== null && forecast.steadyEtaDays !== null
-          ? `定常ペース（1 日/日）仮定の目安: ${formatJstDate(forecast.steadyDateMs)}（${formatEtaDays(forecast.steadyEtaDays)}）。`
-          : "";
-      return {
-        headlineHtml: `<span style="color: var(--text-muted);">実測予想日の算出待ち</span>`,
-        detailText: `観測期間が 6 時間未満のため実測進行速度を算出できません。${steadyNote}`,
-      };
-    }
-    case "no-progress": {
-      const steadyNote =
-        forecast.steadyDateMs !== null && forecast.steadyEtaDays !== null
-          ? `定常ペース（1 日/日）仮定の目安: ${formatJstDate(forecast.steadyDateMs)}（${formatEtaDays(forecast.steadyEtaDays)}）。`
-          : "";
-      return {
-        headlineHtml: `<span style="color: var(--warning);">停滞中（実測算出不能）</span>`,
-        detailText: `直近 ${forecast.windowHours} 時間で主戦場ラインが進んでいないため実測予想日を出せません。${steadyNote}`,
+        detailText:
+          "現在の主戦場ライン（7日初回介入コホート起票日時中央値）と基準 PR との起票日差に基づく定常ペース（1.0 日/日）換算の現在地目安です。",
       };
     }
     case "no-target":
       return {
         headlineHtml: `<span style="color: var(--text-muted);">基準 PR 起票日時が不明</span>`,
         detailText:
-          "基準 PR の起票日時が記録されていないため、到達予想日を算出できません（主戦場ラインの現在位置のみ表示）。",
+          "基準 PR の起票日時が記録されていないため、起票日差および定常換算を算出できません（主戦場ラインの現在位置のみ表示）。",
       };
     case "no-samples":
       return {
@@ -307,7 +277,7 @@ function renderFirstReviewHeadline(forecast: FirstReviewForecast): {
 }
 
 /**
- * 基準 PR への初回レビュー到達予想パネルを描画する（主戦場ライン方式・最終マージ予想の 2 仮説とは独立した指標）
+ * 基準 PR への初回レビュー現在地パネルを描画する（主戦場ラインスナップショット＋定常換算）
  */
 export function renderFirstReviewForecastPanel(forecast: FirstReviewForecast): string {
   const badge = FIRST_REVIEW_BADGE_MAP[forecast.status];
@@ -335,24 +305,22 @@ export function renderFirstReviewForecastPanel(forecast: FirstReviewForecast): s
         : "基準 PR の起票日 − 主戦場ライン中央値"
       : "基準 PR の起票日時が不明";
 
-  const speedValueHtml =
-    forecast.observedSpeed !== null
-      ? `${forecast.observedSpeed} <span style="font-size: 0.9rem; font-weight: normal;">日/日</span>`
+  const steadyValueHtml =
+    forecast.steadyDateMs !== null
+      ? `${escapeHtml(formatJstDate(forecast.steadyDateMs))}`
       : `<span style="color: var(--text-muted);">-</span>`;
-  const speedSubHtml =
-    forecast.observedSpeed !== null
-      ? `直近 ${forecast.windowHours} 時間の実測（中央値推移）`
-      : forecast.observedUnavailable === "no-progress"
-        ? `直近 ${forecast.windowHours} 時間で進行なし`
-        : forecast.observedUnavailable === "insufficient-window"
-          ? "6 時間以上の観測間隔が貯まると算出"
-          : "データ不足（速度の算出待ち）";
+  const steadySubHtml =
+    forecast.steadyEtaDays !== null
+      ? forecast.steadyEtaDays === 0
+        ? "到達・介入済み（残り 0 日）"
+        : `定常 1.0 日/日換算（${formatEtaDays(forecast.steadyEtaDays)}）`
+      : "データ不足";
 
   return `
     <section class="card forecast-panel" style="border-left: 4px solid #0ea5e9; margin-top: 1rem; margin-bottom: 0.5rem;" aria-label="初回レビュー到達予想">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.4rem;">
         <div class="card-title" style="margin-bottom: 0; font-weight: 600; color: var(--text-color);">
-          👀 初回レビュー到達予想（主戦場ライン・7日初回介入コホート中央値）
+          👀 主戦場ライン現在位置（7日初回介入コホート中央値）
         </div>
         <span class="badge" style="${badge.style}">${escapeHtml(badge.label)}</span>
       </div>
@@ -370,13 +338,13 @@ export function renderFirstReviewForecastPanel(forecast: FirstReviewForecast): s
           <div class="card-subtext">${gapSubHtml}</div>
         </div>
         <div style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 0.65rem 0.9rem;">
-          <div style="font-size: 0.75rem; color: var(--text-muted);">主戦場ラインの進行速度</div>
-          <div style="font-size: 1.1rem; font-weight: 700;">${speedValueHtml}</div>
-          <div class="card-subtext">${escapeHtml(speedSubHtml)}</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">定常ペース（1.0 日/日）換算</div>
+          <div style="font-size: 1.1rem; font-weight: 700;">${steadyValueHtml}</div>
+          <div class="card-subtext">${escapeHtml(steadySubHtml)}</div>
         </div>
       </div>
       <div class="card-subtext">
-        ※ 純粋ボット・作成者本人・自動検証ログ（Deterministic automation）を除き、直近 7 日間に初めて人間介入（人間レビュー・手動コメント・第三者 Assignees）が入った初回提出者（New-Package）PR 群（オープン中＋直近マージ済み）の起票日時中央値を主戦場ラインとしています。既存の「予想マージ日（2 仮説）」とは独立した初回介入の目安です。
+        ※ 純粋ボット・作成者本人・自動検証ログ（Deterministic automation）を除き、直近 7 日間に初めて人間介入（人間レビュー・手動コメント・第三者 Assignees）が入った初回提出者（New-Package）PR 群（オープン中＋直近マージ済み）の起票日時中央値を主戦場ラインとしています。短期実測速度による割り算外挿は行いません。
       </div>
     </section>`;
 }

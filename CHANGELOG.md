@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 統合処理バンドモデル（前線・本命中央値・大底）の算出および履歴記録・答え合わせバンド評価を追加（#113）:
+  - `src/models/forecast-band.ts`, `src/domain/forecast-band.ts`: `buildForecastBandSource` と `calculateForecastBand` を新設し、前線（初回提出者コホート P50〜優等生の底）、本命中央値バンド（作成順全体 P50・初回提出者 P75・① 順位消化 168h・主戦場ライン定常換算の統合帯）、大底（健康的大底の定常換算）および全体レンジを統一算出（基準 PR が介入済み・到達済みの場合は `mainstream-steady` を除外し、欠損・到達済み時は安全に縮退・クランプ）
+  - `src/models/forecast-history.ts`, `src/domain/forecast-history.ts`, `src/cli/record-forecast.ts`: `ForecastRecord` への `Band`（`ForecastBandRecord`）記録と、`scoreForecasts` による JST 暦日基準の本命中央値バンド的中率・全体レンジ包含率・中央値誤差採点（`ForecastBandScore`）を追加（既存 `Estimates` のみ・旧 `update-order` 履歴との後方互換を維持）
+
+### Changed
+
+- 主戦場ライン（`calculateFirstReviewForecast`）から短期実測速度による割り算外挿を廃止し、現在の作業位置スナップショット＋定常ペース（1.0 日/日）換算へ変更（#113）:
+  - `src/models/forecast.ts`, `src/domain/forecast.ts`, `scripts/pages/sections/hero-and-kpi.ts`: `FirstReviewForecast` の `observedSpeed` / `observedEtaDays` / `observedDateMs` 外挿経路を廃止して `status: "steady"` へ統合整理し、短期進行速度のブレによる時間軸逆転を解消
+  - `src/domain/formatters.ts`, `src/domain/intervention.ts`, `scripts/pages/sections/stats-and-samples.ts`: `toJstEpochDay` と `calculateNumericMedian` を共通フォーマッタへ集約
+
 ## [0.5.0] - 2026-11-18
 
 ### Added

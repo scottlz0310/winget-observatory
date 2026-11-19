@@ -11,7 +11,7 @@ import type {
   PrInterventionReviewInput,
   PrInterventionSummary,
 } from "../models/depths";
-import { DAY_MS, round1 } from "./formatters";
+import { calculateNumericMedian, DAY_MS, round1 } from "./formatters";
 
 /** 主戦場ライン（初回介入コホート中央値）のモード識別子 */
 export const FIRST_REVIEW_MAINSTREAM_MODE = "cohort-median-7d" as const;
@@ -454,19 +454,6 @@ export interface FirstReviewCohortCandidate {
   createdAt: string;
   mergedAt?: string | null;
   intervention: PrInterventionSummary;
-}
-
-/**
- * 数値配列の中央値を計算する（偶数件は中央 2 件の平均、0 件は null）。
- */
-function calculateNumericMedian(sortedValues: readonly number[]): number | null {
-  const n = sortedValues.length;
-  if (n === 0) return null;
-  const mid = Math.floor(n / 2);
-  if (n % 2 === 1) {
-    return sortedValues[mid];
-  }
-  return (sortedValues[mid - 1] + sortedValues[mid]) / 2;
 }
 
 /**

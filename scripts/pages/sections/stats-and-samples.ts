@@ -5,8 +5,8 @@ import {
   DAY_MS,
   formatDateTimeWithDay,
   formatMonthDay,
-  JST_OFFSET_MS,
   round1,
+  toJstEpochDay,
 } from "../../../src/domain/formatters";
 import { getPercentile } from "../../../src/domain/progress";
 import type { ProgressSnapshotSample, ReferenceGuidance } from "../../../src/models/progress";
@@ -311,10 +311,6 @@ export function summarizeRecentSamplesPace(
     multiCommitCount: multiCommitSamples.length,
     multiCommitMedianDays: calcTotalDaysMedian(multiCommitSamples),
   };
-}
-
-function toJstEpochDay(timeMs: number): number {
-  return Math.floor((timeMs + JST_OFFSET_MS) / DAY_MS);
 }
 
 /** `MM/DD → MM/DD` 形式の起票・マージ範囲と、基準 PR 起票日との JST 暦日差表記を算出する */
