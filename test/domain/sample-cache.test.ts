@@ -539,6 +539,7 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
         MergedAt: "2026-11-10T00:00:00Z",
         FirstTimerVersion: 5,
         IsFirstTimer: false,
+        FirstTimerReason: "lifetime-merged",
       }),
       entry({
         Number: 5,
@@ -600,6 +601,61 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
       intermediateCount: 2,
       currentCount: 1,
       windowRefreshRemainingCount: 1,
+    });
+  });
+
+  test("selectMetadataRefreshCandidates と summarizeSampleCacheVersions は再評価待ち（timeline-blocking 等）を補完対象から除外する", () => {
+    const fixedNow = new Date("2026-11-20T00:00:00Z");
+    const list: SampleCacheEntry[] = [
+      // タイムライン阻害中で再評価待ちの v5 -> 軽量補完で v6 昇格させてはいけない
+      entry({
+        Number: 10,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: false,
+        FirstTimerReason: "timeline-blocking",
+      }),
+      // 旧版複数コミット理由未確定（要再評価）の v5 -> 除外
+      entry({
+        Number: 11,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: false,
+        CommitCount: 3,
+      }),
+      // 初回提出者確定済みの v5 -> 補完対象
+      entry({
+        Number: 12,
+        MergedAt: "2026-11-18T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: true,
+        FirstTimerReason: "first-timer",
+      }),
+      // 常連理由確定済みの v5 -> 補完対象
+      entry({
+        Number: 13,
+        MergedAt: "2026-11-17T00:00:00Z",
+        FirstTimerVersion: 5,
+        IsFirstTimer: false,
+        FirstTimerReason: "lifetime-merged",
+      }),
+    ];
+
+    const picked = selectMetadataRefreshCandidates(list, {
+      now: fixedNow,
+      windowDays: 90,
+      budget: 10,
+    });
+    expect(picked.map((e) => e.Number)).toEqual([12, 13]);
+
+    expect(summarizeSampleCacheVersions(list, { now: fixedNow, windowDays: 90 })).toEqual({
+      totalUnique: 4,
+      sampleCount: 4,
+      skippedCount: 0,
+      legacyBeforeReadyCount: 2,
+      intermediateCount: 2,
+      currentCount: 0,
+      windowRefreshRemainingCount: 2,
     });
   });
 });

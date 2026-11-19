@@ -24,24 +24,34 @@ export interface CollectMergedCandidatesParams {
   maxPagesPerWindow?: number;
 }
 
+export interface CollectMergedCandidatesResult {
+  items: GitHubDetailedSearchItem[];
+  /**
+   * 全窓・全ページの走査が fetchLimit 打ち切りや空ページ途中終了なく完了したか。
+   * 検索対象外キャッシュの安全パージ判定に用いる。
+   */
+  complete: boolean;
+}
+
 interface WindowSlice {
   since: Date;
   until: Date;
 }
 
 /**
- * 探索期間内のマージ済み PR を GitHub Search API により全量走査する。
+ * 探索期間内のマージ済み PR を GitHub Search API により全量走査し、
+ * 収集結果と「全窓・全ページを打ち切りなく走査完了したか」の状態を返す。
  *
  * Search API の 1,000 件上限（100件/page × 10ページ）を回避するため、
  * 1 走査窓で 1,000 件を超過する過密期間については、未走査範囲を捨てずに
  * 時間範囲を二分（bisect）して再帰的に漏れなく走査する「動的二分窓走査方式」を採用する。
  *
  * @param params 探索パラメータ
- * @returns 収集されたマージ済み PR アイテム一覧（降順）
+ * @returns 収集されたマージ済み PR アイテム一覧（降順）と走査完了フラグ
  */
-export async function collectMergedCandidates(
+export async function collectMergedCandidatesWithStatus(
   params: CollectMergedCandidatesParams,
-): Promise<GitHubDetailedSearchItem[]> {
+): Promise<CollectMergedCandidatesResult> {
   const {
     client,
     repository,
@@ -55,11 +65,12 @@ export async function collectMergedCandidates(
   } = params;
 
   if (since.getTime() >= until.getTime() || fetchLimit <= 0) {
-    return [];
+    return { items: [], complete: false };
   }
 
   const candidates: GitHubDetailedSearchItem[] = [];
   const seenPrNumbers = new Set<number>();
+  let incomplete = false;
 
   // LIFO スタック: 新しい期間から先に処理するため、二分時は古い方を先に push し新しい方を後に push する
   const stack: WindowSlice[] = [{ since, until }];
@@ -114,18 +125,25 @@ export async function collectMergedCandidates(
     }
 
     if (!firstPage.items || firstPage.items.length === 0) {
+      incomplete = true;
       continue;
     }
 
     // 1,000 件以内に収まっている窓: 1 ページ目のアイテムを追加し、残りをページネーション取得
     const addItems = (items: GitHubDetailedSearchItem[]): boolean => {
       for (const item of items) {
-        if (candidates.length >= fetchLimit) return false;
+        if (candidates.length >= fetchLimit) {
+          incomplete = true;
+          return false;
+        }
         if (item.number !== targetPr && item.pull_request?.merged_at) {
           if (!seenPrNumbers.has(item.number)) {
             seenPrNumbers.add(item.number);
             candidates.push(item);
-            if (candidates.length >= fetchLimit) return false;
+            if (candidates.length >= fetchLimit) {
+              incomplete = true;
+              return false;
+            }
           }
         }
       }
@@ -153,6 +171,7 @@ export async function collectMergedCandidates(
       );
 
       if (!res.items || res.items.length === 0) {
+        incomplete = true;
         break;
       }
 
@@ -177,7 +196,13 @@ export async function collectMergedCandidates(
       const mid = new Date(midMs);
       stack.push({ since: sliceSince, until: mid });
       stack.push({ since: mid, until: sliceUntil });
+    } else if (hasNextPage) {
+      incomplete = true;
     }
+  }
+
+  if (stack.length > 0) {
+    incomplete = true;
   }
 
   // 降順ソートを保証
@@ -187,5 +212,21 @@ export async function collectMergedCandidates(
       new Date(a.pull_request?.merged_at ?? a.updated_at).getTime(),
   );
 
-  return candidates;
+  return {
+    items: candidates,
+    complete: !incomplete,
+  };
+}
+
+/**
+ * 探索期間内のマージ済み PR を GitHub Search API により全量走査する。
+ *
+ * @param params 探索パラメータ
+ * @returns 収集されたマージ済み PR アイテム一覧（降順）
+ */
+export async function collectMergedCandidates(
+  params: CollectMergedCandidatesParams,
+): Promise<GitHubDetailedSearchItem[]> {
+  const result = await collectMergedCandidatesWithStatus(params);
+  return result.items;
 }

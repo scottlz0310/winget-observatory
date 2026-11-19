@@ -36,7 +36,7 @@ import {
   orchestrateSampleCollection,
   refreshLegacyAuthorMetadata,
 } from "../domain/sample-collector";
-import { collectMergedCandidates } from "../domain/search-window";
+import { collectMergedCandidatesWithStatus } from "../domain/search-window";
 import { simulateReadySince } from "../domain/timeline";
 import type {
   ProgressHistoryRow,
@@ -494,7 +494,7 @@ export async function runProgressCli(
   const sinceDate = new Date(now.getTime() - maxLookbackDays * DAY_MS);
   const overallSinceDate = new Date(now.getTime() - options.lookbackDays * DAY_MS);
 
-  const candidates = await collectMergedCandidates({
+  const candidateScan = await collectMergedCandidatesWithStatus({
     client,
     repository: options.repository,
     since: sinceDate,
@@ -503,6 +503,7 @@ export async function runProgressCli(
     requiredLabels: REQUIRED_LABELS,
     fetchLimit: options.fetchLimit,
   });
+  const candidates = candidateScan.items;
 
   const rawCache = options.cachePath ? readSampleCache(options.cachePath) : [];
   const {
@@ -528,7 +529,7 @@ export async function runProgressCli(
 
   if (options.cachePath) {
     const scannedCandidateNumbers = new Set(candidates.map((c) => c.number));
-    const scanComplete = candidates.length > 0 && candidates.length < options.fetchLimit;
+    const scanComplete = candidateScan.complete && candidates.length > 0;
     const retentionDays = options.cacheRetentionDays ?? DEFAULT_SAMPLE_CACHE_RETENTION_DAYS;
     const pruned = pruneSampleCache(finalCache, {
       now,

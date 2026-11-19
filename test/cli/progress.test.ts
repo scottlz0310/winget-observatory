@@ -3328,4 +3328,141 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("不完全なページング応答（2ページ目が空）時は候補数が fetchLimit 未満でも検索対象外パージを実行しない（レビュー指摘回帰テスト）", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "progress-incomplete-scan-"));
+    const cachePath = join(tmpDir, "merged-samples.jsonl");
+    const dayMs = 24 * 60 * 60 * 1000;
+    const now = new Date("2026-11-20T00:00:00Z");
+
+    try {
+      const initialEntries: SampleCacheEntry[] = [
+        // 1ページ目から取得される新しめの v6 サンプル
+        {
+          Type: "sample",
+          Number: 860,
+          Title: "PR 860",
+          CreatedAt: new Date(now.getTime() - 10 * dayMs).toISOString(),
+          LatestCommittedDate: new Date(now.getTime() - 9 * dayMs).toISOString(),
+          CommitCount: 1,
+          ReadyAt: new Date(now.getTime() - 9 * dayMs).toISOString(),
+          MergedAt: new Date(now.getTime() - 5 * dayMs).toISOString(),
+          TotalDays: 5,
+          TurnDays: 4,
+          ReadyDays: 4,
+          Author: "user-860",
+          IsFirstTimer: false,
+          FirstTimerReason: "lifetime-merged",
+          FirstTimerVersion: 6,
+        },
+        // 2ページ目にあるはずの TTL 内正常 v4 キャッシュ（2ページ目が空応答でも誤削除されてはならない）
+        {
+          Type: "sample",
+          Number: 861,
+          Title: "PR 861",
+          CreatedAt: new Date(now.getTime() - 12 * dayMs).toISOString(),
+          LatestCommittedDate: new Date(now.getTime() - 11 * dayMs).toISOString(),
+          CommitCount: 1,
+          ReadyAt: new Date(now.getTime() - 11 * dayMs).toISOString(),
+          MergedAt: new Date(now.getTime() - 6 * dayMs).toISOString(),
+          TotalDays: 6,
+          TurnDays: 5,
+          ReadyDays: 5,
+          Author: "user-861",
+          IsFirstTimer: false,
+          FirstTimerVersion: 4,
+        },
+      ];
+      writeFileSync(cachePath, serializeSampleCacheEntries(initialEntries), "utf-8");
+
+      const client = {
+        ...buildClient(),
+        searchIssuesDetailed: async (
+          query: string,
+          _sort?: string,
+          _order?: string,
+          _perPage?: number,
+          page = 1,
+        ): Promise<GitHubDetailedSearchResult> => {
+          if (query.includes("is:merged") && !query.includes("created:<")) {
+            if (page === 1) {
+              return {
+                totalCount: 2,
+                pageInfo: { hasNextPage: true, endCursor: "c1" },
+                items: [
+                  {
+                    number: 860,
+                    title: "PR 860",
+                    html_url: "https://github.com/test/repo/pull/860",
+                    created_at: new Date(now.getTime() - 10 * dayMs).toISOString(),
+                    updated_at: new Date(now.getTime() - 5 * dayMs).toISOString(),
+                    author: "user-860",
+                    pull_request: { merged_at: new Date(now.getTime() - 5 * dayMs).toISOString() },
+                  },
+                ],
+              };
+            }
+            // 2ページ目が空配列（途中終了）
+            return {
+              totalCount: 2,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              items: [],
+            };
+          }
+          return (
+            buildClient().searchIssuesDetailed as (q: string) => Promise<GitHubDetailedSearchResult>
+          )(query);
+        },
+        getPullRequestDetails: async (_repo: string, num: number) => {
+          if (num === 500) {
+            return {
+              number: 500,
+              title: "Target PR",
+              url: "https://github.com/test/repo/pull/500",
+              state: "OPEN" as const,
+              isDraft: false,
+              createdAt: "2026-11-01T00:00:00Z",
+              updatedAt: "2026-11-01T00:00:00Z",
+              mergedAt: null,
+              closedAt: null,
+              labels: labels.map((l) => l.name),
+              commitCount: 1,
+              commits: [
+                { oid: "o1", messageHeadline: "init", committedDate: "2026-11-01T00:00:00Z" },
+              ],
+            };
+          }
+          throw new Error(`unexpected getPullRequestDetails(${num})`);
+        },
+        getIssueTimeline: async () =>
+          labels.map((l) => ({
+            event: "labeled",
+            created_at: "2026-11-01T00:00:00Z",
+            label: { name: l.name },
+          })),
+      } as unknown as GitHubApiClient;
+
+      await runProgressCli(
+        {
+          ...options,
+          now,
+          cachePath,
+          fetchBudget: 0,
+          fetchLimit: 100,
+          lookbackDays: 30,
+          firstTimerLookbackDays: 90,
+          metadataRefreshBudget: 0,
+          cacheRetentionDays: 120,
+        },
+        client,
+        () => {},
+      );
+
+      const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
+      expect(savedCache.find((e) => e.Number === 860)).toBeDefined();
+      expect(savedCache.find((e) => e.Number === 861)).toBeDefined();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

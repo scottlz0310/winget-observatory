@@ -14,6 +14,7 @@ import {
   hasValidatedReadyVersion,
   isPrivilegedOrBotAuthor,
   MIN_VALIDATION_GUIDE_READY_VERSION,
+  shouldReevaluateCachedSample,
 } from "./first-timer";
 import { DAY_MS } from "./formatters";
 
@@ -450,6 +451,20 @@ export function selectMetadataRefreshCandidates(
     if (!hasValidatedReadyVersion(version, minReadyVersion) || version >= targetVersion) {
       return false;
     }
+    // 初回判定の再評価（timeline-blocking 解除待ち等）が残っているレコードは
+    // 軽量メタデータ補完だけで最新版へ昇格すると再評価がスキップされるため除外する
+    if (
+      shouldReevaluateCachedSample({
+        isFirstTimer: entry.IsFirstTimer,
+        firstTimerReason: entry.FirstTimerReason,
+        firstTimerVersion: entry.FirstTimerVersion,
+        commitCount: entry.CommitCount,
+        authorCountInCandidates: 1,
+        author: entry.Author,
+      })
+    ) {
+      return false;
+    }
     if (windowDays > 0) {
       const mergedMs = Date.parse(entry.MergedAt);
       if (!Number.isFinite(mergedMs) || mergedMs < cutoffMs) {
@@ -475,9 +490,9 @@ export interface SampleCacheVersionSummary {
   totalUnique: number;
   sampleCount: number;
   skippedCount: number;
-  /** ReadyAt 再計測基準未満（v4 以下）のサンプル数 */
+  /** ReadyAt 再計測基準未満（v4 以下）または初回判定のフル再評価待ちのサンプル数 */
   legacyBeforeReadyCount: number;
-  /** タイムライン有効かつ最新未満（v5 等、軽量バッチ対象）のサンプル数 */
+  /** タイムライン再評価不要かつ最新未満（v5 等、軽量バッチ対象）のサンプル数 */
   intermediateCount: number;
   /** 最新バージョン以上のサンプル数 */
   currentCount: number;
@@ -526,10 +541,22 @@ export function summarizeSampleCacheVersions(
     if (!hasValidatedReadyVersion(version, minReadyVersion)) {
       legacyBeforeReadyCount++;
     } else if (version < targetVersion) {
-      intermediateCount++;
-      const mergedMs = Date.parse(entry.MergedAt);
-      if (windowDays === 0 || (Number.isFinite(mergedMs) && mergedMs >= cutoffMs)) {
-        windowRefreshRemainingCount++;
+      const requiresFirstTimerReeval = shouldReevaluateCachedSample({
+        isFirstTimer: entry.IsFirstTimer,
+        firstTimerReason: entry.FirstTimerReason,
+        firstTimerVersion: entry.FirstTimerVersion,
+        commitCount: entry.CommitCount,
+        authorCountInCandidates: 1,
+        author: entry.Author,
+      });
+      if (requiresFirstTimerReeval) {
+        legacyBeforeReadyCount++;
+      } else {
+        intermediateCount++;
+        const mergedMs = Date.parse(entry.MergedAt);
+        if (windowDays === 0 || (Number.isFinite(mergedMs) && mergedMs >= cutoffMs)) {
+          windowRefreshRemainingCount++;
+        }
       }
     } else {
       currentCount++;

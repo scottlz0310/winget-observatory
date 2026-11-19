@@ -660,13 +660,23 @@ export async function refreshLegacyAuthorMetadata(
       authorType: nextAuthorType,
       authorAssociation: nextAuthorAssociation,
     });
+    const requiresFirstTimerReeval =
+      !privilegedOrBot &&
+      shouldReevaluateCachedSample({
+        isFirstTimer: existing.IsFirstTimer,
+        firstTimerReason: existing.FirstTimerReason,
+        firstTimerVersion: existing.FirstTimerVersion,
+        commitCount: existing.CommitCount,
+        authorCountInCandidates: 1,
+        author: existing.Author,
+      });
 
     const updated: CachedSampleEntry = {
       ...existing,
       ...(nextAuthor !== undefined ? { Author: nextAuthor } : {}),
       ...(nextAuthorType !== undefined ? { AuthorType: nextAuthorType } : {}),
       ...(nextAuthorAssociation !== undefined ? { AuthorAssociation: nextAuthorAssociation } : {}),
-      FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
+      ...(requiresFirstTimerReeval ? {} : { FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION }),
     };
 
     if (privilegedOrBot) {

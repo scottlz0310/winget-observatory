@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   type CandidateSearchClient,
   collectMergedCandidates,
+  collectMergedCandidatesWithStatus,
 } from "../../src/domain/search-window";
 import type {
   GitHubDetailedSearchItem,
@@ -299,5 +300,113 @@ describe("collectMergedCandidates（カーソルスライド方式）", () => {
     expect(capturedQuery).toContain("draft:false");
     expect(capturedQuery).toContain('-label:"Needs-Author-Feedback"');
     expect(capturedQuery).toContain('-label:"Policy-Test-1.5"');
+  });
+
+  it("totalCount > 0 で途中ページや 1 ページ目が空のとき、また fetchLimit 到達時は complete: false を返す（レビュー指摘回帰テスト）", async () => {
+    const since = new Date("2026-10-01T00:00:00Z");
+    const until = new Date("2026-10-10T00:00:00Z");
+
+    // 1) 1ページ目 1件 + hasNextPage: true だが、2ページ目が空配列（不完全ページ）
+    const partialPageClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (
+        _query,
+        _sort,
+        _order,
+        _perPage,
+        page = 1,
+      ): Promise<GitHubDetailedSearchResult> => {
+        if (page === 1) {
+          return {
+            totalCount: 2,
+            pageInfo: { hasNextPage: true, endCursor: "c1" },
+            items: [createMockItem(501, "2026-10-08T00:00:00Z")],
+          };
+        }
+        return {
+          totalCount: 2,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          items: [],
+        };
+      },
+    };
+    const partialRes = await collectMergedCandidatesWithStatus({
+      client: partialPageClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 100,
+    });
+    expect(partialRes.items.map((i) => i.number)).toEqual([501]);
+    expect(partialRes.complete).toBeFalse();
+
+    // 2) totalCount > 0 だが 1ページ目が空配列
+    const emptyFirstClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => ({
+        totalCount: 2,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        items: [],
+      }),
+    };
+    const emptyFirstRes = await collectMergedCandidatesWithStatus({
+      client: emptyFirstClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 100,
+    });
+    expect(emptyFirstRes.items).toEqual([]);
+    expect(emptyFirstRes.complete).toBeFalse();
+
+    // 3) 正常に全ページ走査完了
+    const fullClient: CandidateSearchClient = {
+      searchIssuesDetailed: async (
+        _query,
+        _sort,
+        _order,
+        _perPage,
+        page = 1,
+      ): Promise<GitHubDetailedSearchResult> => {
+        if (page === 1) {
+          return {
+            totalCount: 2,
+            pageInfo: { hasNextPage: true, endCursor: "c1" },
+            items: [createMockItem(502, "2026-10-09T00:00:00Z")],
+          };
+        }
+        return {
+          totalCount: 2,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          items: [createMockItem(501, "2026-10-08T00:00:00Z")],
+        };
+      },
+    };
+    const fullRes = await collectMergedCandidatesWithStatus({
+      client: fullClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 100,
+    });
+    expect(fullRes.items.map((i) => i.number)).toEqual([502, 501]);
+    expect(fullRes.complete).toBeTrue();
+
+    // 4) fetchLimit 到達で打ち切った場合は complete: false
+    const limitRes = await collectMergedCandidatesWithStatus({
+      client: fullClient,
+      repository: "microsoft/winget-pkgs",
+      since,
+      until,
+      targetPr: 999,
+      requiredLabels: ["New-Package"],
+      fetchLimit: 1,
+    });
+    expect(limitRes.items.map((i) => i.number)).toEqual([502]);
+    expect(limitRes.complete).toBeFalse();
   });
 });
