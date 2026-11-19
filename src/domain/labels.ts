@@ -34,6 +34,28 @@ export const BLOCKED_LABELS: readonly string[] = [
   "Validation-Retry",
   "Timeout-Retry",
   "Testing",
+  // 停止・手動対応待ち（author 返信後またはモデレーター・手動マージ必要時）
+  "Needs-Attention",
+  "Needs-Manual-Merge",
+  "Needs-Manual-Review",
+  // 非推奨・構成不整合・バージョン制約
+  "Manifest-Version-Deprecated",
+  "Manifest-Singleton-Deprecated",
+  "Manifest-Metadata-Consistency",
+  "Highest-Version-Removal",
+  "Last-Version-Removal",
+  "Version-Parameter-Mismatch",
+  // ハードブロッカー・特殊インストール・リポジトリ制約
+  "DriverInstall",
+  "Scripted-Application",
+  "Interactive-Only-Installer",
+  "License-Blocks-Install",
+  "EULA-Install",
+  "Hardware",
+  "Project-File",
+  "portable-archive",
+  "portable-jar",
+  "zip-binary",
 ] as const;
 
 /**
@@ -51,13 +73,19 @@ export const INVESTIGATION_LABELS: readonly string[] = [
   "Validation-Framework-Package",
   "Validation-Hash-Flagged",
   "Validation-Hash-Verification-Failed",
+  "Validation-Indirect-URL",
+  "Validation-Missing-Dependency",
+  "Validation-No-Executables",
+  "Validation-Open-Url-Failed",
+  "Validation-Shell-Execute",
+  "Validation-Unattended-Failed",
   "Validation-Unapproved-URL",
   "Validation-SmartScreen",
   "Validation-Guide",
 ] as const;
 
 /**
- * 名前パターン（Error-*, *-Error, Policy-Test-*, Validation-Submission-*）に該当する
+ * 名前パターン（Error-*, *-Error, Internal-Error-*, Policy-Test-*, Validation-Submission-*）に該当する
  * 実在の阻害ラベル一覧（モデレーター免除の Waived-* ラベルは含まない）。
  * GitHub Search クエリの `-label:"..."` でサーバー側除外するために明示列挙する。
  */
@@ -70,6 +98,15 @@ export const PATTERN_BLOCKED_LABELS: readonly string[] = [
   "Installation-Verification-Error",
   "Installer-Error",
   "Internal-Error",
+  "Internal-Error-Domain",
+  "Internal-Error-Dynamic-Scan",
+  "Internal-Error-Keyword-Policy",
+  "Internal-Error-Manifest",
+  "Internal-Error-NoArchitectures",
+  "Internal-Error-NoSupportedArchitectures",
+  "Internal-Error-PR",
+  "Internal-Error-Static-Scan",
+  "Internal-Error-URL",
   "Manifest-AppsAndFeaturesVersion-Error",
   "Manifest-Dependencies-Error",
   "Manifest-Installer-Validation-Error",
@@ -111,6 +148,15 @@ export const PATTERN_BLOCKED_LABELS: readonly string[] = [
 ] as const;
 
 /**
+ * 一般コミュニティ提出者の待機列・統計・最速ランキングから除外する公式高速枠・特殊レーンラベル一覧。
+ * 例: `Publisher-Verified` は `Validation-Completed` と同時にモデレーター承認なしで即自動承認・マージされる。
+ */
+export const SPECIAL_LANE_LABELS: readonly string[] = [
+  "Publisher-Verified",
+  "Validation-Metadata",
+] as const;
+
+/**
  * モデレーターが自動検証エラーを免除（Waive）した際に付与するラベルの接頭辞。
  * Waived-Validation-*-Error 等も健康体として扱い、阻害対象から除外する。
  */
@@ -122,12 +168,14 @@ export const WAIVED_LABEL_PREFIX = "Waived-";
 export const BLOCKED_PATTERNS: readonly RegExp[] = [
   /^Error-/,
   /-Error$/,
+  /^Internal-Error-/,
   /^Policy-Test-/,
   /^Validation-Submission-(Expired|Failed|Mismatch|Missing|Unsupported)$/,
+  /^Validation-.*-Failed$/,
 ] as const;
 
 /**
- * すべての除外対象ラベル（BLOCKED_LABELS, INVESTIGATION_LABELS, PATTERN_BLOCKED_LABELS）を
+ * すべての除外対象ラベル（BLOCKED_LABELS, INVESTIGATION_LABELS, PATTERN_BLOCKED_LABELS, SPECIAL_LANE_LABELS）を
  * GitHub Search の `-label:"..."` トークン配列に変換する。
  */
 export function buildExcludedLabelQueryParts(): string[] {
@@ -135,6 +183,7 @@ export function buildExcludedLabelQueryParts(): string[] {
     ...BLOCKED_LABELS.map((b) => `-label:"${b}"`),
     ...INVESTIGATION_LABELS.map((inv) => `-label:"${inv}"`),
     ...PATTERN_BLOCKED_LABELS.map((pat) => `-label:"${pat}"`),
+    ...SPECIAL_LANE_LABELS.map((lane) => `-label:"${lane}"`),
   ];
 }
 
@@ -178,6 +227,7 @@ export function buildMergedCandidateQueryParts(
 const BLOCKED_LABEL_SET = new Set<string>(BLOCKED_LABELS);
 const INVESTIGATION_LABEL_SET = new Set<string>(INVESTIGATION_LABELS);
 const PATTERN_BLOCKED_LABEL_SET = new Set<string>(PATTERN_BLOCKED_LABELS);
+const SPECIAL_LANE_LABEL_SET = new Set<string>(SPECIAL_LANE_LABELS);
 
 /**
  * 指定されたラベル名が阻害要因・除外対象に該当するか判定する。
@@ -190,7 +240,8 @@ export function isBlockedLabel(name: string): boolean {
   if (
     BLOCKED_LABEL_SET.has(name) ||
     INVESTIGATION_LABEL_SET.has(name) ||
-    PATTERN_BLOCKED_LABEL_SET.has(name)
+    PATTERN_BLOCKED_LABEL_SET.has(name) ||
+    SPECIAL_LANE_LABEL_SET.has(name)
   ) {
     return true;
   }

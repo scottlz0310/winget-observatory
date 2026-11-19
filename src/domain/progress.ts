@@ -26,6 +26,7 @@ export {
   isEligibleLabels,
   PATTERN_BLOCKED_LABELS,
   REQUIRED_LABELS,
+  SPECIAL_LANE_LABELS,
   WAIVED_LABEL_PREFIX,
 } from "./labels";
 export { parseCsvRows, QUEUE_BASIS, serializeCsvRows, toHistoryRow } from "./progress-csv";
