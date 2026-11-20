@@ -30,8 +30,8 @@ import type {
 } from "../../src/models/progress";
 
 describe("Domain: progress label evaluation", () => {
-  test("必須3ラベルが揃っており除外ラベルがなければ eligible と判定される", () => {
-    const labels = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
+  test("必須ラベルが揃っており除外ラベルがなければ eligible と判定される", () => {
+    const labels = ["New-Package", "Validation-Completed"];
     expect(isEligibleLabels(labels)).toBeTrue();
   });
 

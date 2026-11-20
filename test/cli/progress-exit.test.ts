@@ -7,7 +7,7 @@ import { type ProgressCliOptions, runProgressCli } from "../../src/cli/progress"
 import { parseCsvRows } from "../../src/domain/progress";
 
 const TARGET = 500;
-const LABELS = ["New-Package", "Azure-Pipeline-Passed", "Validation-Completed"];
+const LABELS = ["New-Package", "Validation-Completed"];
 const TARGET_CREATED = "2026-11-01T00:00:00Z";
 
 function createClient(options: {

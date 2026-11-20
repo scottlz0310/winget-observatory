@@ -115,6 +115,8 @@ export async function refreshLegacyAuthorMetadata(
         commitCount: existing.CommitCount,
         authorCountInCandidates: 1,
         author: existing.Author,
+        minReadyVersion,
+        currentVersion: targetVersion,
       });
 
     const updated: CachedSampleEntry = {

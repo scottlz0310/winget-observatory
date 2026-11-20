@@ -95,16 +95,18 @@ describe("Domain: extractFirstTimerFrontierSamples", () => {
     expect(samples[0].createdMs).toBe(Date.parse("2026-10-01T00:00:00Z"));
   });
 
-  test("extractHealthyFrontierSamples は旧バージョン未設定を含む全履歴から HealthyBottom[0].CreatedAt を時刻昇順で抽出する", () => {
+  test("extractHealthyFrontierSamples は旧条件の履歴を除外する", () => {
     const legacy = snapshot("2026-11-01T00:00:00Z", [], null);
     legacy.HealthyBottom = [row(1001, "2026-10-20T00:00:00Z", "2026-09-15T00:00:00Z")];
     const v5 = snapshot("2026-11-02T00:00:00Z", [], 5);
     v5.HealthyBottom = [row(1002, "2026-10-25T00:00:00Z", "2026-09-20T00:00:00Z")];
 
-    const samples = extractHealthyFrontierSamples([v5, legacy]);
-    expect(samples.map((s) => s.pr)).toEqual([1001, 1002]);
-    expect(samples[0].createdMs).toBe(Date.parse("2026-09-15T00:00:00Z"));
-    expect(samples[1].createdMs).toBe(Date.parse("2026-09-20T00:00:00Z"));
+    const current = snapshot("2026-11-03T00:00:00Z", []);
+    current.HealthyBottom = [row(1003, "2026-10-26T00:00:00Z", "2026-09-21T00:00:00Z")];
+
+    const samples = extractHealthyFrontierSamples([v5, current, legacy]);
+    expect(samples.map((s) => s.pr)).toEqual([1003]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-09-21T00:00:00Z"));
   });
 });
 

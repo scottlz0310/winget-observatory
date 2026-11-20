@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDashboard } from "../scripts/build-pages";
+import { QUEUE_BASIS } from "../src/domain/progress-csv";
 
 const HEADER =
   '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis","MergedOlder","ClosedOlder"';
@@ -14,8 +15,9 @@ const row = (
   totalAhead: number,
   mergedOlder: number | "",
   closedOlder: number | "",
+  queueBasis = QUEUE_BASIS,
 ) =>
-  `"${jst}","464302","1","2026-10-01 10:00","${activeAhead}","${totalAhead}","0","1","1","1","1","updated","${mergedOlder}","${closedOlder}"`;
+  `"${jst}","464302","1","2026-10-01 10:00","${activeAhead}","${totalAhead}","0","1","1","1","1","${queueBasis}","${mergedOlder}","${closedOlder}"`;
 
 describe("buildDashboard: 待ち行列からの離脱の内訳", () => {
   let tempDir: string;
@@ -92,6 +94,16 @@ describe("buildDashboard: 待ち行列からの離脱の内訳", () => {
     ]);
     expect(html).toContain("内訳の記録は、この機能の導入後の観測から貯まります");
     expect(html).not.toContain("実際のマージは約");
+  });
+
+  test.each(["updated", ""])("比較条件の切り替え直後は旧条件 (%p) と比較しない", (oldBasis) => {
+    const html = build([
+      row("2026-11-07 09:00:00", 2500, 2100, 100, 10, oldBasis),
+      row("2026-11-08 09:00:00", 2400, 2070, 124, 14),
+    ]);
+    expect(html).toContain("内訳の記録は、この機能の導入後の観測から貯まります");
+    expect(html).not.toContain("実際のマージは約");
+    expect(html).not.toMatch(/NaN|Infinity/);
   });
 
   test("観測の間隔が短ければ、内訳を出さず理由を示す", () => {

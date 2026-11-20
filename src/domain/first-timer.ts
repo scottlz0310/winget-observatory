@@ -22,14 +22,11 @@ export {
   resolvePullRequestAuthorMetadata,
 } from "./first-timer-graphql";
 
-/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版, 5: Validation-Guide 阻害ラベル化・ReadyAt 再計測版, 6: 特権ロール・Bot 除外版, 7: 未捕捉阻害ラベル補強・Publisher-Verified 除外版） */
-export const CURRENT_FIRST_TIMER_VERSION = 7;
+/** 現在の初回・健康体判定ロジックのバージョン（1: コミット数制限あり旧版, 2: コミット数制限撤廃版, 3: Waived-* 免除ラベル健康体扱い版, 4: timeline-blocking 除外廃止・累計マージ実績統一版, 5: Validation-Guide 阻害ラベル化・ReadyAt 再計測版, 6: 特権ロール・Bot 除外版, 7: 未捕捉阻害ラベル補強・Publisher-Verified 除外版, 8: Validation-Completed 基準版） */
+export const CURRENT_FIRST_TIMER_VERSION = 8;
 
-/** Waived-* 免除ラベルを健康体扱いとして no-ready を評価した最低バージョン */
-export const MIN_WAIVED_READY_VERSION = 3;
-
-/** 現行の阻害ラベル・高速枠除外定義を反映した ReadyAt / 健全性基準の最低バージョン */
-export const MIN_VALID_READY_VERSION = 7;
+/** 現行の必須ラベル・阻害ラベルによる ReadyAt / 健全性基準の最低バージョン */
+export const MIN_VALID_READY_VERSION = 8;
 
 /**
  * 判定バージョンが、タイムライン・ReadyAt 再計測不要な最低基準を満たしているか判定する。
@@ -146,10 +143,7 @@ export function extractSingleHitCandidateLogins(
 /**
  * キャッシュ済みのサンプルが、判定ロジックの改定に伴い再評価（タイムライン・詳細の再取得）を必要とするか判定する純粋関数。
  *
- * - FirstTimerVersion >= CURRENT_FIRST_TIMER_VERSION (7) のエントリは最新ルールで計測済みのため再評価不要。
- * - Ready 判定改定（v7）より前の版（未設定または FirstTimerVersion < MIN_VALID_READY_VERSION）では
- *   新規阻害ラベル（Needs-Attention 等）の付与区間が非 Ready 扱いにならず ReadyAt / ReadyDays が誤って早い値で記録されている可能性があるため、
- *   すべての sample エントリをタイムラインごと再取得して再計測する。
+ * Ready 判定の最低バージョンより古いサンプルは、タイムラインから ReadyAt / ReadyDays を再計測する。
  */
 export function shouldReevaluateCachedSample(params: {
   isFirstTimer?: boolean;
@@ -214,8 +208,7 @@ export function shouldReevaluateAuthorFirstTimer(params: {
 
 /**
  * キャッシュ済みのスキップ済み PR が、再評価（詳細取得）を必要とするか判定する純粋関数。
- * - Reason === "no-ready": 旧版（firstTimerVersion < MIN_WAIVED_READY_VERSION または未設定）では
- *   Waived-*-Error が残ったままマージされた PR が no-ready として保存されていた可能性があるため、予算内で再評価する。
+ * - Reason === "no-ready": Ready 判定の変更で対象に戻る可能性があるため、旧版は予算内で再評価する。
  * - Reason === "not-first-timer-candidate": 全体集計窓内に入った場合、または初回詳細適格になった場合に再評価する。
  */
 export function shouldReevaluateSkippedCandidate(params: {
@@ -225,9 +218,7 @@ export function shouldReevaluateSkippedCandidate(params: {
   isEligibleForDetail: boolean;
 }): boolean {
   if (params.reason === "no-ready") {
-    return (
-      params.firstTimerVersion === undefined || params.firstTimerVersion < MIN_WAIVED_READY_VERSION
-    );
+    return !hasValidatedReadyVersion(params.firstTimerVersion);
   }
   if (params.reason !== undefined && params.reason !== "not-first-timer-candidate") {
     return false;

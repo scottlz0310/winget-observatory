@@ -44,7 +44,7 @@ export interface CachedSkippedEntry {
   MergedAt: string;
   /** no-ready: 条件が成立した時刻を特定できない / negative-ready: 成立がマージより後 / not-first-timer-candidate: 30日超の窓で初回候補になり得ないため取得スキップ */
   Reason: "no-ready" | "negative-ready" | "not-first-timer-candidate";
-  /** 判定ロジックのバージョン（3: Waived-* 免除ラベル健康体扱い版。旧版の no-ready 再評価区別用） */
+  /** 判定ロジックのバージョン（旧条件でのスキップを再評価するために使用） */
   FirstTimerVersion?: number;
 }
 

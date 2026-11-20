@@ -103,7 +103,7 @@ export function renderDurationStatsSection(
     ${renderFirstTimerCohortBlock(progress)}
 
     <h3 class="subsection-title" style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-muted);">👥 全体実績（常連・特急レーンを含む全サンプル）</h3>
-    <p class="section-note">常連のまとめマージや特急レーンを含むため、ばらつきが大きくなります。除外件数は、タイムライン上で Ready 条件（必須3ラベル成立・非Draft・阻害ラベルなし）の到達日時を特定できなかった PR です。</p>
+    <p class="section-note">常連のまとめマージや特急レーンを含むため、ばらつきが大きくなります。除外件数は、タイムライン上で Ready 条件（必須ラベル成立・非Draft・阻害ラベルなし）の到達日時を特定できなかった PR です。</p>
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 2rem;">${renderStatCard(
       "手番所要日数 (Turn Latency)",
       { median: progress?.TurnMedianDays, p75: progress?.TurnP75Days, max: progress?.TurnMaxDays },

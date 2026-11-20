@@ -34,7 +34,7 @@ export function getThirdPartyAssignees(
  * - 5: 2×2 待機ライン統一版（HealthyBottom GraphQL TOP 10、SingleCommitBottom / FirstTimerSingleCommitBottom / FirstTimerUnreviewedBottom、全象限作者メタデータ統一）
  * - 6: 1コミット限定廃止版（SingleCommitBottom / StaleBottom の新規収集を廃止し、マージ前線は progress.Samples の直近マージ実績へ統一）
  */
-export const CURRENT_DEPTHS_VERSION = 6;
+export const CURRENT_DEPTHS_VERSION = 7;
 
 /**
  * タイトル文字列をコンソール/表示用に切り詰める（45文字超は先頭42文字 + "..."）。

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient, GitHubDetailedSearchResult } from "../../src/api/github";
 import { runProgressCli } from "../../src/cli/progress";
+import { CURRENT_FIRST_TIMER_VERSION } from "../../src/domain/first-timer";
 import { REQUIRED_LABELS } from "../../src/domain/progress";
 import { parseSampleCache, serializeSampleCacheEntries } from "../../src/domain/sample-cache";
 import type { SampleCacheEntry } from "../../src/models/sample-cache";
@@ -571,7 +572,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
     }
   });
 
-  test("旧形式キャッシュ（Author/IsFirstTimer欠落）が存在する場合に未判定として正しく分離され常連に誤合算されない", async () => {
+  test("作者情報が欠けたキャッシュ（Author/IsFirstTimer欠落）が存在する場合に未判定として正しく分離され常連に誤合算されない", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "winget-progress-legacy-cache-"));
     const cachePath = join(tmpDir, "merged-samples.jsonl");
 
@@ -579,6 +580,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const legacyEntry1 = {
         Type: "sample",
         Number: 600,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         Title: "Legacy PR 600",
         CreatedAt: "2026-11-02T00:00:00.000Z",
         LatestCommittedDate: "2026-11-02T00:00:00.000Z",
@@ -592,6 +594,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const legacyEntry2 = {
         Type: "sample",
         Number: 601,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         Title: "Legacy PR 601",
         CreatedAt: "2026-11-02T00:00:00.000Z",
         LatestCommittedDate: "2026-11-02T00:00:00.000Z",
@@ -605,6 +608,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const legacyEntry3 = {
         Type: "sample",
         Number: 602,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         Title: "Legacy PR 602",
         CreatedAt: "2026-11-02T00:00:00.000Z",
         LatestCommittedDate: "2026-11-02T00:00:00.000Z",
@@ -618,6 +622,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const legacyMultiCommit = {
         Type: "sample",
         Number: 450,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         Title: "Legacy PR 450",
         CreatedAt: "2026-10-25T00:00:00.000Z",
         LatestCommittedDate: "2026-10-25T00:00:00.000Z",
@@ -694,7 +699,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.Comparison?.RepeatOrExpressLaterCreated).toBe(0); // 常連に誤合算されない！
       expect(snapshot?.Comparison?.UnknownLaterCreated).toBe(3); // 未判定に計上される！
 
-      // 旧形式キャッシュで Author が欠落している PR は、自動的に常連と決めつけず未判定（undefined）として保持される
+      // 作者情報が欠けたキャッシュで Author が欠落している PR は、自動的に常連と決めつけず未判定（undefined）として保持される
       const s450 = snapshot?.Samples.find((s) => s.Number === 450);
       expect(s450?.IsFirstTimer).toBeUndefined();
 
@@ -745,6 +750,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       {
         Type: "sample",
         Number: 101,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         MergedAt: merged15d,
         CreatedAt: new Date(now.getTime() - 17 * dayMs).toISOString(),
         LatestCommittedDate: new Date(now.getTime() - 17 * dayMs).toISOString(),
@@ -760,6 +766,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       {
         Type: "sample",
         Number: 102,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         MergedAt: merged50d,
         CreatedAt: new Date(now.getTime() - 55 * dayMs).toISOString(),
         LatestCommittedDate: new Date(now.getTime() - 55 * dayMs).toISOString(),
@@ -775,6 +782,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       {
         Type: "sample",
         Number: 103,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         MergedAt: merged5d,
         CreatedAt: new Date(now.getTime() - 6 * dayMs).toISOString(),
         LatestCommittedDate: new Date(now.getTime() - 6 * dayMs).toISOString(),
@@ -971,6 +979,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       {
         Type: "sample",
         Number: 301,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         MergedAt: merged3d,
         CreatedAt: new Date(now.getTime() - 5 * dayMs).toISOString(),
         LatestCommittedDate: new Date(now.getTime() - 5 * dayMs).toISOString(),
@@ -986,6 +995,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       {
         Type: "skipped",
         Number: 302,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         MergedAt: merged6d,
         Reason: "no-ready",
       },

@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `New-Package` と `Validation-Completed` がある PR は `Azure-Pipeline-Passed` がなくてもキュー観測の対象に含める（#139）。比較条件の変更前後で差分や予測を計算せず、マージ済みサンプルの Ready 判定を段階的に再計測し、再計測待ちの旧値は当回の集計から除く。
+
 - アーキテクチャ境界テストで静的 import・export を構文木から抽出し、コメントを挟む型専用依存の見落としを修正（#134）。
 
 ## [0.6.0] - 2026-11-19

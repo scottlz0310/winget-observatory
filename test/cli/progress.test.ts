@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildDashboard } from "../../scripts/build-pages";
 import type { GitHubApiClient, GitHubDetailedSearchResult } from "../../src/api/github";
 import { parseArgs, resolveDefaultDataDir, runProgressCli } from "../../src/cli/progress";
+import { QUEUE_BASIS } from "../../src/domain/progress-csv";
 import { reportSkippedObservation } from "../../src/domain/progress-format";
 
 describe("CLI: progress parseArgs", () => {
@@ -554,7 +555,7 @@ describe("CLI: 前線・実質待ち（更新順）の算出", () => {
         logPath,
         [
           '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"',
-          '"2026-11-06 23:22:44","200","90","2026-08-01 10:00","70","115","50","9","9","9","1","updated"',
+          `"2026-11-06 23:22:44","200","90","2026-08-01 10:00","70","115","50","9","9","9","1","${QUEUE_BASIS}"`,
           "",
         ].join("\n"),
         "utf-8",

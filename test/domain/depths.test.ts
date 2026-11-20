@@ -89,7 +89,7 @@ describe("Domain: depths logic", () => {
     expect(healthyQuery).toContain("repo:microsoft/winget-pkgs");
     expect(healthyQuery).toContain("is:pr is:open draft:false");
     expect(healthyQuery).toContain('label:"New-Package"');
-    expect(healthyQuery).toContain('label:"Azure-Pipeline-Passed"');
+    expect(healthyQuery).not.toContain('label:"Azure-Pipeline-Passed"');
     expect(healthyQuery).toContain('label:"Validation-Completed"');
     expect(healthyQuery).toContain('-label:"Needs-CLA"');
     expect(healthyQuery).toContain('-label:"Changes-Requested"');
@@ -391,8 +391,7 @@ describe("Domain: depths logic", () => {
       expect(isFirstTimerDepthsRow(row)).toBe(expected);
     });
 
-    test("CURRENT_DEPTHS_VERSION は 6 であり createDepthsSnapshot に v6 フィールドが記録される（1コミット系は未出力）", () => {
-      expect(CURRENT_DEPTHS_VERSION).toBe(6);
+    test("createDepthsSnapshot に現行バージョンが記録される（1コミット系は未出力）", () => {
       const dummyRow = formatDepthsRow({
         number: 1,
         title: "t",
@@ -410,7 +409,7 @@ describe("Domain: depths logic", () => {
         firstTimerUnreviewedTruncated: true,
         expressLane: [],
       });
-      expect(snapshot.DepthsVersion).toBe(6);
+      expect(snapshot.DepthsVersion).toBe(CURRENT_DEPTHS_VERSION);
       expect(snapshot.SingleCommitBottom).toBeUndefined();
       expect(snapshot.StaleBottom).toBeUndefined();
       expect(snapshot.FirstTimerUnreviewedBottom).toEqual([dummyRow]);

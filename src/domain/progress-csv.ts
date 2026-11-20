@@ -9,7 +9,7 @@ import type { ProgressHistoryRow } from "../models/progress";
  * 履歴 CSV の ActiveAhead の算出基準（更新順）。
  * 基準が変わったら値を変え、旧基準の行との前回比・速度計算を避ける。
  */
-export const QUEUE_BASIS = "updated";
+export const QUEUE_BASIS = "updated-validation-completed";
 
 /**
  * 簡易 CSV 行パース処理。

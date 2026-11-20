@@ -34,6 +34,7 @@ import {
   resolveDefaultDataDir,
   runExploreDepths,
 } from "../../src/cli/explore-depths";
+import { CURRENT_FIRST_TIMER_VERSION } from "../../src/domain/first-timer";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "../../src/domain/intervention";
 import type { GitHubPrView, GitHubSearchItem } from "../../src/models/depths";
 
@@ -379,7 +380,7 @@ describe("CLI: explore-depths の主戦場ライン（fetchFirstReviewMainstream
         ReadyDays: 44,
         Author: "cached-ft",
         IsFirstTimer: true,
-        FirstTimerVersion: 7,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
       })}\n`,
       "utf-8",
     );
@@ -569,7 +570,7 @@ describe("CLI: explore-depths の主戦場ライン（fetchFirstReviewMainstream
           Author: "known-repeater",
           IsFirstTimer: false,
           FirstTimerReason: "lifetime-merged",
-          FirstTimerVersion: 7,
+          FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         }),
       ].join("\n"),
       "utf-8",
@@ -850,7 +851,7 @@ describe("CLI: explore-depths の主戦場ライン（fetchFirstReviewMainstream
           Author: "asklar",
           AuthorAssociation: "MEMBER",
           IsFirstTimer: true,
-          FirstTimerVersion: 7,
+          FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         }),
         // #983: v7 有効な初回提出者 -> 採用
         JSON.stringify({
@@ -869,7 +870,7 @@ describe("CLI: explore-depths の主戦場ライン（fetchFirstReviewMainstream
           AuthorType: "User",
           AuthorAssociation: "CONTRIBUTOR",
           IsFirstTimer: true,
-          FirstTimerVersion: 7,
+          FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         }),
       ].join("\n"),
       "utf-8",

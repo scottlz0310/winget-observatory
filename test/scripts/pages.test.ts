@@ -47,6 +47,7 @@ import {
   createProgressSnapshot,
   partitionSamplesByWindow,
 } from "../../src/domain/progress";
+import { QUEUE_BASIS } from "../../src/domain/progress-csv";
 
 describe("scripts/pages/formatters", () => {
   test.each([
@@ -479,7 +480,7 @@ describe("generateDashboardHtml", () => {
           TurnLatencyDays: 20,
           WaitDays: 20,
           CommitCount: 1,
-          QueueBasis: "updated",
+          QueueBasis: QUEUE_BASIS,
         },
         {
           Timestamp: "2026-11-19 09:00:00",
@@ -493,7 +494,7 @@ describe("generateDashboardHtml", () => {
           TurnLatencyDays: 21,
           WaitDays: 21,
           CommitCount: 1,
-          QueueBasis: "updated",
+          QueueBasis: QUEUE_BASIS,
         },
       ],
       healthyFrontierSamples: [
