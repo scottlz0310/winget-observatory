@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/api/github.ts`, `src/cli/explore-depths.ts`, `src/cli/progress.ts` の責務分割（#131 Step 1/4）:
+  - `src/api/intervention-paging.ts`: `src/api/github.ts` から reviews / comments 追加ページング走査と介入判定再計算（`DEFAULT_MAX_INTERVENTION_EXTRA_PAGES`, `resolvePrInterventionWithPaging`）を分離（`src/api/github.ts` からの re-export を維持）
+  - `src/cli/depths-bottom-collector.ts`, `src/cli/depths-intervention-collector.ts`, `src/cli/depths-mainstream-collector.ts`: `src/cli/explore-depths.ts` から底候補 GraphQL ページング・生涯マージ数付与、未レビュー／介入済み前線の 2 段階バッチ走査、および 1,000 件上限回避の動的二分走査と 7 日間初回人間介入コホート収集を 3 コレクタモジュールへ分離（`src/cli/explore-depths.ts` の全公開エクスポートを維持）
+  - `src/cli/progress-io.ts`: `src/cli/progress.ts` から Target PR 検証、Open 待ち行列集計、離脱件数取得、および CSV/JSON・キャッシュファイル I/O ヘルパーを分離
 - 待機ライン 2×2 マトリクスと統合処理バンドの実運用点検に基づき、1コミット限定指標を廃止して直近マージ実績へ統一し、初動の役割入替・母集団明記・モバイル横溢れを修正:
   - `src/models/depths.ts`, `src/domain/depths.ts`, `src/cli/explore-depths.ts`, `src/models/forecast.ts`, `src/domain/forecast.ts`: `CURRENT_DEPTHS_VERSION = 6` へ更新し、1コミット限定取得（`fetchSingleCommitBottoms` / `fetchStaleBottom` / `isStaleCandidate` / `extractStaleFrontierSamples` / `extractSingleCommitFrontierSamples` / `calculateStaleFrontierForecast`）を廃止（旧スナップショット型は互換保持）
   - `src/models/forecast-band.ts`, `src/domain/forecast-band.ts`: 処理バンドの前線（最短目安）から `stale-bottom:steady` を廃止して `first-timer:p50`（初回提出者コホート P50）へ統一し、前線 ＞ 本命の逆転を解消

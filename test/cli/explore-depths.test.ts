@@ -4,11 +4,32 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient } from "../../src/api/github";
 import {
+  BOTTOM_LIST_LIMIT as DIRECT_BOTTOM_LIST_LIMIT,
+  FIRST_TIMER_MAX_NODES as DIRECT_FIRST_TIMER_MAX_NODES,
+  FIRST_TIMER_PAGE_SIZE as DIRECT_FIRST_TIMER_PAGE_SIZE,
+  fetchFirstTimerBottom as directFetchFirstTimerBottom,
+  fetchHealthyBottoms as directFetchHealthyBottoms,
+} from "../../src/cli/depths-bottom-collector";
+import {
+  INTERVENTION_BATCH_SIZE as DIRECT_INTERVENTION_BATCH_SIZE,
+  fetchInterventionFrontiers as directFetchInterventionFrontiers,
+} from "../../src/cli/depths-intervention-collector";
+import {
+  MAINSTREAM_SEARCH_PAGE_SIZE as DIRECT_MAINSTREAM_SEARCH_PAGE_SIZE,
+  fetchFirstReviewFrontiers as directFetchFirstReviewFrontiers,
+  fetchFirstReviewMainstreamFrontier as directFetchFirstReviewMainstreamFrontier,
+} from "../../src/cli/depths-mainstream-collector";
+import {
+  BOTTOM_LIST_LIMIT,
+  FIRST_TIMER_MAX_NODES,
+  FIRST_TIMER_PAGE_SIZE,
   fetchFirstReviewFrontiers,
   fetchFirstReviewMainstreamFrontier,
   fetchFirstTimerBottom,
   fetchHealthyBottoms,
   fetchInterventionFrontiers,
+  INTERVENTION_BATCH_SIZE,
+  MAINSTREAM_SEARCH_PAGE_SIZE,
   parseArgs,
   resolveDefaultDataDir,
   runExploreDepths,
@@ -2563,5 +2584,20 @@ describe("CLI: explore-depths Phase 1（2×2 GraphQL 統一・作者メタデー
     expect(firstReviewFrontier.OpenCount).toBe(1);
     expect(firstReviewFrontier.MergedCount).toBe(1);
     expect(firstReviewFrontier.Items?.map((i) => i.Number)).toEqual([550005, 550003]);
+  });
+
+  test("分離された各コレクタモジュールのエクスポートと explore-depths.ts の互換 re-export が完全一致する", () => {
+    expect(BOTTOM_LIST_LIMIT).toBe(DIRECT_BOTTOM_LIST_LIMIT);
+    expect(FIRST_TIMER_PAGE_SIZE).toBe(DIRECT_FIRST_TIMER_PAGE_SIZE);
+    expect(FIRST_TIMER_MAX_NODES).toBe(DIRECT_FIRST_TIMER_MAX_NODES);
+    expect(fetchHealthyBottoms).toBe(directFetchHealthyBottoms);
+    expect(fetchFirstTimerBottom).toBe(directFetchFirstTimerBottom);
+
+    expect(INTERVENTION_BATCH_SIZE).toBe(DIRECT_INTERVENTION_BATCH_SIZE);
+    expect(fetchInterventionFrontiers).toBe(directFetchInterventionFrontiers);
+
+    expect(MAINSTREAM_SEARCH_PAGE_SIZE).toBe(DIRECT_MAINSTREAM_SEARCH_PAGE_SIZE);
+    expect(fetchFirstReviewFrontiers).toBe(directFetchFirstReviewFrontiers);
+    expect(fetchFirstReviewMainstreamFrontier).toBe(directFetchFirstReviewMainstreamFrontier);
   });
 });
