@@ -4,6 +4,8 @@ import {
   buildPullRequestAuthorMetadataQuery,
   CURRENT_FIRST_TIMER_VERSION,
   countCandidateAuthors,
+  DEFAULT_AUTHOR_MERGED_BATCH_SIZE,
+  DEFAULT_AUTHOR_METADATA_BATCH_SIZE,
   extractSingleHitCandidateLogins,
   hasValidatedReadyVersion,
   isCandidateEligibleForFirstTimerDetail,
@@ -19,6 +21,16 @@ import {
   shouldReevaluateCachedSample,
   shouldReevaluateSkippedCandidate,
 } from "../../src/domain/first-timer";
+import {
+  DEFAULT_AUTHOR_MERGED_BATCH_SIZE as DIRECT_DEFAULT_AUTHOR_MERGED_BATCH_SIZE,
+  DEFAULT_AUTHOR_METADATA_BATCH_SIZE as DIRECT_DEFAULT_AUTHOR_METADATA_BATCH_SIZE,
+  buildAuthorMergedCountQuery as directBuildAuthorMergedCountQuery,
+  buildPullRequestAuthorMetadataQuery as directBuildPullRequestAuthorMetadataQuery,
+  parseAuthorMergedCounts as directParseAuthorMergedCounts,
+  parsePullRequestAuthorMetadata as directParsePullRequestAuthorMetadata,
+  resolveAuthorMergedCounts as directResolveAuthorMergedCounts,
+  resolvePullRequestAuthorMetadata as directResolvePullRequestAuthorMetadata,
+} from "../../src/domain/first-timer-graphql";
 
 describe("Domain: countCandidateAuthors & isCandidateEligibleForFirstTimerDetail", () => {
   test("countCandidateAuthors は候補配列から作者ごとの出現数を集計する", () => {
@@ -605,5 +617,16 @@ describe("Domain: hasValidatedReadyVersion & 汎用作者メタデータバッ�
         batchSize: 0,
       }),
     ).rejects.toThrow(RangeError);
+  });
+
+  test("first-timer-graphql.ts のエクスポートと first-timer.ts の互換 re-export が完全一致する", () => {
+    expect(DEFAULT_AUTHOR_MERGED_BATCH_SIZE).toBe(DIRECT_DEFAULT_AUTHOR_MERGED_BATCH_SIZE);
+    expect(DEFAULT_AUTHOR_METADATA_BATCH_SIZE).toBe(DIRECT_DEFAULT_AUTHOR_METADATA_BATCH_SIZE);
+    expect(buildAuthorMergedCountQuery).toBe(directBuildAuthorMergedCountQuery);
+    expect(parseAuthorMergedCounts).toBe(directParseAuthorMergedCounts);
+    expect(resolveAuthorMergedCounts).toBe(directResolveAuthorMergedCounts);
+    expect(buildPullRequestAuthorMetadataQuery).toBe(directBuildPullRequestAuthorMetadataQuery);
+    expect(parsePullRequestAuthorMetadata).toBe(directParsePullRequestAuthorMetadata);
+    expect(resolvePullRequestAuthorMetadata).toBe(directResolvePullRequestAuthorMetadata);
   });
 });

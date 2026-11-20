@@ -3,6 +3,8 @@ import {
   calculateFirstReviewMainstreamFrontier,
   classifyPrIntervention,
   DELETED_ACTOR_LABEL,
+  FIRST_REVIEW_COHORT_ITEM_LIMIT,
+  FIRST_REVIEW_COHORT_WINDOW_DAYS,
   FIRST_REVIEW_MAINSTREAM_MODE,
   type FirstReviewCohortCandidate,
   hasDeterministicAutomationManualEdit,
@@ -11,6 +13,12 @@ import {
   isSameActorLogin,
   summarizeInterventionFrontier,
 } from "../../src/domain/intervention";
+import {
+  FIRST_REVIEW_COHORT_ITEM_LIMIT as DIRECT_FIRST_REVIEW_COHORT_ITEM_LIMIT,
+  FIRST_REVIEW_COHORT_WINDOW_DAYS as DIRECT_FIRST_REVIEW_COHORT_WINDOW_DAYS,
+  FIRST_REVIEW_MAINSTREAM_MODE as DIRECT_FIRST_REVIEW_MAINSTREAM_MODE,
+  calculateFirstReviewMainstreamFrontier as directCalculateFirstReviewMainstreamFrontier,
+} from "../../src/domain/mainstream-cohort";
 import type {
   DepthsRow,
   PrInterventionActor,
@@ -947,5 +955,14 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
     expect(frontier.CohortCount).toBe(1);
     expect(frontier.MergedCount).toBe(1);
     expect(frontier.MedianCreatedAt).toBe("2026-09-24T23:48:53.000Z");
+  });
+
+  test("mainstream-cohort.ts のエクスポートと intervention.ts の互換 re-export が完全一致する", () => {
+    expect(FIRST_REVIEW_MAINSTREAM_MODE).toBe(DIRECT_FIRST_REVIEW_MAINSTREAM_MODE);
+    expect(FIRST_REVIEW_COHORT_WINDOW_DAYS).toBe(DIRECT_FIRST_REVIEW_COHORT_WINDOW_DAYS);
+    expect(FIRST_REVIEW_COHORT_ITEM_LIMIT).toBe(DIRECT_FIRST_REVIEW_COHORT_ITEM_LIMIT);
+    expect(calculateFirstReviewMainstreamFrontier).toBe(
+      directCalculateFirstReviewMainstreamFrontier,
+    );
   });
 });

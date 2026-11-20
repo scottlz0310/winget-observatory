@@ -5,6 +5,7 @@ import {
   refreshLegacyAuthorMetadata,
   type SampleCollectorClient,
 } from "../../src/domain/sample-collector";
+import { refreshLegacyAuthorMetadata as directRefreshLegacyAuthorMetadata } from "../../src/domain/sample-metadata-refresh";
 import type {
   GitHubDetailedSearchItem,
   MergedCandidateSample,
@@ -1536,5 +1537,9 @@ describe("refreshLegacyAuthorMetadata", () => {
     expect(secondRun.samples[0]?.isFirstTimer).toBeTrue();
     expect(secondRun.samples[0]?.firstTimerReason).toBeUndefined();
     expect(secondRun.samples[0]?.firstTimerVersion).toBe(7);
+  });
+
+  it("sample-metadata-refresh.ts のエクスポートと sample-collector.ts の互換 re-export が完全一致する", () => {
+    expect(refreshLegacyAuthorMetadata).toBe(directRefreshLegacyAuthorMetadata);
   });
 });

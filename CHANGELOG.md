@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/domain/first-timer.ts`, `src/domain/intervention.ts`, `src/domain/sample-cache.ts`, `src/domain/sample-collector.ts` の責務分割（#132 Step 2/4）:
+  - `src/domain/first-timer-graphql.ts`: `src/domain/first-timer.ts` から作者別累計マージ数・PR 作者メタデータの GraphQL alias バッチクエリ生成・応答パース・チャンク実行（`resolveAuthorMergedCounts`, `resolvePullRequestAuthorMetadata` 等）を分離
+  - `src/domain/mainstream-cohort.ts`: `src/domain/intervention.ts` から直近 7 日間初回人間介入コホート（主戦場ライン）の重複排除・中央値・ラグ日数算出（`calculateFirstReviewMainstreamFrontier` 等）を分離
+  - `src/domain/sample-cache-maintenance.ts`: `src/domain/sample-cache.ts` から初回提出者 最速マージランキング抽出（`extractFirstTimerFastestRanking`）、TTL/検索外パージ（`pruneSampleCache`）、軽量メタデータ補完候補抽出（`selectMetadataRefreshCandidates`）、世代別サマリ集計（`summarizeSampleCacheVersions`）を分離
+  - `src/domain/sample-metadata-refresh.ts`: `src/domain/sample-collector.ts` から中間世代キャッシュの軽量作者メタデータ段階補完（`refreshLegacyAuthorMetadata`）を分離
 - `src/api/github.ts`, `src/cli/explore-depths.ts`, `src/cli/progress.ts` の責務分割（#131 Step 1/4）:
   - `src/api/intervention-paging.ts`: `src/api/github.ts` から reviews / comments 追加ページング走査と介入判定再計算（`DEFAULT_MAX_INTERVENTION_EXTRA_PAGES`, `resolvePrInterventionWithPaging`）を分離（`src/api/github.ts` からの re-export を維持）
   - `src/cli/depths-bottom-collector.ts`, `src/cli/depths-intervention-collector.ts`, `src/cli/depths-mainstream-collector.ts`: `src/cli/explore-depths.ts` から底候補 GraphQL ページング・生涯マージ数付与、未レビュー／介入済み前線の 2 段階バッチ走査、および 1,000 件上限回避の動的二分走査と 7 日間初回人間介入コホート収集を 3 コレクタモジュールへ分離（`src/cli/explore-depths.ts` の全公開エクスポートを維持）
