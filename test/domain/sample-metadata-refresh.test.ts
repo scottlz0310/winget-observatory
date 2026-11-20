@@ -215,9 +215,8 @@ describe("refreshLegacyAuthorMetadata", () => {
       initialCache,
     });
     expect(firstRun.fetchedCount).toBe(0);
-    expect(firstRun.samples[0]?.isFirstTimer).toBeFalse();
-    expect(firstRun.samples[0]?.firstTimerReason).toBe("timeline-blocking");
-    expect(firstRun.samples[0]?.firstTimerVersion).toBe(6);
+    expect(firstRun.samples).toHaveLength(0);
+    expect(firstRun.deferredCount).toBe(1);
 
     const cacheIndex = indexSampleCache(firstRun.finalCache);
     const refreshResult = await refreshLegacyAuthorMetadata({

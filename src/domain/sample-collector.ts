@@ -112,9 +112,6 @@ function resolveCachedCandidate(params: {
       isWithinOverallWindow,
       isEligibleForDetail: isCandidateEligible(cand, candidateAuthorCounts),
     });
-    if (cached.Reason === "no-ready") {
-      return { needsReevaluation: shouldReevaluate && canFetchMore };
-    }
     return { needsReevaluation: shouldReevaluate };
   }
 
@@ -477,6 +474,15 @@ export async function orchestrateSampleCollection(
       const cached = cacheIndex.get(cand.number);
 
       if (cached) {
+        // 旧 Ready 判定はキャッシュに残し、再計測できた回から現行の集計に入れる。
+        if (
+          fetched >= fetchBudget &&
+          !hasValidatedReadyVersion(cached.FirstTimerVersion) &&
+          (cached.Type === "sample" || cached.Reason === "no-ready")
+        ) {
+          deferred++;
+          continue;
+        }
         const resolution = resolveCachedCandidate({
           cand,
           cached,
