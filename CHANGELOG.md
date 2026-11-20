@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/sections/stats-and-samples.ts` の責務分割（#133 Step 3/4）:
+  - `scripts/pages/sections/waitline-matrix.ts`: `scripts/pages/sections/depths-and-history.ts` から待機ライン 2×2 マトリクス（メンテナ初動・最終マージ 4 象限、全体／初回提出者トグル、旧スナップショット互換表示）の描画関数 `renderWaitlineMatrixSection` を分離（`depths-and-history.ts` からの re-export を維持）
+  - `scripts/pages/sections/samples-and-ranking.ts`: `scripts/pages/sections/stats-and-samples.ts` から初回提出者 最速マージランキング（`renderFirstTimerFastestRankingSection`）、比較サンプル一覧・通過ペースサマリー・3種インライン切替（`renderSamplesSection`, `summarizeRecentSamplesPace`, `formatCreatedToMergedRange`, `formatSamplePackageName`）を分離（`stats-and-samples.ts` からの re-export を維持）
 - `src/domain/first-timer.ts`, `src/domain/intervention.ts`, `src/domain/sample-cache.ts`, `src/domain/sample-collector.ts` の責務分割（#132 Step 2/4）:
   - `src/domain/first-timer-graphql.ts`: `src/domain/first-timer.ts` から作者別累計マージ数・PR 作者メタデータの GraphQL alias バッチクエリ生成・応答パース・チャンク実行（`resolveAuthorMergedCounts`, `resolvePullRequestAuthorMetadata` 等）を分離
   - `src/domain/mainstream-cohort.ts`: `src/domain/intervention.ts` から直近 7 日間初回人間介入コホート（主戦場ライン）の重複排除・中央値・ラグ日数算出（`calculateFirstReviewMainstreamFrontier` 等）を分離

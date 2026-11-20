@@ -8,9 +8,36 @@ import {
   renderBadgeHtml,
 } from "../../scripts/pages/formatters";
 import {
+  renderBoundaryTableSection,
+  renderExitBreakdownSection,
+  renderForecastScoreSection,
+  renderRecentHistorySection,
+  renderWaitlineMatrixSection as renderWaitlineMatrixSectionCompat,
+} from "../../scripts/pages/sections/depths-and-history";
+import {
   buildBandTimelineMarkers,
   renderIntegratedForecastHero,
 } from "../../scripts/pages/sections/hero-and-kpi";
+import {
+  formatCreatedToMergedRange,
+  formatSamplePackageName,
+  renderFirstTimerFastestRankingSection,
+  renderSamplesSection,
+  summarizeRecentSamplesPace,
+} from "../../scripts/pages/sections/samples-and-ranking";
+import {
+  formatCreatedToMergedRange as formatCreatedToMergedRangeCompat,
+  formatSamplePackageName as formatSamplePackageNameCompat,
+  renderDurationStatsSection,
+  renderFirstTimerCohortBlock,
+  renderFirstTimerFastestRankingSection as renderFirstTimerFastestRankingSectionCompat,
+  renderOvertakeSection,
+  renderRivalsSection,
+  renderSamplesSection as renderSamplesSectionCompat,
+  renderStatCard,
+  summarizeRecentSamplesPace as summarizeRecentSamplesPaceCompat,
+} from "../../scripts/pages/sections/stats-and-samples";
+import { renderWaitlineMatrixSection } from "../../scripts/pages/sections/waitline-matrix";
 import { generateDashboardHtml } from "../../scripts/pages/template";
 import { buildForecastBandSource, calculateForecastBand } from "../../src/domain/forecast-band";
 import { DAY_MS } from "../../src/domain/formatters";
@@ -692,5 +719,23 @@ describe("generateDashboardHtml", () => {
     });
     expect(html).toContain("#449999");
     expect(html).toContain("最新マージ（所要 48.0 日 / 採用 1 件）");
+  });
+
+  test("scripts/pages/sections 分割モジュールの直接エクスポートと互換 re-export が同一参照・同一出力である", () => {
+    expect(renderWaitlineMatrixSectionCompat).toBe(renderWaitlineMatrixSection);
+    expect(formatCreatedToMergedRangeCompat).toBe(formatCreatedToMergedRange);
+    expect(formatSamplePackageNameCompat).toBe(formatSamplePackageName);
+    expect(summarizeRecentSamplesPaceCompat).toBe(summarizeRecentSamplesPace);
+    expect(renderFirstTimerFastestRankingSectionCompat).toBe(renderFirstTimerFastestRankingSection);
+    expect(renderSamplesSectionCompat).toBe(renderSamplesSection);
+    expect(typeof renderBoundaryTableSection).toBe("function");
+    expect(typeof renderExitBreakdownSection).toBe("function");
+    expect(typeof renderForecastScoreSection).toBe("function");
+    expect(typeof renderRecentHistorySection).toBe("function");
+    expect(typeof renderStatCard).toBe("function");
+    expect(typeof renderFirstTimerCohortBlock).toBe("function");
+    expect(typeof renderDurationStatsSection).toBe("function");
+    expect(typeof renderOvertakeSection).toBe("function");
+    expect(typeof renderRivalsSection).toBe("function");
   });
 });
