@@ -170,7 +170,6 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
         }
       : null;
 
-  const hasChartPopulationToggle = healthySeries !== null && firstTimerSeries !== null;
   const allChartSeries: DualAxisSeries[] = [
     ...baseLeftSeries,
     ...(healthySeries ? [healthySeries] : firstTimerSeries ? [firstTimerSeries] : []),
@@ -189,15 +188,35 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     series: allChartSeries,
     rightDecimals: 1,
   });
-  const queueChartFirstTimer = hasChartPopulationToggle
-    ? renderDualAxisLineChartSvg({
-        title: "待ち件数と正常底の推移（統合時系列チャート・初回提出者のみ）",
-        leftAxisLabel: "待ち件数",
-        rightAxisLabel: "正常底の起票経過（日）",
-        series: firstTimerChartSeries,
-        rightDecimals: 1,
-      })
-    : null;
+  const queueChartFirstTimer =
+    healthySeries !== null && firstTimerSeries !== null
+      ? renderDualAxisLineChartSvg({
+          title: "待ち件数と正常底の推移（統合時系列チャート・初回提出者のみ）",
+          leftAxisLabel: "待ち件数",
+          rightAxisLabel: "正常底の起票経過（日）",
+          series: firstTimerChartSeries,
+          rightDecimals: 1,
+        })
+      : null;
+
+  const hasChartPopulationToggle = queueChartAll !== null && queueChartFirstTimer !== null;
+  const fallbackQueueChart =
+    queueChartAll ??
+    queueChartFirstTimer ??
+    (healthySeries !== null && firstTimerSeries !== null
+      ? renderDualAxisLineChartSvg({
+          title: "待ち件数と正常底の推移（統合時系列チャート）",
+          leftAxisLabel: "待ち件数",
+          rightAxisLabel: "正常底の起票経過（日）",
+          series: [
+            ...baseLeftSeries,
+            healthySeries,
+            firstTimerSeries,
+            ...(mainstreamSeries ? [mainstreamSeries] : []),
+          ],
+          rightDecimals: 1,
+        })
+      : null);
 
   const parsedTargetCreatedMs = depths?.TargetPr?.CreatedAt
     ? Date.parse(depths.TargetPr.CreatedAt)
@@ -291,7 +310,7 @@ ${DASHBOARD_CSS}
       <div data-chart-view="all">${renderChartCard(queueChartAll)}</div>
       <div data-chart-view="first-timer" style="display: none;">${renderChartCard(queueChartFirstTimer)}</div>
       ${CHART_FILTER_INLINE_SCRIPT}`
-          : renderChartCard(queueChartAll)
+          : renderChartCard(fallbackQueueChart)
       }
     </section>
 

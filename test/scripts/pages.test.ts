@@ -439,4 +439,43 @@ describe("generateDashboardHtml", () => {
     expect(ftChart).toContain("🌱 マージ正常底（初回提出者のみ）起票経過");
     expect(ftChart).not.toContain("⚓ マージ正常底（健康的大底）起票経過");
   });
+
+  test("統合時系列チャートは疎な履歴（別日 1 件ずつ／片方のみ描画可能）でも空トグルを出さず描画可能な SVG を表示する", () => {
+    const t1 = Date.parse("2026-11-18T00:00:00Z");
+    const t2 = Date.parse("2026-11-19T00:00:00Z");
+
+    // ケース 1: 進捗 CSV なし＋全体と初回が別日に 1 件ずつ -> 統合すれば 2 時点で描画可能
+    const combinedHtml = generateDashboardHtml({
+      progress: null,
+      depths: null,
+      csvRows: [],
+      healthyFrontierSamples: [{ timestampMs: t1, pr: 430000, createdMs: t1 - 50 * DAY_MS }],
+      firstTimerFrontierSamples: [{ timestampMs: t2, pr: 435000, createdMs: t2 - 40 * DAY_MS }],
+    });
+    expect(combinedHtml).not.toContain('data-chart-filter="all"');
+    const combinedSection = combinedHtml
+      .split("<section data-chart-section>")[1]
+      .split("</section>")[0];
+    expect(combinedSection).toContain("<svg ");
+    expect(combinedSection).toContain("⚓ マージ正常底（健康的大底）起票経過");
+    expect(combinedSection).toContain("🌱 マージ正常底（初回提出者のみ）起票経過");
+
+    // ケース 2: 進捗 CSV なし＋初回のみ 2 時点（描画可）、全体は 1 時点（描画不可）
+    const singleSideHtml = generateDashboardHtml({
+      progress: null,
+      depths: null,
+      csvRows: [],
+      healthyFrontierSamples: [{ timestampMs: t1, pr: 430000, createdMs: t1 - 50 * DAY_MS }],
+      firstTimerFrontierSamples: [
+        { timestampMs: t1, pr: 435000, createdMs: t1 - 40 * DAY_MS },
+        { timestampMs: t2, pr: 436000, createdMs: t2 - 39 * DAY_MS },
+      ],
+    });
+    expect(singleSideHtml).not.toContain('data-chart-filter="all"');
+    const singleSideSection = singleSideHtml
+      .split("<section data-chart-section>")[1]
+      .split("</section>")[0];
+    expect(singleSideSection).toContain("<svg ");
+    expect(singleSideSection).toContain("🌱 マージ正常底（初回提出者のみ）起票経過");
+  });
 });
