@@ -141,7 +141,7 @@ function logQueueSummary(
   log("----------------------------------------");
   log("【現在のレビュー待ち行列（実質的な待ち人数）】");
 
-  // 前回行が旧定義（QueueBasis 列なし）の場合、ActiveAhead の定義が異なるため前回比は出さない
+  // 算出基準が異なる履歴との前回比は出さない。
   const prev = prevRecord && prevRecord.QueueBasis === QUEUE_BASIS ? prevRecord : null;
   const front = queueInfo.front;
   const prevFrontNum = prev && prev.FrontNumber !== "" ? Number(prev.FrontNumber) : undefined;

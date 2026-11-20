@@ -10,12 +10,13 @@ import {
   runRecordForecast,
 } from "../../src/cli/record-forecast";
 import { CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
+import { QUEUE_BASIS } from "../../src/domain/progress-csv";
 import type { ProgressPrState } from "../../src/models/progress";
 
 const CSV_HEADER =
   '"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"';
 const csvRow = (jst: string, activeAhead: number) =>
-  `"${jst}","123","1","2026-10-01 10:00","${activeAhead}","${activeAhead}","0","1","1","1","1","updated"`;
+  `"${jst}","123","1","2026-10-01 10:00","${activeAhead}","${activeAhead}","0","1","1","1","1","${QUEUE_BASIS}"`;
 
 const pr = (
   overrides: Partial<ProgressPrState> & { closedAt?: string | null },

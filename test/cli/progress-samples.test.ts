@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient, GitHubDetailedSearchResult } from "../../src/api/github";
 import { runProgressCli } from "../../src/cli/progress";
+import { CURRENT_FIRST_TIMER_VERSION } from "../../src/domain/first-timer";
 import { REQUIRED_LABELS } from "../../src/domain/progress";
 import { parseSampleCache, serializeSampleCacheEntries } from "../../src/domain/sample-cache";
 import type { CachedSampleEntry, SampleCacheEntry } from "../../src/models/sample-cache";
@@ -127,7 +128,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
         ReadyDays: 3,
         Author: "repeat-author",
         IsFirstTimer: true, // キャッシュ時点では初回扱い
-        FirstTimerVersion: 7,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
       };
       writeFileSync(cachePath, serializeSampleCacheEntries([initialCachedEntry]), "utf-8");
 
@@ -562,13 +563,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(15.0);
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(5.0);
 
-      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: 7 で更新されたこと
+      // キャッシュファイルが IsFirstTimer: true, FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION で更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached801 = savedCache.find((e) => e.Number === 801);
       expect(cached801?.Type).toBe("sample");
       if (cached801?.Type === "sample") {
         expect(cached801.IsFirstTimer).toBe(true);
-        expect(cached801.FirstTimerVersion).toBe(7);
+        expect(cached801.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -729,14 +730,14 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(graphqlCalled).toBe(true);
       expect(snapshot?.FirstTimerSampleCount).toBe(1);
 
-      // キャッシュファイルで IsFirstTimer: true, FirstTimerVersion: 7 に更新されたこと
+      // キャッシュファイルで IsFirstTimer: true, FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION に更新されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached802 = savedCache.find((e) => e.Number === 802);
       expect(cached802?.Type).toBe("sample");
       if (cached802?.Type === "sample") {
         expect(cached802.IsFirstTimer).toBe(true);
         expect(cached802.FirstTimerReason).toBeUndefined();
-        expect(cached802.FirstTimerVersion).toBe(7);
+        expect(cached802.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -861,13 +862,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       expect(snapshot?.FirstTimerMedianDays).toBe(10.0); // 通算 10日
       expect(snapshot?.FirstTimerTurnMedianDays).toBe(3.0); // Turn Latency 3日
 
-      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: 7 で記録されたこと
+      // キャッシュファイルが sample に置き換わり、IsFirstTimer: true, FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION で記録されたこと
       const savedCache = parseSampleCache(readFileSync(cachePath, "utf-8"));
       const cached803 = savedCache.find((e) => e.Number === 803);
       expect(cached803?.Type).toBe("sample");
       if (cached803?.Type === "sample") {
         expect(cached803.IsFirstTimer).toBe(true);
-        expect(cached803.FirstTimerVersion).toBe(7);
+        expect(cached803.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -1030,7 +1031,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           ReadyDays: 4,
           Author: "old-ttl-user",
           IsFirstTimer: true,
-          FirstTimerVersion: 7,
+          FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
         },
         // #851: 10日前・検索候補外（Publisher-Verified 等で新検索除外）・v6 -> 検索外旧版として削除
         {
@@ -1049,7 +1050,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           IsFirstTimer: true,
           FirstTimerVersion: 6,
         },
-        // #852: 5日前・検索候補内・v6 (MEMBER) -> タイムライン再評価で privileged-or-bot へ降格＆v7昇格
+        // #852: 5日前・検索候補内・v6 (MEMBER) -> タイムライン再評価で privileged-or-bot へ降格＆現行版昇格
         {
           Type: "sample",
           Number: 852,
@@ -1066,7 +1067,7 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
           IsFirstTimer: true,
           FirstTimerVersion: 6,
         },
-        // #853: 4日前・検索候補内・v6 (Needs-Attention 一時付与の見落とし旧版) -> 解除日時で ReadyAt 再計測 & v7 昇格
+        // #853: 4日前・検索候補内・v6 (Needs-Attention 一時付与の見落とし旧版) -> 解除日時で ReadyAt 再計測 & 現行版 昇格
         {
           Type: "sample",
           Number: 853,
@@ -1223,13 +1224,13 @@ describe("CLI: 過去実績との比較・ライバル PR", () => {
       const c852 = savedCache.find((e) => e.Number === 852);
       expect(c852?.Type === "sample" && c852.IsFirstTimer).toBeFalse();
       expect(c852?.Type === "sample" && c852.FirstTimerReason).toBe("privileged-or-bot");
-      expect(c852?.Type === "sample" && c852.FirstTimerVersion).toBe(7);
+      expect(c852?.Type === "sample" && c852.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
 
       const c853 = savedCache.find((e) => e.Number === 853);
       expect(c853?.Type === "sample" && c853.IsFirstTimer).toBeTrue();
       expect(c853?.Type === "sample" && c853.AuthorAssociation).toBe("CONTRIBUTOR");
       expect(c853?.Type === "sample" && c853.ReadyDays).toBe(4);
-      expect(c853?.Type === "sample" && c853.FirstTimerVersion).toBe(7);
+      expect(c853?.Type === "sample" && c853.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
 
       const logText = logs.join("\n");
       expect(logText).toContain("キャッシュ自己修復 : TTL削除 1 件・検索外旧版削除 1 件");

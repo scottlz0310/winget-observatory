@@ -6,11 +6,7 @@
 /**
  * 比較条件で必須とされるラベル一覧。
  */
-export const REQUIRED_LABELS: readonly string[] = [
-  "New-Package",
-  "Azure-Pipeline-Passed",
-  "Validation-Completed",
-] as const;
+export const REQUIRED_LABELS: readonly string[] = ["New-Package", "Validation-Completed"] as const;
 
 /**
  * 明確な阻害要因となるラベル一覧。

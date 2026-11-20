@@ -12,14 +12,15 @@ import type {
   MainstreamFrontierSample,
   UnreviewedFrontierSample,
 } from "../models/forecast";
+import { CURRENT_DEPTHS_VERSION } from "./depths";
 import { DAY_MS, round1 } from "./formatters";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "./intervention";
 
-/** 初回提出者の底の定義が現行と互換な最小バージョン（v2 以降で定義不変） */
-export const MIN_FIRST_TIMER_DEPTHS_VERSION = 2;
+/** 初回提出者の底の定義が現行と互換な最小バージョン */
+export const MIN_FIRST_TIMER_DEPTHS_VERSION = CURRENT_DEPTHS_VERSION;
 
 /** 主戦場ライン（初回介入コホート中央値）の最小定義バージョン */
-export const MIN_MAINSTREAM_DEPTHS_VERSION = 4;
+export const MIN_MAINSTREAM_DEPTHS_VERSION = CURRENT_DEPTHS_VERSION;
 
 /**
  * depths-history.jsonl（1 行 1 JSON、先頭に BOM があり得る）を DepthsSnapshot の配列にパースする。
@@ -70,7 +71,7 @@ function extractFrontierSamples<T extends { timestampMs: number }>(
 /**
  * スナップショット列から、初回提出者の底の先頭（起票が最古の初回提出者 PR）の
  * 観測列を時刻昇順で取り出す。
- * 観測定義が異なる旧履歴（DepthsVersion 未設定・1）、未記録・空の観測、日時が不正な観測は除く。
+ * 観測定義が異なる旧履歴（DepthsVersion 未設定または比較条件変更前）、未記録・空の観測、日時が不正な観測は除く。
  */
 export function extractFirstTimerFrontierSamples(
   snapshots: DepthsSnapshot[],
@@ -87,11 +88,11 @@ export function extractFirstTimerFrontierSamples(
 
 /**
  * スナップショット列から、マージ正常底（健康的大底）の先頭（起票が最古の健康な PR）の
- * 観測列を時刻昇順で取り出す（旧バージョン含む全履歴と互換）。
+ * 観測列を時刻昇順で取り出す。
  */
 export function extractHealthyFrontierSamples(
   snapshots: DepthsSnapshot[],
-  minDefinitionVersion = 0,
+  minDefinitionVersion = CURRENT_DEPTHS_VERSION,
 ): HealthyFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
@@ -120,7 +121,7 @@ export function extractUnreviewedFrontierSamples(
 }
 
 /**
- * スナップショット列から、主戦場ライン方式（Mode === "cohort-median-7d" かつ DepthsVersion >= 4）の
+ * スナップショット列から、主戦場ライン方式（Mode === "cohort-median-7d"）の
  * 観測列を時刻昇順で抽出する。
  * 旧定義（未着手の底 / UnreviewedBottom）しか持たない履歴行は完全に除外し、指標切り替え直後の速度スパイクを防ぐ。
  */

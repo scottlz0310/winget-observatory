@@ -12,7 +12,6 @@ import {
   isPrivilegedAuthorAssociation,
   isPrivilegedOrBotAuthor,
   MIN_VALID_READY_VERSION,
-  MIN_WAIVED_READY_VERSION,
   parseAuthorMergedCounts,
   parsePullRequestAuthorMetadata,
   resolveAuthorMergedCounts,
@@ -192,7 +191,7 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     ).toBe(false);
   });
 
-  test("v7（MIN_VALID_READY_VERSION）未満（v6 / v5 / v4 / 未設定）はラベル定義更新に伴う ReadyAt 再検証のため再評価対象", () => {
+  test("MIN_VALID_READY_VERSION 未満はラベル定義更新に伴う ReadyAt 再検証のため再評価対象", () => {
     expect(
       shouldReevaluateCachedSample({
         isFirstTimer: true,
@@ -224,7 +223,7 @@ describe("Domain: shouldReevaluateCachedSample", () => {
       shouldReevaluateCachedSample({
         isFirstTimer: false,
         firstTimerReason: "timeline-blocking",
-        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        firstTimerVersion: 3,
         commitCount: 3,
         authorCountInCandidates: 1,
         author: "tamakichi23",
@@ -259,7 +258,7 @@ describe("Domain: shouldReevaluateCachedSample", () => {
     expect(
       shouldReevaluateAuthorFirstTimer({
         firstTimerReason: "timeline-blocking",
-        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        firstTimerVersion: 3,
         author: "v3-user",
       }),
     ).toBe(false);
@@ -407,7 +406,7 @@ describe("Domain: shouldReevaluateSkippedCandidate", () => {
     ).toBe(false);
   });
 
-  test("Reason が no-ready の場合、旧版（firstTimerVersion < 3 または未設定）なら Waived-* 免除ラベル再評価のため true、v3 以降なら false", () => {
+  test("Reason が no-ready の場合、Ready 再計測の下限未満なら再評価する", () => {
     expect(
       shouldReevaluateSkippedCandidate({
         reason: "no-ready",
@@ -426,11 +425,11 @@ describe("Domain: shouldReevaluateSkippedCandidate", () => {
     expect(
       shouldReevaluateSkippedCandidate({
         reason: "no-ready",
-        firstTimerVersion: MIN_WAIVED_READY_VERSION,
+        firstTimerVersion: MIN_VALID_READY_VERSION - 1,
         isWithinOverallWindow: true,
         isEligibleForDetail: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldReevaluateSkippedCandidate({
         reason: "no-ready",
@@ -540,7 +539,8 @@ describe("Domain: hasValidatedReadyVersion & 汎用作者メタデータバッ�
     [4, false],
     [5, false],
     [6, false],
-    [7, true],
+    [MIN_VALID_READY_VERSION - 1, false],
+    [MIN_VALID_READY_VERSION, true],
   ])("hasValidatedReadyVersion(%p) => %p", (version, expected) => {
     expect(hasValidatedReadyVersion(version)).toBe(expected);
   });

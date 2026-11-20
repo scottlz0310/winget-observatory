@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { CURRENT_FIRST_TIMER_VERSION } from "../../src/domain/first-timer";
 import {
   orchestrateSampleCollection,
   type SampleCollectorClient,
@@ -59,7 +60,7 @@ describe("orchestrateSampleCollection", () => {
       Title: "Cached PR",
       Author: "cachedUser",
       IsFirstTimer: true,
-      FirstTimerVersion: 7,
+      FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
     };
 
     let apiCalled = false;
@@ -328,87 +329,86 @@ describe("orchestrateSampleCollection", () => {
     expect(updated901?.Type === "sample" && updated901.FirstTimerVersion).toBe(1);
   });
 
-  it("旧版 no-ready スキップキャッシュ（Waived-*-Error 付き PR）を再評価し、空キャッシュ時と同一のサンプル・ReadyAt・初回判定を得る", async () => {
-    const waivedTimeline: ProgressTimelineEvent[] = [
-      {
-        event: "labeled",
-        created_at: "2026-10-01T01:00:00Z",
-        label: { name: "New-Package" },
-      },
-      {
-        event: "labeled",
-        created_at: "2026-10-01T01:00:00Z",
-        label: { name: "Azure-Pipeline-Passed" },
-      },
-      {
-        event: "labeled",
-        created_at: "2026-10-01T01:00:00Z",
-        label: { name: "Validation-Completed" },
-      },
-      {
-        event: "labeled",
-        created_at: "2026-10-02T01:00:00Z",
-        label: { name: "Waived-Validation-Defender-Error" },
-      },
-    ];
+  it.each([undefined, CURRENT_FIRST_TIMER_VERSION - 1])(
+    "旧版 no-ready キャッシュ（世代 %p）を再評価し、Azure-Pipeline-Passed がなくても採用する",
+    async (version) => {
+      const waivedTimeline: ProgressTimelineEvent[] = [
+        {
+          event: "labeled",
+          created_at: "2026-10-01T01:00:00Z",
+          label: { name: "New-Package" },
+        },
+        {
+          event: "labeled",
+          created_at: "2026-10-01T01:00:00Z",
+          label: { name: "Validation-Completed" },
+        },
+        {
+          event: "labeled",
+          created_at: "2026-10-02T01:00:00Z",
+          label: { name: "Waived-Validation-Defender-Error" },
+        },
+      ];
 
-    let fetchCountWithLegacyCache = 0;
-    const makeClient = (onFetch?: () => void): SampleCollectorClient => ({
-      getPullRequestSampleData: async () => {
-        onFetch?.();
-        return {
-          createdAt: "2026-10-01T00:00:00Z",
-          commitCount: 1,
-          latestCommittedDate: "2026-10-01T00:00:00Z",
-          author: "waived-user",
-          timeline: waivedTimeline,
-        };
-      },
-      graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
-    });
+      let fetchCountWithLegacyCache = 0;
+      const makeClient = (onFetch?: () => void): SampleCollectorClient => ({
+        getPullRequestSampleData: async () => {
+          onFetch?.();
+          return {
+            createdAt: "2026-10-01T00:00:00Z",
+            commitCount: 1,
+            latestCommittedDate: "2026-10-01T00:00:00Z",
+            author: "waived-user",
+            timeline: waivedTimeline,
+          };
+        },
+        graphql: async <T = unknown>() => ({ u_0: { issueCount: 1 } }) as T,
+      });
 
-    const candidates = [createSearchItem(1101, "2026-10-05T01:00:00Z", "waived-user")];
-    const overallSinceDate = new Date("2026-09-01T00:00:00Z");
+      const candidates = [createSearchItem(1101, "2026-10-05T01:00:00Z", "waived-user")];
+      const overallSinceDate = new Date("2026-09-01T00:00:00Z");
 
-    // 1. 空キャッシュでの結果
-    const emptyCacheResult = await orchestrateSampleCollection({
-      client: makeClient(),
-      repository: "microsoft/winget-pkgs",
-      candidates,
-      overallSinceDate,
-      fetchBudget: 5,
-      initialCache: [],
-    });
+      // 1. 空キャッシュでの結果
+      const emptyCacheResult = await orchestrateSampleCollection({
+        client: makeClient(),
+        repository: "microsoft/winget-pkgs",
+        candidates,
+        overallSinceDate,
+        fetchBudget: 5,
+        initialCache: [],
+      });
 
-    // 2. 旧版の no-ready キャッシュが存在する状態での結果
-    const legacyNoReadyCache: SampleCacheEntry[] = [
-      {
-        Type: "skipped",
-        Number: 1101,
-        MergedAt: "2026-10-05T01:00:00Z",
-        Reason: "no-ready",
-      },
-    ];
-    const migratedResult = await orchestrateSampleCollection({
-      client: makeClient(() => {
-        fetchCountWithLegacyCache++;
-      }),
-      repository: "microsoft/winget-pkgs",
-      candidates,
-      overallSinceDate,
-      fetchBudget: 5,
-      initialCache: legacyNoReadyCache,
-    });
+      // 2. 旧版の no-ready キャッシュが存在する状態での結果
+      const legacyNoReadyCache: SampleCacheEntry[] = [
+        {
+          Type: "skipped",
+          Number: 1101,
+          MergedAt: "2026-10-05T01:00:00Z",
+          Reason: "no-ready",
+          ...(version !== undefined ? { FirstTimerVersion: version } : {}),
+        },
+      ];
+      const migratedResult = await orchestrateSampleCollection({
+        client: makeClient(() => {
+          fetchCountWithLegacyCache++;
+        }),
+        repository: "microsoft/winget-pkgs",
+        candidates,
+        overallSinceDate,
+        fetchBudget: 5,
+        initialCache: legacyNoReadyCache,
+      });
 
-    expect(fetchCountWithLegacyCache).toBe(1);
-    expect(migratedResult.samples).toHaveLength(1);
-    expect(migratedResult.skippedCount).toBe(0);
-    expect(migratedResult.samples).toEqual(emptyCacheResult.samples);
-    expect(migratedResult.samples[0]?.isFirstTimer).toBeTrue();
-    expect(migratedResult.samples[0]?.readyAt).toBe("2026-10-01T01:00:00.000Z");
-    expect(migratedResult.samples[0]?.days).toBe(4);
-    expect(migratedResult.finalCache).toEqual(emptyCacheResult.finalCache);
-  });
+      expect(fetchCountWithLegacyCache).toBe(1);
+      expect(migratedResult.samples).toHaveLength(1);
+      expect(migratedResult.skippedCount).toBe(0);
+      expect(migratedResult.samples).toEqual(emptyCacheResult.samples);
+      expect(migratedResult.samples[0]?.isFirstTimer).toBeTrue();
+      expect(migratedResult.samples[0]?.readyAt).toBe("2026-10-01T01:00:00.000Z");
+      expect(migratedResult.samples[0]?.days).toBe(4);
+      expect(migratedResult.finalCache).toEqual(emptyCacheResult.finalCache);
+    },
+  );
 
   it("旧版 sample キャッシュ（timeline-blocking かつ Waived-*-Error の一時付与で ReadyAt が後ろ倒しされていた PR）を再評価し、正しい ReadyAt と初回判定に更新する", async () => {
     // 旧実装では 10/02 に Waived-Validation-Defender-Error が付いて 10/04 に外れた場合、
@@ -486,10 +486,10 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples[0]?.days).toBe(4);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(7);
+    expect(result.samples[0]?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
   });
 
-  it("新版（FirstTimerVersion: 3）で記録済みの no-ready キャッシュは再取得せずスキップを維持する", async () => {
+  it("現行条件で記録済みの no-ready キャッシュは再取得せずスキップを維持する", async () => {
     let apiCalled = false;
     const client: SampleCollectorClient = {
       getPullRequestSampleData: async () => {
@@ -505,7 +505,7 @@ describe("orchestrateSampleCollection", () => {
         Number: 1103,
         MergedAt: "2026-10-05T00:00:00.000Z",
         Reason: "no-ready",
-        FirstTimerVersion: 3,
+        FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
       },
     ];
 
@@ -700,11 +700,11 @@ describe("orchestrateSampleCollection", () => {
     expect(result.samples).toHaveLength(1);
     expect(result.samples[0]?.isFirstTimer).toBeTrue();
     expect(result.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(result.samples[0]?.firstTimerVersion).toBe(7);
+    expect(result.samples[0]?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
     const saved = result.finalCache.find((e) => e.Number === 449315);
     expect(saved?.Type === "sample" && saved.IsFirstTimer).toBeTrue();
     expect(saved?.Type === "sample" && saved.FirstTimerReason).toBeUndefined();
-    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(7);
+    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
   });
 
   it("Validation-Guide 阻害化に伴う v4 キャッシュ再評価: 一時付与→解除サンプルと未解除サンプルが、空キャッシュ時と同一の ReadyAt / ReadyDays / skipped になる", async () => {
@@ -843,7 +843,7 @@ describe("orchestrateSampleCollection", () => {
     expect(migratedResult.samples[0]?.number).toBe(1201);
     expect(migratedResult.samples[0]?.readyAt).toBe("2026-11-15T00:00:00.000Z");
     expect(migratedResult.samples[0]?.days).toBe(2);
-    expect(migratedResult.samples[0]?.firstTimerVersion).toBe(7);
+    expect(migratedResult.samples[0]?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
     expect(migratedResult.finalCache).toEqual(emptyResult.finalCache);
   });
 
@@ -949,13 +949,13 @@ describe("orchestrateSampleCollection", () => {
       expect(s.days).toBe(2);
       expect(s.isFirstTimer).toBeFalse();
       expect(s.firstTimerReason).toBe("recurring-author");
-      expect(s.firstTimerVersion).toBe(7);
+      expect(s.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
     }
     for (const num of [1211, 1212]) {
       const saved = secondRun.finalCache.find((e) => e.Number === num);
       expect(saved?.Type === "sample" && saved.ReadyAt).toBe("2026-11-15T00:00:00.000Z");
       expect(saved?.Type === "sample" && saved.ReadyDays).toBe(2);
-      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(7);
+      expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
     }
   });
 
@@ -1029,7 +1029,7 @@ describe("orchestrateSampleCollection", () => {
     const s449315 = result.samples.find((s) => s.number === 449315);
     expect(s449315?.isFirstTimer).toBeTrue();
     expect(s449315?.firstTimerReason).toBeUndefined();
-    expect(s449315?.firstTimerVersion).toBe(7);
+    expect(s449315?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
 
     const c411138 = result.finalCache.find((e) => e.Number === 411138);
     expect(c411138?.Type === "sample" && c411138.FirstTimerVersion).toBe(3);
@@ -1136,7 +1136,7 @@ describe("orchestrateSampleCollection", () => {
     expect(restoredResult.samples[0]?.days).toBe(4);
     expect(restoredResult.samples[0]?.isFirstTimer).toBeTrue();
     expect(restoredResult.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(7);
+    expect(restoredResult.samples[0]?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
   });
 
   it("特権ロール (MEMBER/OWNER/COLLABORATOR) と Bot は累計マージ照会を行わず privileged-or-bot (v6) で除外し、CONTRIBUTOR は許容する", async () => {
@@ -1192,19 +1192,21 @@ describe("orchestrateSampleCollection", () => {
       const s = result.samples.find((item) => item.number === num);
       expect(s?.isFirstTimer).toBeFalse();
       expect(s?.firstTimerReason).toBe("privileged-or-bot");
-      expect(s?.firstTimerVersion).toBe(7);
+      expect(s?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
       const cached = result.finalCache.find((e) => e.Number === num);
       expect(cached?.Type === "sample" && cached.FirstTimerReason).toBe("privileged-or-bot");
-      expect(cached?.Type === "sample" && cached.FirstTimerVersion).toBe(7);
+      expect(cached?.Type === "sample" && cached.FirstTimerVersion).toBe(
+        CURRENT_FIRST_TIMER_VERSION,
+      );
     }
 
     const normal = result.samples.find((item) => item.number === 1304);
     expect(normal?.isFirstTimer).toBeTrue();
     expect(normal?.authorAssociation).toBe("CONTRIBUTOR");
-    expect(normal?.firstTimerVersion).toBe(7);
+    expect(normal?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
   });
 
-  it("旧 FirstTimerVersion: 6 キャッシュ（Needs-Attention 等の一時付与を見落とした ReadyAt）を再取得して解除後の ReadyAt と v7 へ修復する（レビュー指摘回帰テスト）", async () => {
+  it("旧 FirstTimerVersion: 6 キャッシュ（Needs-Attention 等の一時付与を見落とした ReadyAt）を再取得して解除後の ReadyAt と 現行版 へ修復する（レビュー指摘回帰テスト）", async () => {
     let fetched = 0;
     const client: SampleCollectorClient = {
       getPullRequestSampleData: async () => {
@@ -1282,9 +1284,9 @@ describe("orchestrateSampleCollection", () => {
     expect(result.fetchedCount).toBe(1);
     expect(result.samples[0]?.readyAt).toBe("2026-11-09T00:00:00.000Z");
     expect(result.samples[0]?.days).toBe(1);
-    expect(result.samples[0]?.firstTimerVersion).toBe(7);
+    expect(result.samples[0]?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
     const saved = result.finalCache.find((e) => e.Number === 1401);
     expect(saved?.Type === "sample" && saved.ReadyAt).toBe("2026-11-09T00:00:00.000Z");
-    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(7);
+    expect(saved?.Type === "sample" && saved.FirstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
   });
 });

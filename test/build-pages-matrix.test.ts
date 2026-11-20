@@ -6,6 +6,7 @@ import { buildDashboard } from "../scripts/build-pages";
 import type { GitHubApiClient } from "../src/api/github";
 import { runExploreDepths } from "../src/cli/explore-depths";
 import { CURRENT_DEPTHS_VERSION } from "../src/domain/depths";
+import { CURRENT_FIRST_TIMER_VERSION } from "../src/domain/first-timer";
 
 describe("buildDashboard: 2×2 マトリクス・主戦場ライン・最速ランキング", () => {
   test("runExploreDepths で探索された実際の StaleBottom データから、CONTRIBUTOR 行に常連除外バッジが描画される", async () => {
@@ -873,7 +874,7 @@ describe("buildDashboard: 2×2 マトリクス・主戦場ライン・最速ラ�
       AuthorType: "User",
       AuthorAssociation: "CONTRIBUTOR",
       IsFirstTimer: isFirstTimer,
-      FirstTimerVersion: 7,
+      FirstTimerVersion: CURRENT_FIRST_TIMER_VERSION,
       ...overrides,
     });
 
@@ -917,7 +918,9 @@ describe("buildDashboard: 2×2 マトリクス・主戦場ライン・最速ラ�
       // 該当全件数 = 11 + 1 (#410002) = 12 件のうち TOP 10
       expect(rankingSection).toContain("全 12 件");
       expect(rankingSection).toContain("上位 10 件");
-      expect(rankingSection).toContain("成立後 0.5 日以上・v7 以上・特権ロール/Bot 除外");
+      expect(rankingSection).toContain(
+        `成立後 0.5 日以上・v${CURRENT_FIRST_TIMER_VERSION} 以上・特権ロール/Bot 除外`,
+      );
       expect(rankingSection).not.toContain("v6 legacy cache");
       expect(rankingSection).toContain("<th>順位</th>");
       expect(rankingSection).toContain("<th>PR 番号</th>");

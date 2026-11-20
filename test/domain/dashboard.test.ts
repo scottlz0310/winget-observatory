@@ -10,6 +10,7 @@ import {
   parseTimestampToMs,
   selectComparableHistory,
 } from "../../src/domain/dashboard";
+import { QUEUE_BASIS } from "../../src/domain/progress-csv";
 import type { HistoryRecord } from "../../src/models/dashboard";
 import type { ProgressHistoryRow } from "../../src/models/progress";
 
@@ -419,7 +420,7 @@ describe("selectComparableHistory", () => {
     FrontCreatedAt: "2026-10-01 10:00",
     ActiveAhead: "120",
     TotalAhead: "150",
-    QueueBasis: "updated",
+    QueueBasis: QUEUE_BASIS,
     Behind: "30",
     TotalLifetimeDays: "5",
     TurnLatencyDays: "5",
@@ -457,6 +458,7 @@ describe("selectComparableHistory", () => {
     ["別の基準 PR の行", { TargetPr: "999" }],
     ["QueueBasis が空欄の旧定義の行", { QueueBasis: "" }],
     ["QueueBasis が現行と異なる行", { QueueBasis: "created" }],
+    ["旧ラベル条件の行", { QueueBasis: "updated" }],
     ["ActiveAhead が空欄の行（0 件として扱わない）", { ActiveAhead: "" }],
     ["FrontNumber が空欄の行", { FrontNumber: "" }],
     ["時刻が不正な行", { Timestamp: "invalid" }],

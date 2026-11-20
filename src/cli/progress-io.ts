@@ -130,7 +130,9 @@ export async function fetchAndValidateTargetPr(
     return null;
   }
 
-  log("比較条件                   : 必須3ラベルあり・除外ラベルなし・Draftでない");
+  log(
+    `比較条件                   : ${REQUIRED_LABELS.join("・")}あり・除外ラベルなし・Draftでない`,
+  );
 
   // 対象 PR のタイムライン取得と成立日時特定
   const targetTimeline = await client.getIssueTimeline(options.repository, options.targetPr);

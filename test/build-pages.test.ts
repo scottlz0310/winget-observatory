@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildDashboard } from "../scripts/build-pages";
 import { CURRENT_DEPTHS_VERSION } from "../src/domain/depths";
 import { calculateProgressStats, createProgressSnapshot } from "../src/domain/progress";
+import { QUEUE_BASIS } from "../src/domain/progress-csv";
 
 describe("buildDashboard", () => {
   test("データからダッシュボード HTML とコピーされたデータファイルを生成し、Velocity・ETA・Δ・パーセンタイル統計を出力する", () => {
@@ -76,8 +77,8 @@ describe("buildDashboard", () => {
 
     // 24 時間で 50 件消化（150 -> 100）の時系列推移
     const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"
-"2026-11-06 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","4.5","4.5","4.5","1","updated"
-"2026-11-07 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.5","5.5","5.5","1","updated"
+"2026-11-06 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","4.5","4.5","4.5","1","${QUEUE_BASIS}"
+"2026-11-07 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.5","5.5","5.5","1","${QUEUE_BASIS}"
 `;
     writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
 
@@ -183,8 +184,8 @@ describe("buildDashboard", () => {
 
     // 前線番号 120000 -> 119950 (-50 番号巻き戻り)
     const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"
-"2026-11-06 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.0","5.0","5.0","1","updated"
-"2026-11-07 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","6.0","6.0","6.0","1","updated"
+"2026-11-06 12:00:00","123456","120000","2026-10-01 10:00","100","150","50","5.0","5.0","5.0","1","${QUEUE_BASIS}"
+"2026-11-07 12:00:00","123456","119950","2026-09-30 10:00","150","200","40","6.0","6.0","6.0","1","${QUEUE_BASIS}"
 `;
     writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
 
@@ -727,8 +728,8 @@ describe("buildDashboard: 過去実績との比較", () => {
     writeFileSync(join(dataDir, "latest-depths.json"), JSON.stringify(dummyDepths), "utf-8");
 
     const dummyCsv = `"Timestamp","TargetPr","FrontNumber","FrontCreatedAt","ActiveAhead","TotalAhead","Behind","TotalLifetimeDays","TurnLatencyDays","WaitDays","CommitCount","QueueBasis"
-"2026-11-07 12:00:00","123456","119900","2026-09-30 10:00","1600","2300","280","34.0","34.0","34.0","1","updated"
-"2026-11-08 12:00:00","123456","120000","2026-10-01 10:00","1500","2200","300","35.0","35.0","35.0","1","updated"
+"2026-11-07 12:00:00","123456","119900","2026-09-30 10:00","1600","2300","280","34.0","34.0","34.0","1","${QUEUE_BASIS}"
+"2026-11-08 12:00:00","123456","120000","2026-10-01 10:00","1500","2200","300","35.0","35.0","35.0","1","${QUEUE_BASIS}"
 `;
     writeFileSync(join(dataDir, "progress-history.csv"), dummyCsv, "utf-8");
 

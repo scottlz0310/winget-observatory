@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { CURRENT_FIRST_TIMER_VERSION } from "../../src/domain/first-timer";
 import { indexSampleCache } from "../../src/domain/sample-cache";
 import {
   orchestrateSampleCollection,
@@ -89,6 +90,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       now: fixedNow,
       windowDays: 90,
       budget: 0,
+      minReadyVersion: 7,
       targetVersion: 8,
     });
     expect(queryCount).toBe(0);
@@ -102,6 +104,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       now: fixedNow,
       windowDays: 90,
       budget: 10,
+      minReadyVersion: 7,
       targetVersion: 8,
     });
     expect(queryCount).toBe(1);
@@ -225,6 +228,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       now: fixedNow,
       windowDays: 90,
       budget: 10,
+      minReadyVersion: 7,
       targetVersion: 8,
     });
     expect(refreshResult).toEqual({
@@ -240,7 +244,7 @@ describe("refreshLegacyAuthorMetadata", () => {
       "timeline-blocking",
     );
 
-    // 2回目: budget 回復後、v6 のまま残っているため正しく初回提出者 v7 として再評価される
+    // 2回目: budget 回復後、v6 のまま残っているため正しく初回提出者の現行版 として再評価される
     const secondRun = await orchestrateSampleCollection({
       client,
       repository: "microsoft/winget-pkgs",
@@ -252,7 +256,7 @@ describe("refreshLegacyAuthorMetadata", () => {
     expect(secondRun.fetchedCount).toBe(1);
     expect(secondRun.samples[0]?.isFirstTimer).toBeTrue();
     expect(secondRun.samples[0]?.firstTimerReason).toBeUndefined();
-    expect(secondRun.samples[0]?.firstTimerVersion).toBe(7);
+    expect(secondRun.samples[0]?.firstTimerVersion).toBe(CURRENT_FIRST_TIMER_VERSION);
   });
 
   it("sample-metadata-refresh.ts のエクスポートと sample-collector.ts の互換 re-export が完全一致する", () => {
