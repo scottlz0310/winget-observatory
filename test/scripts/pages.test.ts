@@ -302,5 +302,141 @@ describe("generateDashboardHtml", () => {
     expect(html).toContain("#102");
     expect(html).toContain("旧スナップショットのため更新順 1 コミット健康体を表示中");
     expect(html).toContain("旧スナップショットのため初回提出者コホートを表示中");
+    // 初回専用配列がない旧データでは確定 0 件扱い（「ありません」）にせず未観測メッセージを出す
+    expect(html).toContain("初回提出者専用のマージ前線データはまだありません");
+    expect(html).not.toContain("現在、初回提出者の 1 コミット健康体 PR はありません。");
+  });
+
+  test("初動正常底の全体表示は収集時の IsFirstTimer 判定を使い、生涯マージ 1 件の MEMBER には初回バッジを付けずキャッシュ由来初回には付与する", () => {
+    const html = generateDashboardHtml({
+      progress: null,
+      depths: {
+        DepthsVersion: 5,
+        Timestamp: "2026-11-20T00:00:00Z",
+        AllAuthorsFirstReviewFrontier: {
+          Mode: FIRST_REVIEW_MAINSTREAM_MODE,
+          WindowDays: 7,
+          CohortCount: 2,
+          OpenCount: 0,
+          MergedCount: 2,
+          MedianCreatedAt: "2026-10-10T00:00:00Z",
+          LagDays: 41,
+          Items: [
+            {
+              Number: 7001,
+              Title: "New package: Member.App version 1.0",
+              Url: "https://example.com/7001",
+              State: "MERGED",
+              Author: "repo-member",
+              AuthorAssociation: "MEMBER",
+              AuthorMergedCount: 1,
+              IsFirstTimer: false,
+              CreatedAt: "2026-10-10T00:00:00Z",
+              FirstHumanInterventionAt: "2026-11-18T00:00:00Z",
+            },
+            {
+              Number: 7002,
+              Title: "New package: CachedFirstTimer.App version 1.0",
+              Url: "https://example.com/7002",
+              State: "MERGED",
+              Author: "ft-cached",
+              AuthorAssociation: "CONTRIBUTOR",
+              IsFirstTimer: true,
+              CreatedAt: "2026-10-11T00:00:00Z",
+              FirstHumanInterventionAt: "2026-11-19T00:00:00Z",
+            },
+          ],
+        },
+        FirstReviewFrontier: {
+          Mode: FIRST_REVIEW_MAINSTREAM_MODE,
+          WindowDays: 7,
+          CohortCount: 1,
+          OpenCount: 0,
+          MergedCount: 1,
+          MedianCreatedAt: "2026-10-11T00:00:00Z",
+          LagDays: 40,
+          Items: [
+            {
+              Number: 7002,
+              Title: "New package: CachedFirstTimer.App version 1.0",
+              Url: "https://example.com/7002",
+              State: "MERGED",
+              Author: "ft-cached",
+              AuthorAssociation: "CONTRIBUTOR",
+              IsFirstTimer: true,
+              CreatedAt: "2026-10-11T00:00:00Z",
+              FirstHumanInterventionAt: "2026-11-19T00:00:00Z",
+            },
+          ],
+        },
+      },
+      csvRows: [],
+    });
+
+    const allView = html
+      .split("🎯 初動正常底（主戦場ライン・遅くとも）")[1]
+      .split('data-matrix-view="first-timer"')[0];
+    const memberRow = allView.split("#7001")[1].split("</tr>")[0];
+    const ftRow = allView.split("#7002")[1].split("</tr>")[0];
+    expect(memberRow).not.toContain("🌱 初回");
+    expect(ftRow).toContain("🌱 初回");
+  });
+
+  test("統合時系列チャートは全体・初回提出者の両履歴があるとき右軸トグルと 2 つの切替ビューを生成する", () => {
+    const t1 = Date.parse("2026-11-18T00:00:00Z");
+    const t2 = Date.parse("2026-11-19T00:00:00Z");
+    const html = generateDashboardHtml({
+      progress: { TargetPr: 464302, ActiveAhead: 1000 },
+      depths: null,
+      csvRows: [
+        {
+          Timestamp: "2026-11-18 09:00:00",
+          TargetPr: 464302,
+          FrontNumber: 430000,
+          FrontCreatedAt: "2026-09-20 09:00",
+          ActiveAhead: 1100,
+          TotalAhead: 1500,
+          Behind: 200,
+          TotalLifetimeDays: 20,
+          TurnLatencyDays: 20,
+          WaitDays: 20,
+          CommitCount: 1,
+          QueueBasis: "updated",
+        },
+        {
+          Timestamp: "2026-11-19 09:00:00",
+          TargetPr: 464302,
+          FrontNumber: 431000,
+          FrontCreatedAt: "2026-09-21 09:00",
+          ActiveAhead: 1000,
+          TotalAhead: 1400,
+          Behind: 220,
+          TotalLifetimeDays: 21,
+          TurnLatencyDays: 21,
+          WaitDays: 21,
+          CommitCount: 1,
+          QueueBasis: "updated",
+        },
+      ],
+      healthyFrontierSamples: [
+        { timestampMs: t1, pr: 430000, createdMs: t1 - 50 * DAY_MS },
+        { timestampMs: t2, pr: 431000, createdMs: t2 - 49 * DAY_MS },
+      ],
+      firstTimerFrontierSamples: [
+        { timestampMs: t1, pr: 435000, createdMs: t1 - 40 * DAY_MS },
+        { timestampMs: t2, pr: 436000, createdMs: t2 - 39 * DAY_MS },
+      ],
+    });
+
+    expect(html).toContain('data-chart-filter="all"');
+    expect(html).toContain('data-chart-filter="first-timer"');
+    const allChart = html
+      .split('data-chart-view="all"')[1]
+      .split('data-chart-view="first-timer"')[0];
+    const ftChart = html.split('data-chart-view="first-timer"')[1].split("</section>")[0];
+    expect(allChart).toContain("⚓ マージ正常底（健康的大底）起票経過");
+    expect(allChart).not.toContain("🌱 マージ正常底（初回提出者のみ）起票経過");
+    expect(ftChart).toContain("🌱 マージ正常底（初回提出者のみ）起票経過");
+    expect(ftChart).not.toContain("⚓ マージ正常底（健康的大底）起票経過");
   });
 });

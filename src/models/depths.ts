@@ -223,6 +223,8 @@ export interface FirstReviewCohortItem {
   AuthorAssociation?: string;
   /** 作者の生涯マージ済 PR 数（初回提出者判定メタデータ） */
   AuthorMergedCount?: number;
+  /** 収集時の初回提出者判定結果（全体コホート表示と初回限定コホートの整合用） */
+  IsFirstTimer?: boolean;
   CommitCount?: number;
   CreatedAt: string;
   FirstHumanInterventionAt: string;

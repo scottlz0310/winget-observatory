@@ -3,6 +3,7 @@
 import { formatDeltaBadge } from "../../../src/domain/dashboard";
 import { isFirstTimerDepthsRow } from "../../../src/domain/depths";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
+import { isPrivilegedOrBotAuthor } from "../../../src/domain/first-timer";
 import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
 import {
   FIRST_REVIEW_COHORT_ITEM_LIMIT,
@@ -267,10 +268,16 @@ function renderMainstreamCohortView(params: {
         : `<span class="badge sample-nowrap" style="background: #e0f2fe; color: #0369a1; font-size: 0.7rem;">OPEN</span>`;
     const isFt =
       viewKey === "all" &&
-      ((item.State === "OPEN" &&
-        item.AuthorAssociation === "NONE" &&
-        item.AuthorMergedCount === 0) ||
-        (item.State === "MERGED" && item.AuthorMergedCount === 1));
+      (item.IsFirstTimer !== undefined
+        ? item.IsFirstTimer
+        : !isPrivilegedOrBotAuthor({
+            author: item.Author,
+            authorAssociation: item.AuthorAssociation,
+          }) &&
+          ((item.State === "OPEN" &&
+            item.AuthorAssociation === "NONE" &&
+            item.AuthorMergedCount === 0) ||
+            (item.State === "MERGED" && item.AuthorMergedCount === 1)));
     const ftBadge = isFt
       ? `<span class="badge sample-nowrap" style="background: #dcfce7; color: #15803d; font-size: 0.7rem;">🌱 初回</span>`
       : "";
@@ -362,14 +369,17 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
 
   // ① 初動前線（未レビュー前線）
   const unreviewedAll = depths?.UnreviewedBottom ?? [];
-  const unreviewedFt =
-    depths?.FirstTimerUnreviewedBottom ?? unreviewedAll.filter(isFirstTimerDepthsRow);
+  const hasDedicatedUnreviewedFt =
+    depths?.FirstTimerUnreviewedBottom !== undefined ||
+    Boolean(depths?.FirstTimerUnreviewedTruncated);
+  const unreviewedFt = hasDedicatedUnreviewedFt
+    ? (depths?.FirstTimerUnreviewedBottom ?? [])
+    : unreviewedAll.filter(isFirstTimerDepthsRow);
   const hasRecordedUnreviewed =
     depths?.UnreviewedBottom !== undefined || Boolean(depths?.UnreviewedTruncated);
-  const hasRecordedUnreviewedFt =
-    depths?.FirstTimerUnreviewedBottom !== undefined ||
-    Boolean(depths?.FirstTimerUnreviewedTruncated) ||
-    hasRecordedUnreviewed;
+  const unreviewedFtTruncated = hasDedicatedUnreviewedFt
+    ? Boolean(depths?.FirstTimerUnreviewedTruncated)
+    : Boolean(depths?.UnreviewedTruncated);
 
   // ② 初動正常底（主戦場ライン）
   const hasAllAuthorsFrontier = depths?.AllAuthorsFirstReviewFrontier !== undefined;
@@ -379,9 +389,16 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
   // ③ マージ前線（1コミット完走組）
   const hasSingleCommit = depths?.SingleCommitBottom !== undefined;
   const mergeFrontAll = depths?.SingleCommitBottom ?? depths?.StaleBottom ?? [];
-  const mergeFrontFt =
-    depths?.FirstTimerSingleCommitBottom ?? mergeFrontAll.filter(isFirstTimerDepthsRow);
+  const hasDedicatedMergeFrontFt =
+    depths?.FirstTimerSingleCommitBottom !== undefined ||
+    Boolean(depths?.FirstTimerSingleCommitTruncated);
+  const mergeFrontFt = hasDedicatedMergeFrontFt
+    ? (depths?.FirstTimerSingleCommitBottom ?? [])
+    : mergeFrontAll.filter(isFirstTimerDepthsRow);
   const hasRecordedMergeFront = hasSingleCommit || depths?.StaleBottom !== undefined;
+  const mergeFrontFtTruncated = hasDedicatedMergeFrontFt
+    ? Boolean(depths?.FirstTimerSingleCommitTruncated)
+    : Boolean(depths?.SingleCommitTruncated);
 
   // ④ マージ正常底（健康的大底）
   const mergeBottomAll = depths?.HealthyBottom ?? [];
@@ -429,16 +446,20 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
           viewKey: "first-timer",
           items: unreviewedFt,
           timestamp,
-          truncated: Boolean(depths?.FirstTimerUnreviewedTruncated),
-          hasRecorded: hasRecordedUnreviewedFt,
+          truncated: unreviewedFtTruncated,
+          hasRecorded: hasDedicatedUnreviewedFt,
           emptyConfirmedText: "現在、初回提出者の完全未着手 PR はありません。",
           emptyLegacyText:
-            "初回提出者の未レビュー前線データはまだありません（次回の定期観測から記録されます）。",
+            "初回提出者専用の未レビュー前線データはまだありません（次回の定期観測から記録されます）。",
           highlightInterventions: false,
           highlightFirstTimer: false,
           showAuthor: true,
           showCommitCount: true,
           badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
+          fallbackNote:
+            !hasDedicatedUnreviewedFt && unreviewedFt.length > 0
+              ? "※ 旧スナップショットの全体一覧から初回提出者を参考抽出しています（次回観測から専用 TOP 10 を記録）"
+              : undefined,
         })}
       </div>
 
@@ -491,16 +512,20 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
           viewKey: "first-timer",
           items: mergeFrontFt,
           timestamp,
-          truncated: Boolean(depths?.FirstTimerSingleCommitTruncated),
-          hasRecorded: depths?.FirstTimerSingleCommitBottom !== undefined || hasRecordedMergeFront,
+          truncated: mergeFrontFtTruncated,
+          hasRecorded: hasDedicatedMergeFrontFt,
           emptyConfirmedText: "現在、初回提出者の 1 コミット健康体 PR はありません。",
           emptyLegacyText:
-            "初回提出者のマージ前線データはまだありません（次回の定期観測から記録されます）。",
+            "初回提出者専用のマージ前線データはまだありません（次回の定期観測から記録されます）。",
           highlightInterventions: true,
           highlightFirstTimer: false,
           showAuthor: true,
           showCommitCount: false,
           badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
+          fallbackNote:
+            !hasDedicatedMergeFrontFt && mergeFrontFt.length > 0
+              ? "※ 旧スナップショットの全体一覧から初回提出者を参考抽出しています（次回観測から専用 TOP 10 を記録）"
+              : undefined,
         })}
       </div>
 

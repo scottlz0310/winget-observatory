@@ -914,10 +914,20 @@ export async function fetchFirstReviewFrontiers(params: {
           candidate.authorAssociation === "NONE" && mergedCountCache.has(candidate.author)
             ? mergedCountCache.get(candidate.author)
             : undefined;
-        const enriched: FirstReviewCohortCandidate =
-          mergedCount !== undefined ? { ...candidate, authorMergedCount: mergedCount } : candidate;
+        const isFt =
+          !isPrivilegedOrBotAuthor({
+            author: candidate.author,
+            authorAssociation: candidate.authorAssociation,
+          }) &&
+          candidate.authorAssociation === "NONE" &&
+          (mergedCount ?? 0) === 0;
+        const enriched: FirstReviewCohortCandidate = {
+          ...candidate,
+          ...(mergedCount !== undefined ? { authorMergedCount: mergedCount } : {}),
+          isFirstTimer: isFt,
+        };
         allAuthorsCandidates.push(enriched);
-        if (candidate.authorAssociation === "NONE" && (mergedCount ?? 0) === 0) {
+        if (isFt) {
           firstTimerCandidates.push(enriched);
         }
       }
@@ -991,7 +1001,10 @@ export async function fetchFirstReviewFrontiers(params: {
         const cachedCount = node.author?.login
           ? mergedCountCache.get(node.author.login)
           : undefined;
-        const cand = toFirstReviewCohortCandidate(node, summary, "MERGED", cachedCount);
+        const cand: FirstReviewCohortCandidate = {
+          ...toFirstReviewCohortCandidate(node, summary, "MERGED", cachedCount),
+          isFirstTimer: true,
+        };
         firstTimerCandidates.push(cand);
         allAuthorsCandidates.push(cand);
         continue;
@@ -1001,7 +1014,7 @@ export async function fetchFirstReviewFrontiers(params: {
       }
       const cand = toFirstReviewCohortCandidate(node, summary, "MERGED");
       if (knownNonFirstTimerNumbers.has(node.number)) {
-        allAuthorsCandidates.push(cand);
+        allAuthorsCandidates.push({ ...cand, isFirstTimer: false });
         continue;
       }
       uncachedMergedForFirstTimer.push(cand);
@@ -1020,17 +1033,19 @@ export async function fetchFirstReviewFrontiers(params: {
       for (const candidate of uncachedMergedForFirstTimer) {
         if (!candidate.author) continue;
         const mergedCount = mergedCountCache.get(candidate.author) ?? 0;
-        const enriched: FirstReviewCohortCandidate = {
-          ...candidate,
-          authorMergedCount: mergedCount,
-        };
-        allAuthorsCandidates.push(enriched);
         const privilegedOrBot = isPrivilegedOrBotAuthor({
           author: candidate.author,
           authorAssociation: candidate.authorAssociation,
         });
         // 既にマージ済みの初回 PR なので非特権・非 Bot かつ累計マージ数 1 件以下のみ初回提出者コホートへ算入
-        if (!privilegedOrBot && mergedCount <= 1) {
+        const isFt = !privilegedOrBot && mergedCount <= 1;
+        const enriched: FirstReviewCohortCandidate = {
+          ...candidate,
+          authorMergedCount: mergedCount,
+          isFirstTimer: isFt,
+        };
+        allAuthorsCandidates.push(enriched);
+        if (isFt) {
           firstTimerCandidates.push(enriched);
         }
       }
