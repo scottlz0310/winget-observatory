@@ -5,7 +5,9 @@ import {
   calculateLifetimeForecast,
   calculateStaleFrontierForecast,
   extractFirstTimerFrontierSamples,
+  extractHealthyFrontierSamples,
   extractMainstreamFrontierSamples,
+  extractSingleCommitFrontierSamples,
   extractStaleFrontierSamples,
   extractUnreviewedFrontierSamples,
   parseDepthsHistory,
@@ -144,6 +146,29 @@ describe("Domain: extractFirstTimerFrontierSamples", () => {
     const samples = extractFirstTimerFrontierSamples([oldUpdatedOrder, newCreatedOrder]);
     expect(samples.map((s) => s.pr)).toEqual([3002]);
     expect(samples[0].createdMs).toBe(Date.parse("2026-10-01T00:00:00Z"));
+  });
+
+  test("extractHealthyFrontierSamples は旧バージョン未設定を含む全履歴から HealthyBottom[0].CreatedAt を時刻昇順で抽出する", () => {
+    const legacy = snapshot("2026-11-01T00:00:00Z", [], null);
+    legacy.HealthyBottom = [row(1001, "2026-10-20T00:00:00Z", "2026-09-15T00:00:00Z")];
+    const v5 = snapshot("2026-11-02T00:00:00Z", [], 5);
+    v5.HealthyBottom = [row(1002, "2026-10-25T00:00:00Z", "2026-09-20T00:00:00Z")];
+
+    const samples = extractHealthyFrontierSamples([v5, legacy]);
+    expect(samples.map((s) => s.pr)).toEqual([1001, 1002]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-09-15T00:00:00Z"));
+    expect(samples[1].createdMs).toBe(Date.parse("2026-09-20T00:00:00Z"));
+  });
+
+  test("extractSingleCommitFrontierSamples は DepthsVersion >= 5 の SingleCommitBottom[0].CreatedAt のみを抽出する", () => {
+    const v4 = snapshot("2026-11-01T00:00:00Z", [], 4);
+    v4.SingleCommitBottom = [row(2001, "2026-10-10T00:00:00Z", "2026-10-01T00:00:00Z")];
+    const v5 = snapshot("2026-11-02T00:00:00Z", [], 5);
+    v5.SingleCommitBottom = [row(2002, "2026-10-15T00:00:00Z", "2026-10-05T00:00:00Z")];
+
+    const samples = extractSingleCommitFrontierSamples([v4, v5]);
+    expect(samples.map((s) => s.pr)).toEqual([2002]);
+    expect(samples[0].createdMs).toBe(Date.parse("2026-10-05T00:00:00Z"));
   });
 });
 

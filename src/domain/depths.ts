@@ -9,6 +9,7 @@ import type {
   TargetPrInfo,
 } from "../models/depths";
 
+import { isPrivilegedOrBotAuthor } from "./first-timer";
 import { DAY_MS, formatJstDateTime, round1 } from "./formatters";
 import { extractThirdPartyAssignees } from "./intervention";
 import { buildHealthyQueryParts } from "./labels";
@@ -30,8 +31,9 @@ export function getThirdPartyAssignees(
  * - 2: 役割分離版（StaleBottom=1コミット限定、FirstTimerBottom=createdAt順・生涯マージ0回検証済み、Unassigned/Assigned）
  * - 3: 介入判定分離版（UnreviewedBottom / IntervenedBottom: 人間レビュー・手動コメント・第三者アサイン OR 分離）
  * - 4: 主戦場ライン版（FirstReviewFrontier: 直近7日間初回人間介入コホートの createdAt 中央値・オープン＋マージ済み）
+ * - 5: 2×2 待機ライン統一版（HealthyBottom GraphQL TOP 10、SingleCommitBottom / FirstTimerSingleCommitBottom / FirstTimerUnreviewedBottom、全象限作者メタデータ統一）
  */
-export const CURRENT_DEPTHS_VERSION = 4;
+export const CURRENT_DEPTHS_VERSION = 5;
 
 /**
  * タイトル文字列をコンソール/表示用に切り詰める（45文字超は先頭42文字 + "..."）。
@@ -152,6 +154,26 @@ export function isFirstTimerCandidate(node: GraphQLPrNode): boolean {
   return node.authorAssociation === "NONE";
 }
 
+/**
+ * DepthsRow が初回提出者（オープン中 PR 基準: 非特権・非 Bot・authorAssociation=NONE・生涯マージ 0 回）か判定する SSoT ヘルパー。
+ */
+export function isFirstTimerDepthsRow(
+  row: Pick<DepthsRow, "Author" | "AuthorAssociation" | "AuthorMergedCount">,
+): boolean {
+  if (!row.Author) {
+    return false;
+  }
+  if (
+    isPrivilegedOrBotAuthor({
+      author: row.Author,
+      authorAssociation: row.AuthorAssociation,
+    })
+  ) {
+    return false;
+  }
+  return row.AuthorAssociation === "NONE" && row.AuthorMergedCount === 0;
+}
+
 export interface AssigneeFrontierSummary {
   /** 抽出された上位件数 */
   count: number;
@@ -210,13 +232,21 @@ export function createDepthsSnapshot(params: {
   targetPr: TargetPrInfo | null;
   healthyBottom: DepthsRow[];
   absoluteBottom: DepthsRow[];
+  singleCommitBottom?: DepthsRow[];
+  firstTimerSingleCommitBottom?: DepthsRow[];
+  singleCommitTruncated?: boolean;
+  firstTimerSingleCommitTruncated?: boolean;
   staleBottom: DepthsRow[];
   firstTimerBottom?: DepthsRow[];
+  firstTimerBottomTruncated?: boolean;
   unreviewedBottom?: DepthsRow[];
+  firstTimerUnreviewedBottom?: DepthsRow[];
   intervenedBottom?: DepthsRow[];
   unreviewedTruncated?: boolean;
+  firstTimerUnreviewedTruncated?: boolean;
   intervenedTruncated?: boolean;
   firstReviewFrontier?: FirstReviewFrontier;
+  allAuthorsFirstReviewFrontier?: FirstReviewFrontier;
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
@@ -227,13 +257,27 @@ export function createDepthsSnapshot(params: {
     TargetPr: params.targetPr,
     HealthyBottom: params.healthyBottom,
     AbsoluteBottom: params.absoluteBottom,
+    ...(params.singleCommitBottom ? { SingleCommitBottom: params.singleCommitBottom } : {}),
+    ...(params.firstTimerSingleCommitBottom
+      ? { FirstTimerSingleCommitBottom: params.firstTimerSingleCommitBottom }
+      : {}),
+    ...(params.singleCommitTruncated ? { SingleCommitTruncated: true } : {}),
+    ...(params.firstTimerSingleCommitTruncated ? { FirstTimerSingleCommitTruncated: true } : {}),
     StaleBottom: params.staleBottom,
     ...(params.firstTimerBottom ? { FirstTimerBottom: params.firstTimerBottom } : {}),
+    ...(params.firstTimerBottomTruncated ? { FirstTimerBottomTruncated: true } : {}),
     ...(params.unreviewedBottom ? { UnreviewedBottom: params.unreviewedBottom } : {}),
+    ...(params.firstTimerUnreviewedBottom
+      ? { FirstTimerUnreviewedBottom: params.firstTimerUnreviewedBottom }
+      : {}),
     ...(params.intervenedBottom ? { IntervenedBottom: params.intervenedBottom } : {}),
     ...(params.unreviewedTruncated ? { UnreviewedTruncated: true } : {}),
+    ...(params.firstTimerUnreviewedTruncated ? { FirstTimerUnreviewedTruncated: true } : {}),
     ...(params.intervenedTruncated ? { IntervenedTruncated: true } : {}),
     ...(params.firstReviewFrontier ? { FirstReviewFrontier: params.firstReviewFrontier } : {}),
+    ...(params.allAuthorsFirstReviewFrontier
+      ? { AllAuthorsFirstReviewFrontier: params.allAuthorsFirstReviewFrontier }
+      : {}),
     ExpressLane: params.expressLane,
   };
 }

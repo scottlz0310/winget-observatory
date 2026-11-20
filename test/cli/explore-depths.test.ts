@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitHubApiClient } from "../../src/api/github";
 import {
+  fetchFirstReviewFrontiers,
   fetchFirstReviewMainstreamFrontier,
   fetchFirstTimerBottom,
+  fetchHealthyBottoms,
   fetchInterventionFrontiers,
+  fetchSingleCommitBottoms,
   fetchStaleBottom,
   parseArgs,
   resolveDefaultDataDir,
@@ -113,8 +116,8 @@ describe("CLI: explore-depths", () => {
       expect(snapshot.FirstTimerBottom?.[0].CommitCount).toBe(1);
       expect(snapshot.ExpressLane.length).toBe(1);
 
-      // Search API は Healthy, Absolute, Express の 3 クエリが発行されたこと（Stale / FirstTimer は GraphQL）
-      expect(searchQueries.length).toBe(3);
+      // Search API は Absolute, Express の 2 クエリのみ（Healthy / SingleCommit / Stale / FirstTimer は GraphQL）
+      expect(searchQueries.length).toBe(2);
 
       // 出力ファイルの検証
       expect(existsSync(outputPath)).toBe(true);
@@ -218,8 +221,8 @@ describe("CLI: explore-depths", () => {
       );
 
       expect(snapshot.TargetPr).toBeNull();
-      // Search API は Healthy, Absolute の 2 クエリのみ（Express は実行されず、Stale / FirstTimer は GraphQL）
-      expect(searchQueries.length).toBe(2);
+      // Search API は Absolute の 1 クエリのみ（Express は実行されず、Healthy / SingleCommit / Stale / FirstTimer は GraphQL）
+      expect(searchQueries.length).toBe(1);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -841,7 +844,7 @@ describe("CLI: explore-depths の初回提出者の底（First-Timer Bottom）�
           mockClient,
           () => {},
         ),
-      ).rejects.toThrow("優等生の底の GraphQL 取得に失敗しました");
+      ).rejects.toThrow("健康的大底・初回提出者の底の GraphQL 取得に失敗しました");
 
       // 失敗時はファイルへの書き込みが行われないこと
       expect(existsSync(outputPath)).toBeFalse();
@@ -1032,6 +1035,9 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           expect(variables).toEqual({ owner: "microsoft", name: "winget-pkgs" });
           return { repository: buildBatchRepoFromSpecs(query, nodeMap) } as unknown as T;
         }
+        if (query.includes("u_0: search(")) {
+          return {} as unknown as T;
+        }
         throw new Error(`想定外のクエリ: ${query}`);
       },
     } as unknown as GitHubApiClient;
@@ -1156,6 +1162,9 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
             } as unknown as T;
           }
           throw new Error(`不要な追加ページング: #${num} after=${after}`);
+        }
+        if (query.includes("u_0: search(")) {
+          return {} as unknown as T;
         }
         throw new Error(`想定外のクエリ: ${query}`);
       },
@@ -1425,6 +1434,9 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           expect(query).toContain("lastEditedAt");
           expect(query).toContain("editor");
           return { repository: buildBatchRepoFromSpecs(query, nodeMap) } as unknown as T;
+        }
+        if (query.includes("u_0: search(")) {
+          return {} as unknown as T;
         }
         throw new Error(`想定外のクエリ: ${query}`);
       },
@@ -2401,8 +2413,519 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       expect(frontier.MedianCreatedAt).toBe("2026-10-12T00:00:00.000Z");
       expect(frontier.Items?.[0]?.FirstHumanInterventionAt).toBe("2026-11-16T12:00:00.000Z");
       expect(frontier.Items?.[0]?.InterventionActor).toBe("winget-reviewer");
+      expect(frontier.Items?.[0]?.AuthorAssociation).toBe("NONE");
+      expect(frontier.Items?.[0]?.AuthorMergedCount).toBe(0);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("CLI: explore-depths Phase 1（2×2 GraphQL 統一・作者メタデータ・キャッシュ共有）", () => {
+  test("fetchHealthyBottoms は 1 回の GraphQL 走査で HealthyBottom（全体 TOP N）と FirstTimerBottom（初回 TOP N）を同時取得し作者メタデータを付与する", async () => {
+    const nodes: GraphQLPrNode[] = [
+      {
+        number: 510001,
+        title: "Contributor PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/510001",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-10T00:00:00Z",
+        author: { login: "regular-dev" },
+        authorAssociation: "CONTRIBUTOR",
+        commits: { totalCount: 3 },
+      },
+      {
+        number: 510002,
+        title: "Hidden Repeater PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/510002",
+        createdAt: "2026-10-02T00:00:00Z",
+        updatedAt: "2026-10-11T00:00:00Z",
+        author: { login: "hidden-rep" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 2 },
+      },
+      {
+        number: 510003,
+        title: "True First Timer 1",
+        url: "https://github.com/microsoft/winget-pkgs/pull/510003",
+        createdAt: "2026-10-03T00:00:00Z",
+        updatedAt: "2026-10-12T00:00:00Z",
+        author: { login: "ft-alice" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 4 },
+      },
+      {
+        number: 510004,
+        title: "True First Timer 2",
+        url: "https://github.com/microsoft/winget-pkgs/pull/510004",
+        createdAt: "2026-10-04T00:00:00Z",
+        updatedAt: "2026-10-13T00:00:00Z",
+        author: { login: "ft-bob" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 1 },
+      },
+    ];
+
+    const searchQueries: string[] = [];
+    const mergedCountQueries: string[] = [];
+    const mockClient = {
+      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
+        if (variables.query) {
+          searchQueries.push(String(variables.query));
+          return {
+            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+          } as unknown as T;
+        }
+        if (query.includes("u_0: search(")) {
+          mergedCountQueries.push(query);
+          const result: Record<string, { issueCount: number }> = {};
+          const matches = [...query.matchAll(/u_(\d+): search\(query: "[^"]*author:([^\s"]+)/g)];
+          for (const m of matches) {
+            const idx = m[1];
+            const author = m[2];
+            result[`u_${idx}`] = { issueCount: author === "hidden-rep" ? 3 : 0 };
+          }
+          return result as unknown as T;
+        }
+        throw new Error(`想定外のクエリ: ${query}`);
+      },
+    } as unknown as GitHubApiClient;
+
+    const cache = new Map<string, number>();
+    const { healthyBottom, firstTimerBottom } = await fetchHealthyBottoms(
+      mockClient,
+      buildHealthyBaseQuery("microsoft/winget-pkgs"),
+      2,
+      100,
+      cache,
+    );
+
+    expect(searchQueries.length).toBe(1);
+    expect(searchQueries[0]).toContain("sort:created-asc");
+    expect(healthyBottom.map((r) => r.Number)).toEqual([510001, 510002]);
+    expect(healthyBottom[0].AuthorAssociation).toBe("CONTRIBUTOR");
+    expect(healthyBottom[0].CommitCount).toBe(3);
+    expect(healthyBottom[1].AuthorMergedCount).toBe(3);
+
+    expect(firstTimerBottom.map((r) => r.Number)).toEqual([510003, 510004]);
+    expect(firstTimerBottom[0].AuthorMergedCount).toBe(0);
+    expect(firstTimerBottom[1].AuthorMergedCount).toBe(0);
+    expect(cache.get("hidden-rep")).toBe(3);
+    expect(cache.get("ft-alice")).toBe(0);
+    expect(cache.get("ft-bob")).toBe(0);
+    expect(mergedCountQueries.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("fetchSingleCommitBottoms は sort:created-asc で 1 コミット健康体 PR のみ抽出し全体・初回を同時収集する", async () => {
+    const nodes: GraphQLPrNode[] = [
+      {
+        number: 520001,
+        title: "Multi commit PR (excluded)",
+        url: "https://github.com/microsoft/winget-pkgs/pull/520001",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-01T00:00:00Z",
+        author: { login: "ft-multi" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 2 },
+      },
+      {
+        number: 520002,
+        title: "Single commit member",
+        url: "https://github.com/microsoft/winget-pkgs/pull/520002",
+        createdAt: "2026-10-02T00:00:00Z",
+        updatedAt: "2026-10-20T00:00:00Z",
+        author: { login: "member-dev" },
+        authorAssociation: "MEMBER",
+        commits: { totalCount: 1 },
+      },
+      {
+        number: 520003,
+        title: "Single commit first timer",
+        url: "https://github.com/microsoft/winget-pkgs/pull/520003",
+        createdAt: "2026-10-03T00:00:00Z",
+        updatedAt: "2026-10-03T00:00:00Z",
+        author: { login: "ft-single" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 1 },
+      },
+    ];
+
+    const queries: string[] = [];
+    const mockClient = {
+      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
+        if (variables.query) {
+          queries.push(String(variables.query));
+          return {
+            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+          } as unknown as T;
+        }
+        if (query.includes("u_0: search(")) {
+          return { u_0: { issueCount: 0 } } as unknown as T;
+        }
+        throw new Error(`想定外のクエリ: ${query}`);
+      },
+    } as unknown as GitHubApiClient;
+
+    const { singleCommitBottom, firstTimerSingleCommitBottom } = await fetchSingleCommitBottoms(
+      mockClient,
+      buildHealthyBaseQuery("microsoft/winget-pkgs"),
+      2,
+      100,
+    );
+
+    expect(queries[0]).toContain("sort:created-asc");
+    expect(singleCommitBottom.map((r) => r.Number)).toEqual([520002, 520003]);
+    expect(firstTimerSingleCommitBottom.map((r) => r.Number)).toEqual([520003]);
+    expect(firstTimerSingleCommitBottom[0].AuthorMergedCount).toBe(0);
+  });
+
+  test("fetchInterventionFrontiers は未レビュー PR に AuthorMergedCount を付与し常連を除外した FirstTimerUnreviewedBottom を同時収集する", async () => {
+    const mockNodes: Record<number, Record<string, unknown>> = {
+      530001: {
+        number: 530001,
+        title: "Unreviewed hidden repeater",
+        url: "https://github.com/microsoft/winget-pkgs/pull/530001",
+        state: "OPEN",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-02T00:00:00Z",
+        author: { __typename: "User", login: "hidden-rep" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 3 },
+        assignees: { nodes: [] },
+        reviews: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+      530002: {
+        number: 530002,
+        title: "Unreviewed true first timer",
+        url: "https://github.com/microsoft/winget-pkgs/pull/530002",
+        state: "OPEN",
+        createdAt: "2026-10-02T00:00:00Z",
+        updatedAt: "2026-10-03T00:00:00Z",
+        author: { __typename: "User", login: "ft-unrev" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 2 },
+        assignees: { nodes: [] },
+        reviews: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+    };
+
+    const cache = new Map<string, number>([["hidden-rep", 2]]);
+    let mergedQueryCount = 0;
+
+    const mockClient = {
+      graphql: async <T>(query: string): Promise<T> => {
+        if (query.includes("SearchPrNumbers")) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ number: 530001 }, { number: 530002 }],
+            },
+          } as unknown as T;
+        }
+        if (query.includes("GetPullRequestInterventionBatch")) {
+          return {
+            repository: {
+              pr0: mockNodes[530001],
+              pr1: mockNodes[530002],
+            },
+          } as unknown as T;
+        }
+        if (query.includes("u_0: search(")) {
+          mergedQueryCount++;
+          // hidden-rep はキャッシュ済みのため ft-unrev のみ照会されること
+          expect(query).toContain("author:ft-unrev");
+          expect(query).not.toContain("author:hidden-rep");
+          return { u_0: { issueCount: 0 } } as unknown as T;
+        }
+        throw new Error(`想定外のクエリ: ${query}`);
+      },
+    } as unknown as GitHubApiClient;
+
+    const result = await fetchInterventionFrontiers(
+      mockClient,
+      buildHealthyBaseQuery("microsoft/winget-pkgs"),
+      2,
+      100,
+      15,
+      cache,
+    );
+
+    expect(mergedQueryCount).toBe(1);
+    expect(result.unreviewedBottom.map((r) => r.Number)).toEqual([530001, 530002]);
+    expect(result.unreviewedBottom[0].AuthorMergedCount).toBe(2);
+    expect(result.unreviewedBottom[1].AuthorMergedCount).toBe(0);
+    expect(result.firstTimerUnreviewedBottom.map((r) => r.Number)).toEqual([530002]);
+    expect(result.firstTimerUnreviewedTruncated).toBe(false);
+  });
+
+  test("fetchSingleCommitBottoms は全体枠が充足した状態で初回枠が未充足のまま探索上限に達しても例外にせず打ち切りフラグ付きで返す", async () => {
+    // 多コミットの初回提出者 10 件 + 1コミットの常連 10 件 = 20 件で maxTraverseNodes=20 に到達
+    const nodes: GraphQLPrNode[] = [
+      ...Array.from({ length: 10 }, (_, i) => ({
+        number: 540000 + i,
+        title: `Multi commit first timer ${i}`,
+        url: `https://github.com/microsoft/winget-pkgs/pull/${540000 + i}`,
+        createdAt: `2026-10-01T0${i}:00:00Z`,
+        updatedAt: `2026-10-01T0${i}:00:00Z`,
+        author: { login: `ft-multi-${i}` },
+        authorAssociation: "NONE",
+        commits: { totalCount: 3 },
+      })),
+      ...Array.from({ length: 10 }, (_, i) => ({
+        number: 540100 + i,
+        title: `Single commit contributor ${i}`,
+        url: `https://github.com/microsoft/winget-pkgs/pull/${540100 + i}`,
+        createdAt: `2026-10-02T0${i}:00:00Z`,
+        updatedAt: `2026-10-02T0${i}:00:00Z`,
+        author: { login: `reg-single-${i}` },
+        authorAssociation: "CONTRIBUTOR",
+        commits: { totalCount: 1 },
+      })),
+    ];
+
+    const mockClient = {
+      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
+        if (variables.query) {
+          return {
+            search: {
+              pageInfo: { hasNextPage: true, endCursor: "cursor-next" },
+              nodes,
+            },
+          } as unknown as T;
+        }
+        return {} as T;
+      },
+    } as unknown as GitHubApiClient;
+
+    const result = await fetchSingleCommitBottoms(
+      mockClient,
+      buildHealthyBaseQuery("microsoft/winget-pkgs"),
+      10,
+      20,
+    );
+
+    expect(result.singleCommitBottom.length).toBe(10);
+    expect(result.firstTimerSingleCommitBottom.length).toBe(0);
+    expect(result.singleCommitTruncated).toBe(false);
+    expect(result.firstTimerSingleCommitTruncated).toBe(true);
+  });
+
+  test("fetchFirstReviewFrontiers は常連（CONTRIBUTOR・NONEマージ歴あり）と初回提出者が混在するケースで全体コホートと初回限定コホートを両方算出する", async () => {
+    const now = new Date("2026-11-20T00:00:00Z");
+    const prDetails: Record<number, Record<string, unknown>> = {
+      550001: {
+        number: 550001,
+        title: "Open Contributor PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/550001",
+        state: "OPEN",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-11-18T00:00:00Z",
+        author: { __typename: "User", login: "regular-contrib" },
+        authorAssociation: "CONTRIBUTOR",
+        commits: { totalCount: 1 },
+        assignees: { nodes: [] },
+        reviews: {
+          totalCount: 1,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              author: { __typename: "User", login: "reviewer-a" },
+              state: "COMMENTED",
+              submittedAt: "2026-11-18T00:00:00Z",
+            },
+          ],
+        },
+        comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+      550002: {
+        number: 550002,
+        title: "Open Hidden Repeater PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/550002",
+        state: "OPEN",
+        createdAt: "2026-10-05T00:00:00Z",
+        updatedAt: "2026-11-18T01:00:00Z",
+        author: { __typename: "User", login: "hidden-rep" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 2 },
+        assignees: { nodes: [] },
+        reviews: {
+          totalCount: 1,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              author: { __typename: "User", login: "reviewer-a" },
+              state: "COMMENTED",
+              submittedAt: "2026-11-18T01:00:00Z",
+            },
+          ],
+        },
+        comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+      550003: {
+        number: 550003,
+        title: "Open True First Timer PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/550003",
+        state: "OPEN",
+        createdAt: "2026-10-10T00:00:00Z",
+        updatedAt: "2026-11-18T02:00:00Z",
+        author: { __typename: "User", login: "ft-open" },
+        authorAssociation: "NONE",
+        commits: { totalCount: 1 },
+        assignees: { nodes: [] },
+        reviews: {
+          totalCount: 1,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              author: { __typename: "User", login: "reviewer-b" },
+              state: "COMMENTED",
+              submittedAt: "2026-11-18T02:00:00Z",
+            },
+          ],
+        },
+        comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+      550004: {
+        number: 550004,
+        title: "Merged Regular PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/550004",
+        state: "MERGED",
+        createdAt: "2026-10-15T00:00:00Z",
+        updatedAt: "2026-11-19T00:00:00Z",
+        mergedAt: "2026-11-19T00:00:00Z",
+        author: { __typename: "User", login: "regular-merged" },
+        authorAssociation: "CONTRIBUTOR",
+        commits: { totalCount: 1 },
+        assignees: { nodes: [] },
+        reviews: {
+          totalCount: 1,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              author: { __typename: "User", login: "reviewer-b" },
+              state: "APPROVED",
+              submittedAt: "2026-11-19T00:00:00Z",
+            },
+          ],
+        },
+        comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+      550005: {
+        number: 550005,
+        title: "Merged True First Timer PR",
+        url: "https://github.com/microsoft/winget-pkgs/pull/550005",
+        state: "MERGED",
+        createdAt: "2026-10-20T00:00:00Z",
+        updatedAt: "2026-11-19T01:00:00Z",
+        mergedAt: "2026-11-19T01:00:00Z",
+        author: { __typename: "User", login: "ft-merged" },
+        authorAssociation: "CONTRIBUTOR",
+        commits: { totalCount: 1 },
+        assignees: { nodes: [] },
+        reviews: {
+          totalCount: 1,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              author: { __typename: "User", login: "reviewer-b" },
+              state: "APPROVED",
+              submittedAt: "2026-11-19T01:00:00Z",
+            },
+          ],
+        },
+        comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+    };
+
+    const mockClient = {
+      graphql: async <T>(query: string, variables?: Record<string, unknown>): Promise<T> => {
+        if (query.includes("SearchInterventionLightCandidates")) {
+          const q = String(variables?.query ?? "");
+          if (q.includes("is:open")) {
+            return {
+              search: {
+                issueCount: 3,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    number: 550001,
+                    author: { login: "regular-contrib" },
+                    authorAssociation: "CONTRIBUTOR",
+                  },
+                  { number: 550002, author: { login: "hidden-rep" }, authorAssociation: "NONE" },
+                  { number: 550003, author: { login: "ft-open" }, authorAssociation: "NONE" },
+                ],
+              },
+            } as unknown as T;
+          }
+          return {
+            search: {
+              issueCount: 2,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  number: 550004,
+                  author: { login: "regular-merged" },
+                  authorAssociation: "CONTRIBUTOR",
+                },
+                {
+                  number: 550005,
+                  author: { login: "ft-merged" },
+                  authorAssociation: "CONTRIBUTOR",
+                },
+              ],
+            },
+          } as unknown as T;
+        }
+        if (query.includes("GetPullRequestInterventionBatch")) {
+          const repo: Record<string, unknown> = {};
+          for (const m of query.matchAll(/pr(\d+): pullRequest\(number: (\d+)\)/g)) {
+            repo[`pr${m[1]}`] = prDetails[Number(m[2])] ?? null;
+          }
+          return { repository: repo } as unknown as T;
+        }
+        if (query.includes("u_0: search(")) {
+          const counts: Record<string, number> = {
+            "hidden-rep": 4,
+            "ft-open": 0,
+            "regular-merged": 5,
+            "ft-merged": 1,
+          };
+          const res: Record<string, { issueCount: number }> = {};
+          for (const m of query.matchAll(/u_(\d+): search\(query: "[^"]*author:([^\s"]+)/g)) {
+            res[`u_${m[1]}`] = { issueCount: counts[m[2]] ?? 0 };
+          }
+          return res as unknown as T;
+        }
+        throw new Error(`想定外のクエリ: ${query}`);
+      },
+    } as unknown as GitHubApiClient;
+
+    const { firstReviewFrontier, allAuthorsFirstReviewFrontier } = await fetchFirstReviewFrontiers({
+      client: mockClient,
+      repository: "microsoft/winget-pkgs",
+      now,
+    });
+
+    // 全体コホートには常連・初回の全 5 件（Open 3 / Merged 2）が含まれること
+    expect(allAuthorsFirstReviewFrontier.CohortCount).toBe(5);
+    expect(allAuthorsFirstReviewFrontier.OpenCount).toBe(3);
+    expect(allAuthorsFirstReviewFrontier.MergedCount).toBe(2);
+    expect(allAuthorsFirstReviewFrontier.MedianCreatedAt).toBe("2026-10-10T00:00:00.000Z");
+
+    // 初回限定コホートには真の初回提出者 2 件（#550003, #550005）のみが含まれること
+    expect(firstReviewFrontier.CohortCount).toBe(2);
+    expect(firstReviewFrontier.OpenCount).toBe(1);
+    expect(firstReviewFrontier.MergedCount).toBe(1);
+    expect(firstReviewFrontier.Items?.map((i) => i.Number)).toEqual([550005, 550003]);
   });
 });

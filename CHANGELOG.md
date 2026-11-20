@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 2×2 待機ライン体系（フェーズ × レンジ・起票日時順統一・全体／初回提出者一括トグル）に向けた Phase 1 データモデル・GraphQL 収集基盤を追加（#127）:
+  - `src/models/depths.ts`, `src/domain/depths.ts`: `CURRENT_DEPTHS_VERSION = 5` へ更新し、`DepthsSnapshot` に `SingleCommitBottom` / `FirstTimerSingleCommitBottom`（1コミット完走組・起票日時順 TOP 10、打ち切りフラグ付き）、`FirstTimerUnreviewedBottom` / `FirstTimerUnreviewedTruncated`（未レビュー前線・初回提出者 TOP 10）、`AllAuthorsFirstReviewFrontier`（常連含む全体コホート）を追加、`FirstReviewCohortItem` に `AuthorAssociation` / `AuthorMergedCount` を追加し、初回提出者判定 SSoT ヘルパー `isFirstTimerDepthsRow` を追加
+  - `src/cli/explore-depths.ts`: `HealthyBottom`（TOP 10）と `FirstTimerBottom`（TOP 10）を 1 回の GraphQL 走査で同時取得する `fetchHealthyBottoms`、1コミット完走組（全体・初回）を `sort:created-asc` で同時取得する `fetchSingleCommitBottoms`（走査上限到達時は打ち切りフラグ付きで確定済みデータを返却）、常連含む全体コホートと初回限定コホートを同時算出する `fetchFirstReviewFrontiers` を追加し、全指標で `mergedCountCache` を共有して作者メタデータを統一付与
+  - `src/models/forecast.ts`, `src/domain/forecast.ts`, `src/domain/forecast-band.ts`: `extractHealthyFrontierSamples` / `extractSingleCommitFrontierSamples` を追加し、統合処理バンドの `stale-bottom:steady` が `SingleCommitBottom[0]` を優先参照（旧スナップショットでは `StaleBottom[0]` へフォールバック）するよう更新
+
 ## [0.6.0] - 2026-11-19
 
 ### Added

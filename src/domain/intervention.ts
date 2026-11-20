@@ -484,6 +484,8 @@ export interface FirstReviewCohortCandidate {
   url: string;
   state: "OPEN" | "MERGED";
   author?: string;
+  authorAssociation?: string;
+  authorMergedCount?: number;
   commitCount?: number;
   createdAt: string;
   mergedAt?: string | null;
@@ -583,6 +585,12 @@ export function calculateFirstReviewMainstreamFrontier(
       Url: candidate.url,
       State: candidate.state,
       ...(candidate.author !== undefined ? { Author: candidate.author } : {}),
+      ...(candidate.authorAssociation !== undefined
+        ? { AuthorAssociation: candidate.authorAssociation }
+        : {}),
+      ...(candidate.authorMergedCount !== undefined
+        ? { AuthorMergedCount: candidate.authorMergedCount }
+        : {}),
       ...(candidate.commitCount !== undefined ? { CommitCount: candidate.commitCount } : {}),
       CreatedAt: candidate.createdAt,
       FirstHumanInterventionAt: candidate.intervention.FirstHumanInterventionAt as string,

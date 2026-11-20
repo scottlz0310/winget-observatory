@@ -8,8 +8,10 @@ import type {
   FirstReviewForecast,
   FirstTimerFrontierSample,
   ForecastUnavailableReason,
+  HealthyFrontierSample,
   LifetimeForecast,
   MainstreamFrontierSample,
+  SingleCommitFrontierSample,
   StaleFrontierForecast,
   StaleFrontierSample,
   UnreviewedFrontierSample,
@@ -22,6 +24,9 @@ export const MIN_STALE_DEPTHS_VERSION = 2;
 
 /** 主戦場ライン（初回介入コホート中央値）の最小定義バージョン */
 export const MIN_MAINSTREAM_DEPTHS_VERSION = 4;
+
+/** マージ前線（1コミット完走組・起票日時順）の最小定義バージョン */
+export const MIN_SINGLE_COMMIT_DEPTHS_VERSION = 5;
 
 /** 速度を測るために必要な最小の観測間隔（これ未満は誤差が大きいため測らない） */
 export const MIN_WINDOW_HOURS = 6;
@@ -59,7 +64,10 @@ function extractFrontierSamples<T extends { timestampMs: number }>(
 ): T[] {
   const samples: T[] = [];
   for (const snapshot of snapshots) {
-    if (snapshot.DepthsVersion === undefined || snapshot.DepthsVersion < minDefinitionVersion) {
+    if (
+      minDefinitionVersion > 0 &&
+      (snapshot.DepthsVersion === undefined || snapshot.DepthsVersion < minDefinitionVersion)
+    ) {
       continue;
     }
     const head = selectHead(snapshot);
@@ -102,6 +110,40 @@ export function extractFirstTimerFrontierSamples(
     snapshots,
     minDefinitionVersion,
     (s) => s.FirstTimerBottom?.[0],
+    (head) => head.CreatedAt,
+    (timestampMs, pr, createdMs) => ({ timestampMs, pr, createdMs }),
+  );
+}
+
+/**
+ * スナップショット列から、マージ正常底（健康的大底）の先頭（起票が最古の健康な PR）の
+ * 観測列を時刻昇順で取り出す（旧バージョン含む全履歴と互換）。
+ */
+export function extractHealthyFrontierSamples(
+  snapshots: DepthsSnapshot[],
+  minDefinitionVersion = 0,
+): HealthyFrontierSample[] {
+  return extractFrontierSamples(
+    snapshots,
+    minDefinitionVersion,
+    (s) => s.HealthyBottom?.[0],
+    (head) => head.CreatedAt,
+    (timestampMs, pr, createdMs) => ({ timestampMs, pr, createdMs }),
+  );
+}
+
+/**
+ * スナップショット列から、マージ前線（1コミット完走組・起票日時順）の先頭の
+ * 観測列を時刻昇順で取り出す（v5 以降）。
+ */
+export function extractSingleCommitFrontierSamples(
+  snapshots: DepthsSnapshot[],
+  minDefinitionVersion = MIN_SINGLE_COMMIT_DEPTHS_VERSION,
+): SingleCommitFrontierSample[] {
+  return extractFrontierSamples(
+    snapshots,
+    minDefinitionVersion,
+    (s) => s.SingleCommitBottom?.[0],
     (head) => head.CreatedAt,
     (timestampMs, pr, createdMs) => ({ timestampMs, pr, createdMs }),
   );

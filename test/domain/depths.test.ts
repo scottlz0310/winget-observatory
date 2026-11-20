@@ -12,6 +12,7 @@ import {
   formatTargetPrInfo,
   getThirdPartyAssignees,
   isFirstTimerCandidate,
+  isFirstTimerDepthsRow,
   isStaleCandidate,
   summarizeAssigneeFrontier,
   truncateTitle,
@@ -356,6 +357,77 @@ describe("Domain: depths logic", () => {
         headElapsedDays: null,
         assigneeCounts: [],
       });
+    });
+  });
+
+  describe("初回提出者判定 SSoT（isFirstTimerDepthsRow）と v5 スナップショット", () => {
+    test.each([
+      {
+        label: "NONE かつ AuthorMergedCount=0 は初回提出者",
+        row: { Author: "alice", AuthorAssociation: "NONE", AuthorMergedCount: 0 },
+        expected: true,
+      },
+      {
+        label: "NONE でも AuthorMergedCount>0 は常連扱い",
+        row: { Author: "alice", AuthorAssociation: "NONE", AuthorMergedCount: 1 },
+        expected: false,
+      },
+      {
+        label: "AuthorMergedCount 未照会は安全側で false",
+        row: { Author: "alice", AuthorAssociation: "NONE" },
+        expected: false,
+      },
+      {
+        label: "CONTRIBUTOR は false",
+        row: { Author: "bob", AuthorAssociation: "CONTRIBUTOR", AuthorMergedCount: 0 },
+        expected: false,
+      },
+      {
+        label: "MEMBER は false",
+        row: { Author: "mod", AuthorAssociation: "MEMBER", AuthorMergedCount: 0 },
+        expected: false,
+      },
+      {
+        label: "Bot アカウントは false",
+        row: { Author: "dependabot[bot]", AuthorAssociation: "NONE", AuthorMergedCount: 0 },
+        expected: false,
+      },
+      {
+        label: "Author 欠落は false",
+        row: { AuthorAssociation: "NONE", AuthorMergedCount: 0 },
+        expected: false,
+      },
+    ])("isFirstTimerDepthsRow: $label", ({ row, expected }) => {
+      expect(isFirstTimerDepthsRow(row)).toBe(expected);
+    });
+
+    test("CURRENT_DEPTHS_VERSION は 5 であり createDepthsSnapshot に v5 新フィールドが記録される", () => {
+      expect(CURRENT_DEPTHS_VERSION).toBe(5);
+      const dummyRow = formatDepthsRow({
+        number: 1,
+        title: "t",
+        html_url: "https://example.com/1",
+        created_at: "2026-10-01T00:00:00Z",
+        updated_at: "2026-10-01T00:00:00Z",
+      });
+      const snapshot = createDepthsSnapshot({
+        now: new Date("2026-11-20T00:00:00Z"),
+        repository: "microsoft/winget-pkgs",
+        targetPr: null,
+        healthyBottom: [dummyRow],
+        absoluteBottom: [],
+        singleCommitBottom: [dummyRow],
+        firstTimerSingleCommitBottom: [dummyRow],
+        staleBottom: [dummyRow],
+        firstTimerUnreviewedBottom: [dummyRow],
+        firstTimerUnreviewedTruncated: true,
+        expressLane: [],
+      });
+      expect(snapshot.DepthsVersion).toBe(5);
+      expect(snapshot.SingleCommitBottom).toEqual([dummyRow]);
+      expect(snapshot.FirstTimerSingleCommitBottom).toEqual([dummyRow]);
+      expect(snapshot.FirstTimerUnreviewedBottom).toEqual([dummyRow]);
+      expect(snapshot.FirstTimerUnreviewedTruncated).toBe(true);
     });
   });
 });
