@@ -1,20 +1,34 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, normalize, relative, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, extname, join, normalize, relative, resolve } from "node:path";
 
 type Token =
   | { type: "ident"; value: string }
   | { type: "string"; value: string }
   | { type: "punct"; value: string };
 
+const bunTranspiler = new Bun.Transpiler({ loader: "ts" });
+
 /**
  * TypeScript / JavaScript ソースを字句解析し、行コメント・ブロックコメント・正規表現リテラルを除外したトークン列を返す。
- * 通常の文字列リテラル内容は "string" トークンとして分離されるため、文字列中の "import ..." 等は識別子として解釈されない。
+ * テンプレートリテラル補間 `${ ... }` はブレース深さスタック（templateDepthStack）によってメインループ内で再帰的にトークン化するため、
+ * 補間内の文字列リテラル `"}"` やコメント内の `}` で補間が途中終了しない。
  */
 function tokenizeTypeScript(code: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
   const len = code.length;
+  let braceDepth = 0;
+  const templateDepthStack: number[] = [];
 
   const canStartRegex = (): boolean => {
     const prev = tokens[tokens.length - 1];
@@ -30,6 +44,32 @@ function tokenizeTypeScript(code: string): Token[] {
       );
     }
     return false;
+  };
+
+  const scanTemplateChunk = (isStartOfTemplate: boolean): void => {
+    let value = "";
+    while (i < len) {
+      if (code[i] === "\\") {
+        value += code[i + 1] ?? "";
+        i += 2;
+        continue;
+      }
+      if (code[i] === "`") {
+        i++;
+        if (isStartOfTemplate) {
+          tokens.push({ type: "string", value });
+        }
+        return;
+      }
+      if (code[i] === "$" && code[i + 1] === "{") {
+        i += 2;
+        templateDepthStack.push(braceDepth);
+        tokens.push({ type: "punct", value: "${" });
+        return;
+      }
+      value += code[i];
+      i++;
+    }
   };
 
   while (i < len) {
@@ -99,47 +139,35 @@ function tokenizeTypeScript(code: string): Token[] {
       continue;
     }
 
-    // テンプレートリテラル（補間なしは string トークン、補間ありは非文字列としてスキップ）
+    // テンプレートリテラル開始
     if (ch === "`") {
       i++;
-      let value = "";
-      let hasInterpolation = false;
-      while (i < len && code[i] !== "`") {
-        if (code[i] === "\\") {
-          value += code[i + 1] ?? "";
-          i += 2;
-        } else if (code[i] === "$" && code[i + 1] === "{") {
-          hasInterpolation = true;
-          i += 2;
-          let depth = 1;
-          let inner = "";
-          while (i < len && depth > 0) {
-            if (code[i] === "\\") {
-              inner += code.slice(i, i + 2);
-              i += 2;
-              continue;
-            }
-            if (code[i] === "{") depth++;
-            else if (code[i] === "}") {
-              depth--;
-              if (depth === 0) {
-                i++;
-                break;
-              }
-            }
-            inner += code[i];
-            i++;
-          }
-          tokens.push(...tokenizeTypeScript(inner));
-        } else {
-          value += code[i];
-          i++;
-        }
+      scanTemplateChunk(true);
+      continue;
+    }
+
+    // ブレース深さ管理とテンプレート補間 `${ ... }` の終端復帰
+    if (ch === "{") {
+      braceDepth++;
+      tokens.push({ type: "punct", value: "{" });
+      i++;
+      continue;
+    }
+
+    if (ch === "}") {
+      if (
+        templateDepthStack.length > 0 &&
+        braceDepth === templateDepthStack[templateDepthStack.length - 1]
+      ) {
+        templateDepthStack.pop();
+        tokens.push({ type: "punct", value: "}" });
+        i++;
+        scanTemplateChunk(false);
+        continue;
       }
-      i++; // closing backtick
-      if (!hasInterpolation) {
-        tokens.push({ type: "string", value });
-      }
+      if (braceDepth > 0) braceDepth--;
+      tokens.push({ type: "punct", value: "}" });
+      i++;
       continue;
     }
 
@@ -163,12 +191,19 @@ function tokenizeTypeScript(code: string): Token[] {
 }
 
 /**
- * 字句解析トークン列から、コメントや通常文字列リテラルを除外し、
- * 静的 import / import type / export ... from / 文字列リテラルの動的 import("...") のモジュール指定子を抽出する。
+ * Bun.Transpiler.scanImports による AST スキャンと字句解析トークン列（import type / export type 含む）を併用し、
+ * コメントや通常文字列リテラルを除外して静的 import / import type / export ... from / 動的 import("...") の指定子を抽出する。
  */
 function extractModuleSpecifiers(code: string): string[] {
   const tokens = tokenizeTypeScript(code);
   const specifiers: string[] = [];
+  const seen = new Set<string>();
+  const addSpecifier = (s: string): void => {
+    if (!seen.has(s)) {
+      seen.add(s);
+      specifiers.push(s);
+    }
+  };
   const n = tokens.length;
 
   const skipBraceBlock = (startIdx: number): number => {
@@ -200,14 +235,14 @@ function extractModuleSpecifiers(code: string): string[] {
       if (next.type === "punct" && next.value === "(") {
         const arg = tokens[i + 2];
         if (arg?.type === "string") {
-          specifiers.push(arg.value);
+          addSpecifier(arg.value);
         }
         continue;
       }
 
       // 2. 副作用 import "specifier"
       if (next.type === "string") {
-        specifiers.push(next.value);
+        addSpecifier(next.value);
         continue;
       }
 
@@ -229,7 +264,7 @@ function extractModuleSpecifiers(code: string): string[] {
           continue;
         }
         if (c.type === "ident" && c.value === "from" && tokens[cursor + 1]?.type === "string") {
-          specifiers.push((tokens[cursor + 1] as { type: "string"; value: string }).value);
+          addSpecifier((tokens[cursor + 1] as { type: "string"; value: string }).value);
           break;
         }
         if (c.type === "punct" && (c.value === ";" || c.value === "=")) {
@@ -265,44 +300,82 @@ function extractModuleSpecifiers(code: string): string[] {
         tokens[cursor]?.value === "from" &&
         tokens[cursor + 1]?.type === "string"
       ) {
-        specifiers.push((tokens[cursor + 1] as { type: "string"; value: string }).value);
+        addSpecifier((tokens[cursor + 1] as { type: "string"; value: string }).value);
       }
     }
+  }
+
+  try {
+    for (const imp of bunTranspiler.scanImports(code)) {
+      addSpecifier(imp.path);
+    }
+  } catch {
+    // 構文断片等で scanImports が失敗した場合はトークナイザ抽出結果を使用する
   }
 
   return specifiers;
 }
 
 /**
- * 相対パスまたは @/ エイリアスのモジュール指定子を、対象ファイル集合内の .ts ファイルへ解決する。
- * Bun / TypeScript (moduleResolution: bundler / node16) と同様に .js -> .ts 解決にも対応する。
+ * 相対パスまたは @/ エイリアスのモジュール指定子を、Bun と同じ解決優先順で対象 .ts ファイル集合へ解決する。
+ * - 実在するファイル（例: b.js）が優先解決される場合はそちらを採用し、同居する b/index.ts 等へ誤解決しない。
+ * - 明示拡張子 (.js / .ts 等) 付き指定子はファイル候補のみを探索し、ディレクトリ index.ts にはフォールバックしない。
  */
 function resolveImportTarget(
   fromFile: string,
   specifier: string,
   fileSet: ReadonlySet<string>,
   rootDir = resolve("."),
+  existingFiles: ReadonlySet<string> = fileSet,
 ): string | null {
+  const fromDir = dirname(fromFile);
   let baseTarget: string;
   if (specifier.startsWith(".")) {
-    baseTarget = resolve(dirname(fromFile), specifier);
+    baseTarget = resolve(fromDir, specifier);
   } else if (specifier.startsWith("@/")) {
     baseTarget = resolve(rootDir, "src", specifier.slice(2));
   } else {
     return null;
   }
 
-  const strippedJs = baseTarget.replace(/\.(?:js|mjs|cjs)$/i, "");
-  const candidates = [
-    normalize(baseTarget),
-    normalize(`${baseTarget}.ts`),
-    normalize(join(baseTarget, "index.ts")),
-    normalize(`${strippedJs}.ts`),
-    normalize(join(strippedJs, "index.ts")),
-  ];
-  for (const candidate of candidates) {
-    if (fileSet.has(candidate)) {
-      return candidate;
+  // ディスク上に実ファイルが存在する場合は Bun.resolveSync の解決結果を最優先で採用する
+  if (existsSync(fromFile)) {
+    try {
+      const lookupSpec = specifier.startsWith("@/")
+        ? resolve(rootDir, "src", specifier.slice(2))
+        : specifier;
+      const bunResolved = normalize(Bun.resolveSync(lookupSpec, fromDir));
+      return fileSet.has(bunResolved) ? bunResolved : null;
+    } catch {
+      // メモリ上の仮想ファイル集合を検査する場合は下の候補解決へ進む
+    }
+  }
+
+  const fileExists = (candidate: string): boolean =>
+    existingFiles.has(candidate) || existsSync(candidate);
+
+  const ext = extname(baseTarget).toLowerCase();
+  let orderedCandidates: string[];
+  if (ext === ".js" || ext === ".mjs" || ext === ".cjs") {
+    const stripped = baseTarget.slice(0, -ext.length);
+    const tsExt = ext === ".mjs" ? ".mts" : ext === ".cjs" ? ".cts" : ".ts";
+    // 明示 .js 指定は 1) 実在する .js、2) 対応する .ts の順で解決し、ディレクトリ index.ts へは解決しない
+    orderedCandidates = [normalize(baseTarget), normalize(`${stripped}${tsExt}`)];
+  } else if (ext === ".ts" || ext === ".tsx" || ext === ".mts" || ext === ".cts") {
+    orderedCandidates = [normalize(baseTarget)];
+  } else {
+    orderedCandidates = [
+      normalize(baseTarget),
+      normalize(`${baseTarget}.ts`),
+      normalize(`${baseTarget}.js`),
+      normalize(join(baseTarget, "index.ts")),
+      normalize(join(baseTarget, "index.js")),
+    ];
+  }
+
+  for (const candidate of orderedCandidates) {
+    if (fileExists(candidate)) {
+      return fileSet.has(candidate) ? candidate : null;
     }
   }
   return null;
@@ -314,15 +387,18 @@ function resolveImportTarget(
 function detectImportCycles(
   fileContents: ReadonlyMap<string, string>,
   rootDir = resolve("."),
+  existingFiles?: ReadonlySet<string>,
 ): string[] {
-  const allFiles = [...fileContents.keys()];
+  const allFiles = [...fileContents.keys()].filter((f) => f.endsWith(".ts"));
   const fileSet = new Set(allFiles);
+  const allKnownFiles = existingFiles ?? new Set(fileContents.keys());
   const graph = new Map<string, string[]>();
 
-  for (const [file, code] of fileContents.entries()) {
+  for (const file of allFiles) {
+    const code = fileContents.get(file) ?? "";
     const deps = new Set<string>();
     for (const specifier of extractModuleSpecifiers(code)) {
-      const target = resolveImportTarget(file, specifier, fileSet, rootDir);
+      const target = resolveImportTarget(file, specifier, fileSet, rootDir, allKnownFiles);
       if (target) {
         deps.add(target);
       }
@@ -513,6 +589,10 @@ describe("Architecture Boundary Rules", () => {
     expect(findReverseScriptImports('const m = await import("../scripts/b");')).toEqual([
       "../scripts/b",
     ]);
+    // テンプレート補間内の文字列に "}" が含まれていても補間が途中終了せず、後続の動的 import を検出できること
+    expect(
+      findReverseScriptImports('const s = `${"}" + (await import("../scripts/b")).b}`;'),
+    ).toEqual(["../scripts/b"]);
 
     const rootDir = resolve(".");
     const fileA = normalize(resolve(rootDir, "src/a.ts"));
@@ -540,5 +620,30 @@ describe("Architecture Boundary Rules", () => {
       [fileB, '/* import("./a.js") */\nexport const b = 2;'],
     ]);
     expect(detectImportCycles(commentedMap, rootDir)).toEqual([]);
+
+    // 4. a.ts が実在する ./b.js を import し、同居する b/index.ts が ../a.js を import する構成では循環を誤検出しないこと（実ファイル + メモリ双方）
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-arch-test-"));
+    try {
+      const diskSrc = join(tmpDir, "src");
+      const diskBDir = join(diskSrc, "b");
+      mkdirSync(diskBDir, { recursive: true });
+      const diskA = normalize(join(diskSrc, "a.ts"));
+      const diskBJs = normalize(join(diskSrc, "b.js"));
+      const diskBIndex = normalize(join(diskBDir, "index.ts"));
+
+      writeFileSync(diskA, 'import { b } from "./b.js";\nexport const a = b;\n', "utf-8");
+      writeFileSync(diskBJs, "export const b = 2;\n", "utf-8");
+      writeFileSync(diskBIndex, 'import { a } from "../a.js";\nexport const idx = a;\n', "utf-8");
+
+      const diskMap = new Map<string, string>([
+        [diskA, readFileSync(diskA, "utf-8")],
+        [diskBIndex, readFileSync(diskBIndex, "utf-8")],
+      ]);
+      expect(detectImportCycles(diskMap, tmpDir, new Set([diskA, diskBJs, diskBIndex]))).toEqual(
+        [],
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
