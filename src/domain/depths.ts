@@ -234,8 +234,11 @@ export function createDepthsSnapshot(params: {
   absoluteBottom: DepthsRow[];
   singleCommitBottom?: DepthsRow[];
   firstTimerSingleCommitBottom?: DepthsRow[];
+  singleCommitTruncated?: boolean;
+  firstTimerSingleCommitTruncated?: boolean;
   staleBottom: DepthsRow[];
   firstTimerBottom?: DepthsRow[];
+  firstTimerBottomTruncated?: boolean;
   unreviewedBottom?: DepthsRow[];
   firstTimerUnreviewedBottom?: DepthsRow[];
   intervenedBottom?: DepthsRow[];
@@ -243,6 +246,7 @@ export function createDepthsSnapshot(params: {
   firstTimerUnreviewedTruncated?: boolean;
   intervenedTruncated?: boolean;
   firstReviewFrontier?: FirstReviewFrontier;
+  allAuthorsFirstReviewFrontier?: FirstReviewFrontier;
   expressLane: DepthsRow[];
 }): DepthsSnapshot {
   return {
@@ -257,8 +261,11 @@ export function createDepthsSnapshot(params: {
     ...(params.firstTimerSingleCommitBottom
       ? { FirstTimerSingleCommitBottom: params.firstTimerSingleCommitBottom }
       : {}),
+    ...(params.singleCommitTruncated ? { SingleCommitTruncated: true } : {}),
+    ...(params.firstTimerSingleCommitTruncated ? { FirstTimerSingleCommitTruncated: true } : {}),
     StaleBottom: params.staleBottom,
     ...(params.firstTimerBottom ? { FirstTimerBottom: params.firstTimerBottom } : {}),
+    ...(params.firstTimerBottomTruncated ? { FirstTimerBottomTruncated: true } : {}),
     ...(params.unreviewedBottom ? { UnreviewedBottom: params.unreviewedBottom } : {}),
     ...(params.firstTimerUnreviewedBottom
       ? { FirstTimerUnreviewedBottom: params.firstTimerUnreviewedBottom }
@@ -268,6 +275,9 @@ export function createDepthsSnapshot(params: {
     ...(params.firstTimerUnreviewedTruncated ? { FirstTimerUnreviewedTruncated: true } : {}),
     ...(params.intervenedTruncated ? { IntervenedTruncated: true } : {}),
     ...(params.firstReviewFrontier ? { FirstReviewFrontier: params.firstReviewFrontier } : {}),
+    ...(params.allAuthorsFirstReviewFrontier
+      ? { AllAuthorsFirstReviewFrontier: params.allAuthorsFirstReviewFrontier }
+      : {}),
     ExpressLane: params.expressLane,
   };
 }

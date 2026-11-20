@@ -295,10 +295,16 @@ export interface DepthsSnapshot {
   SingleCommitBottom?: DepthsRow[];
   /** マージ前線・初回提出者のみ（1コミット健康体・生涯マージ 0 回の起票日時古い順 TOP 10、v5 以降） */
   FirstTimerSingleCommitBottom?: DepthsRow[];
+  /** マージ前線（全体）の探索が走査上限到達により途中で打ち切られた場合 true */
+  SingleCommitTruncated?: boolean;
+  /** マージ前線（初回提出者のみ）の探索が走査上限到達により途中で打ち切られた場合 true */
+  FirstTimerSingleCommitTruncated?: boolean;
   /** 更新停止最古（1コミット限定の健康体の中で更新日時が最も古い PR。後方互換・補助参照用） */
   StaleBottom: DepthsRow[];
   /** 初回提出者の底（手直しコミット込み・生涯マージ 0 回の初回提出者の中で起票日時が最も古い健康な PR） */
   FirstTimerBottom?: DepthsRow[];
+  /** 初回提出者の底の探索が走査上限到達により途中で打ち切られた場合 true */
+  FirstTimerBottomTruncated?: boolean;
   /** 未レビュー（完全未着手）前線・全体（健康な待機 PR のうち人間レビュー・手動コメント・第三者アサイン・特権自動指摘すべて無し・起票日時順） */
   UnreviewedBottom?: DepthsRow[];
   /** 未レビュー（完全未着手）前線・初回提出者のみ（起票日時順 TOP 10、v5 以降） */
@@ -319,8 +325,10 @@ export interface DepthsSnapshot {
   UnassignedTruncated?: boolean;
   /** @deprecated v2 互換用（v3 以降は IntervenedTruncated を使用） */
   AssignedTruncated?: boolean;
-  /** 直近 7 日間の初回人間介入コホートによる主戦場ライン集計（v4 以降） */
+  /** 直近 7 日間の初回人間介入コホートによる主戦場ライン集計（初回提出者限定、v4 以降） */
   FirstReviewFrontier?: FirstReviewFrontier;
+  /** 直近 7 日間の初回人間介入コホートによる主戦場ライン集計（常連含む全体、v5 以降） */
+  AllAuthorsFirstReviewFrontier?: FirstReviewFrontier;
   ExpressLane: DepthsRow[];
 }
 

@@ -196,11 +196,14 @@ async function attachAuthorMergedCounts(params: {
 export interface BottomPairResult {
   all: DepthsRow[];
   firstTimer: DepthsRow[];
+  allTruncated: boolean;
+  firstTimerTruncated: boolean;
 }
 
 /**
  * 1 回の GraphQL Search ページング走査で、条件に一致する「全体 TOP limit 件」と
  * 「初回提出者（NONE・生涯マージ 0 回）TOP limit 件」を同時収集し、両方に AuthorMergedCount を付与する。
+ * 走査上限（maxTraverseNodes）到達時は観測全体を中断せず、確定済みの行と打ち切りフラグを返す。
  */
 async function collectBottomPairCandidates(params: {
   client: GitHubApiClient;
@@ -225,16 +228,15 @@ async function collectBottomPairCandidates(params: {
   let cursor: string | null = null;
   let hasNext = true;
   let traversedCount = 0;
+  let reachedNaturalEnd = false;
   const allRows: DepthsRow[] = [];
   const firstTimerRows: DepthsRow[] = [];
 
-  while (hasNext && (allRows.length < limit || firstTimerRows.length < limit)) {
-    if (traversedCount >= maxTraverseNodes) {
-      throw new Error(
-        `${label}の探索上限 (${maxTraverseNodes}件) に達しましたが、未走査の PR が残っています (全体: ${allRows.length}/${limit}件, 初回: ${firstTimerRows.length}/${limit}件)。不完全な結果を避けるため中断します。`,
-      );
-    }
-
+  while (
+    hasNext &&
+    traversedCount < maxTraverseNodes &&
+    (allRows.length < limit || firstTimerRows.length < limit)
+  ) {
     const fetchCount = Math.min(FIRST_TIMER_PAGE_SIZE, maxTraverseNodes - traversedCount);
     try {
       const gqlRes: GraphQLSearchFirstTimerResponse =
@@ -301,7 +303,8 @@ async function collectBottomPairCandidates(params: {
       hasNext = Boolean(gqlRes.search?.pageInfo?.hasNextPage);
       cursor = gqlRes.search?.pageInfo?.endCursor ?? null;
 
-      if (!cursor || rawNodes.length === 0) {
+      if (!hasNext || !cursor || rawNodes.length === 0) {
+        reachedNaturalEnd = true;
         break;
       }
     } catch (err: unknown) {
@@ -318,6 +321,8 @@ async function collectBottomPairCandidates(params: {
   return {
     all: allRows.slice(0, limit),
     firstTimer: firstTimerRows.slice(0, limit),
+    allTruncated: !reachedNaturalEnd && allRows.length < limit,
+    firstTimerTruncated: !reachedNaturalEnd && firstTimerRows.length < limit,
   };
 }
 
@@ -331,9 +336,13 @@ export async function fetchHealthyBottoms(
   limit = BOTTOM_LIST_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
   mergedCountCache = new Map<string, number>(),
-): Promise<{ healthyBottom: DepthsRow[]; firstTimerBottom: DepthsRow[] }> {
+): Promise<{
+  healthyBottom: DepthsRow[];
+  firstTimerBottom: DepthsRow[];
+  firstTimerBottomTruncated: boolean;
+}> {
   const repository = extractRepositoryFromQuery(baseQuery);
-  const { all, firstTimer } = await collectBottomPairCandidates({
+  const { all, firstTimer, firstTimerTruncated } = await collectBottomPairCandidates({
     client,
     query: `${baseQuery} sort:created-asc`,
     repository,
@@ -342,7 +351,11 @@ export async function fetchHealthyBottoms(
     label: "健康的大底・初回提出者の底",
     mergedCountCache,
   });
-  return { healthyBottom: all, firstTimerBottom: firstTimer };
+  return {
+    healthyBottom: all,
+    firstTimerBottom: firstTimer,
+    firstTimerBottomTruncated: firstTimerTruncated,
+  };
 }
 
 /**
@@ -355,9 +368,14 @@ export async function fetchSingleCommitBottoms(
   limit = BOTTOM_LIST_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
   mergedCountCache = new Map<string, number>(),
-): Promise<{ singleCommitBottom: DepthsRow[]; firstTimerSingleCommitBottom: DepthsRow[] }> {
+): Promise<{
+  singleCommitBottom: DepthsRow[];
+  firstTimerSingleCommitBottom: DepthsRow[];
+  singleCommitTruncated: boolean;
+  firstTimerSingleCommitTruncated: boolean;
+}> {
   const repository = extractRepositoryFromQuery(baseQuery);
-  const { all, firstTimer } = await collectBottomPairCandidates({
+  const { all, firstTimer, allTruncated, firstTimerTruncated } = await collectBottomPairCandidates({
     client,
     query: `${baseQuery} sort:created-asc`,
     repository,
@@ -367,7 +385,12 @@ export async function fetchSingleCommitBottoms(
     mergedCountCache,
     filterNode: isStaleCandidate,
   });
-  return { singleCommitBottom: all, firstTimerSingleCommitBottom: firstTimer };
+  return {
+    singleCommitBottom: all,
+    firstTimerSingleCommitBottom: firstTimer,
+    singleCommitTruncated: allTruncated,
+    firstTimerSingleCommitTruncated: firstTimerTruncated,
+  };
 }
 
 /**
@@ -801,13 +824,18 @@ async function resolveMainstreamInterventionsByNumbers(params: {
   return resolved;
 }
 
+export interface FirstReviewFrontiersResult {
+  /** 初回提出者限定コホートの主戦場ライン集計（既存 FirstReviewFrontier 互換） */
+  firstReviewFrontier: FirstReviewFrontier;
+  /** 常連含む全体コホートの主戦場ライン集計（2×2 全体トグル用） */
+  allAuthorsFirstReviewFrontier: FirstReviewFrontier;
+}
+
 /**
- * 直近 7 日間（[now - 7d, now]）に初めて人間介入が入った初回提出者 PR（オープン中 ＋ 直近マージ済み）を収集し、
- * 主戦場ライン（起票日時の中央値）を算出する。
- * Search API では軽量メタデータのみを抽出し、対象候補だけを repository.pullRequest alias バッチで取得する
- * 2 段階パイプラインと merged-samples.jsonl キャッシュ活用により、GraphQL Search 負荷とタイムアウトを抑える。
+ * 直近 7 日間（[now - 7d, now]）に初めて人間介入が入った New-Package PR（オープン中 ＋ 直近マージ済み）を収集し、
+ * 「初回提出者限定コホート」と「常連含む全体コホート」の主戦場ライン（起票日時の中央値）を同時算出する。
  */
-export async function fetchFirstReviewMainstreamFrontier(params: {
+export async function fetchFirstReviewFrontiers(params: {
   client: GitHubApiClient;
   repository: string;
   now: Date;
@@ -815,7 +843,8 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
   samplesPath?: string;
   windowDays?: number;
   batchSize?: number;
-}): Promise<FirstReviewFrontier> {
+  includeAllAuthors?: boolean;
+}): Promise<FirstReviewFrontiersResult> {
   const {
     client,
     repository,
@@ -824,16 +853,18 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
     samplesPath,
     windowDays = FIRST_REVIEW_COHORT_WINDOW_DAYS,
     batchSize = INTERVENTION_BATCH_SIZE,
+    includeAllAuthors = true,
   } = params;
   const { owner, name } = parseRepository(repository);
   const nowMs = now.getTime();
   const windowStartMs = nowMs - windowDays * DAY_MS;
   const windowStart = new Date(windowStartMs);
 
-  const candidates: FirstReviewCohortCandidate[] = [];
+  const firstTimerCandidates: FirstReviewCohortCandidate[] = [];
+  const allAuthorsCandidates: FirstReviewCohortCandidate[] = [];
 
   try {
-    // 1. オープン中 PR: 軽量 Search で authorAssociation=NONE かつ author ありに絞り込み、バッチで介入詳細を取得
+    // 1. オープン中 PR: 軽量 Search で候補を抽出し、バッチで介入詳細を取得
     const openLightNodes = await collectInterventionLightNodes(
       client,
       `repo:${repository} is:pr is:open label:New-Package`,
@@ -842,7 +873,13 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       now,
     );
     const openCandidateNumbers = openLightNodes
-      .filter((node) => isFirstTimerCandidate(node as GraphQLPrNode))
+      .filter((node) => {
+        if (!node.author?.login) return false;
+        if (includeAllAuthors) {
+          return !node.author.login.trim().toLowerCase().endsWith("[bot]");
+        }
+        return isFirstTimerCandidate(node as GraphQLPrNode);
+      })
       .map((node) => node.number);
 
     const resolvedOpenNodes = await resolveMainstreamInterventionsByNumbers({
@@ -860,25 +897,33 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       .map(({ node, summary }) => toFirstReviewCohortCandidate(node, summary, "OPEN"));
 
     if (openIntervenedCandidates.length > 0) {
-      const openAuthors = openIntervenedCandidates
-        .map((c) => c.author)
-        .filter((login): login is string => Boolean(login));
-      await resolveAuthorMergedCounts(
-        repository,
-        openAuthors,
-        (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
-        { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
-      );
+      const openNoneAuthors = openIntervenedCandidates
+        .filter((c) => c.authorAssociation === "NONE" && Boolean(c.author))
+        .map((c) => c.author as string);
+      if (openNoneAuthors.length > 0) {
+        await resolveAuthorMergedCounts(
+          repository,
+          openNoneAuthors,
+          (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
+          { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
+        );
+      }
       for (const candidate of openIntervenedCandidates) {
         if (!candidate.author) continue;
-        const mergedCount = mergedCountCache.get(candidate.author) ?? 0;
-        if (mergedCount === 0) {
-          candidates.push({ ...candidate, authorMergedCount: mergedCount });
+        const mergedCount =
+          candidate.authorAssociation === "NONE" && mergedCountCache.has(candidate.author)
+            ? mergedCountCache.get(candidate.author)
+            : undefined;
+        const enriched: FirstReviewCohortCandidate =
+          mergedCount !== undefined ? { ...candidate, authorMergedCount: mergedCount } : candidate;
+        allAuthorsCandidates.push(enriched);
+        if (candidate.authorAssociation === "NONE" && (mergedCount ?? 0) === 0) {
+          firstTimerCandidates.push(enriched);
         }
       }
     }
 
-    // 2. マージ済み PR: キャッシュ済み初回 PR ＋ 軽量 Search で発見した未キャッシュ候補を統合バッチで取得
+    // 2. マージ済み PR: キャッシュ済み初回 PR ＋ 軽量 Search で発見した候補を統合バッチで取得
     const cachedFirstTimerNumbers: number[] = [];
     const cachedFirstTimerSet = new Set<number>();
     const knownNonFirstTimerNumbers = new Set<number>();
@@ -920,12 +965,14 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       now,
     );
     const uncachedMergedNumbers = mergedLightNodes
-      .filter(
-        (node) =>
-          !knownNonFirstTimerNumbers.has(node.number) &&
-          !cachedFirstTimerSet.has(node.number) &&
-          Boolean(node.author?.login),
-      )
+      .filter((node) => {
+        if (!node.author?.login) return false;
+        if (cachedFirstTimerSet.has(node.number)) return false;
+        if (includeAllAuthors) {
+          return !node.author.login.trim().toLowerCase().endsWith("[bot]");
+        }
+        return !knownNonFirstTimerNumbers.has(node.number);
+      })
       .map((node) => node.number);
 
     const mergedFetchNumbers = [...cachedFirstTimerNumbers, ...uncachedMergedNumbers];
@@ -937,24 +984,31 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       batchSize,
     });
 
-    const uncachedMergedIntervened: FirstReviewCohortCandidate[] = [];
+    const uncachedMergedForFirstTimer: FirstReviewCohortCandidate[] = [];
     for (const { node, summary } of resolvedMergedNodes) {
       if (!summary.FirstHumanInterventionAt) continue;
       if (cachedFirstTimerSet.has(node.number)) {
         const cachedCount = node.author?.login
           ? mergedCountCache.get(node.author.login)
           : undefined;
-        candidates.push(toFirstReviewCohortCandidate(node, summary, "MERGED", cachedCount));
+        const cand = toFirstReviewCohortCandidate(node, summary, "MERGED", cachedCount);
+        firstTimerCandidates.push(cand);
+        allAuthorsCandidates.push(cand);
         continue;
       }
       if (!isTimestampWithinWindow(summary.FirstHumanInterventionAt, windowStartMs, nowMs)) {
         continue;
       }
-      uncachedMergedIntervened.push(toFirstReviewCohortCandidate(node, summary, "MERGED"));
+      const cand = toFirstReviewCohortCandidate(node, summary, "MERGED");
+      if (knownNonFirstTimerNumbers.has(node.number)) {
+        allAuthorsCandidates.push(cand);
+        continue;
+      }
+      uncachedMergedForFirstTimer.push(cand);
     }
 
-    if (uncachedMergedIntervened.length > 0) {
-      const mergedAuthors = uncachedMergedIntervened
+    if (uncachedMergedForFirstTimer.length > 0) {
+      const mergedAuthors = uncachedMergedForFirstTimer
         .map((c) => c.author)
         .filter((login): login is string => Boolean(login));
       await resolveAuthorMergedCounts(
@@ -963,12 +1017,21 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
         (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
         { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
       );
-      for (const candidate of uncachedMergedIntervened) {
+      for (const candidate of uncachedMergedForFirstTimer) {
         if (!candidate.author) continue;
-        // 既にマージ済みの初回 PR なので累計マージ数は 1 件以下（単発マージ）のみ許容
         const mergedCount = mergedCountCache.get(candidate.author) ?? 0;
-        if (mergedCount <= 1) {
-          candidates.push({ ...candidate, authorMergedCount: mergedCount });
+        const enriched: FirstReviewCohortCandidate = {
+          ...candidate,
+          authorMergedCount: mergedCount,
+        };
+        allAuthorsCandidates.push(enriched);
+        const privilegedOrBot = isPrivilegedOrBotAuthor({
+          author: candidate.author,
+          authorAssociation: candidate.authorAssociation,
+        });
+        // 既にマージ済みの初回 PR なので非特権・非 Bot かつ累計マージ数 1 件以下のみ初回提出者コホートへ算入
+        if (!privilegedOrBot && mergedCount <= 1) {
+          firstTimerCandidates.push(enriched);
         }
       }
     }
@@ -979,7 +1042,36 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
     });
   }
 
-  return calculateFirstReviewMainstreamFrontier(candidates, now, { windowDays });
+  return {
+    firstReviewFrontier: calculateFirstReviewMainstreamFrontier(firstTimerCandidates, now, {
+      windowDays,
+    }),
+    allAuthorsFirstReviewFrontier: calculateFirstReviewMainstreamFrontier(
+      allAuthorsCandidates,
+      now,
+      { windowDays },
+    ),
+  };
+}
+
+/**
+ * 直近 7 日間（[now - 7d, now]）に初めて人間介入が入った初回提出者 PR（オープン中 ＋ 直近マージ済み）を収集し、
+ * 主戦場ライン（起票日時の中央値）を算出する（既存互換ラッパー）。
+ */
+export async function fetchFirstReviewMainstreamFrontier(params: {
+  client: GitHubApiClient;
+  repository: string;
+  now: Date;
+  mergedCountCache?: Map<string, number>;
+  samplesPath?: string;
+  windowDays?: number;
+  batchSize?: number;
+}): Promise<FirstReviewFrontier> {
+  const { firstReviewFrontier } = await fetchFirstReviewFrontiers({
+    ...params,
+    includeAllAuthors: false,
+  });
+  return firstReviewFrontier;
 }
 
 export function parseArgs(argv: string[]): ExploreDepthsOptions {
@@ -1095,7 +1187,7 @@ export async function runExploreDepths(
   const mergedCountCache = new Map<string, number>();
 
   // 1. マージ正常底（健康的大底 TOP 10）＋ 初回提出者の底（TOP 10）を GraphQL で同時取得
-  const { healthyBottom, firstTimerBottom } = await fetchHealthyBottoms(
+  const { healthyBottom, firstTimerBottom, firstTimerBottomTruncated } = await fetchHealthyBottoms(
     client,
     healthyBase,
     BOTTOM_LIST_LIMIT,
@@ -1109,7 +1201,12 @@ export async function runExploreDepths(
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
   // 3A. マージ前線（1コミット完走組・起票日時古い順 TOP 10: 全体 ＋ 初回提出者のみ）
-  const { singleCommitBottom, firstTimerSingleCommitBottom } = await fetchSingleCommitBottoms(
+  const {
+    singleCommitBottom,
+    firstTimerSingleCommitBottom,
+    singleCommitTruncated,
+    firstTimerSingleCommitTruncated,
+  } = await fetchSingleCommitBottoms(
     client,
     healthyBase,
     BOTTOM_LIST_LIMIT,
@@ -1161,8 +1258,8 @@ export async function runExploreDepths(
         ? resolve(dirname(resolve(process.cwd(), options.historyPath)), "merged-samples.jsonl")
         : resolve(defaultDataDir, "merged-samples.jsonl");
 
-  // 5B. 主戦場ライン（直近 7 日間に初めて人間介入が入った初回提出 PR コホートの起票日時中央値）
-  const firstReviewFrontier = await fetchFirstReviewMainstreamFrontier({
+  // 5B. 主戦場ライン（直近 7 日間に初めて人間介入が入ったコホート: 初回提出者限定 ＋ 常連含む全体）
+  const { firstReviewFrontier, allAuthorsFirstReviewFrontier } = await fetchFirstReviewFrontiers({
     client,
     repository: options.repository,
     now,
@@ -1258,8 +1355,11 @@ export async function runExploreDepths(
     absoluteBottom,
     singleCommitBottom,
     firstTimerSingleCommitBottom,
+    singleCommitTruncated,
+    firstTimerSingleCommitTruncated,
     staleBottom,
     firstTimerBottom,
+    firstTimerBottomTruncated,
     unreviewedBottom,
     firstTimerUnreviewedBottom,
     intervenedBottom,
@@ -1267,6 +1367,7 @@ export async function runExploreDepths(
     firstTimerUnreviewedTruncated,
     intervenedTruncated,
     firstReviewFrontier,
+    allAuthorsFirstReviewFrontier,
     expressLane: expressBottom,
   });
 
