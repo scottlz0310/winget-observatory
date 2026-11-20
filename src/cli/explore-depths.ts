@@ -18,7 +18,6 @@ import {
   formatTargetPrInfo,
   isFirstTimerCandidate,
   isFirstTimerDepthsRow,
-  isStaleCandidate,
 } from "../domain/depths";
 import {
   DEFAULT_AUTHOR_MERGED_BATCH_SIZE,
@@ -53,11 +52,8 @@ import {
 
 export { resolveDefaultDataDir };
 
-/** 各待機ライン（健康的大底・1コミット完走組・初回提出者・未レビュー前線）の取得・表示件数 */
+/** 各待機ライン（健康的大底・初回提出者・未レビュー正常底）の取得・表示件数 */
 export const BOTTOM_LIST_LIMIT = 10;
-
-/** 後方互換エイリアス（BOTTOM_LIST_LIMIT と同値） */
-export const STALE_BOTTOM_LIMIT = BOTTOM_LIST_LIMIT;
 
 /** 初回提出者の底を走査する際の 1 ページあたりの取得件数（GraphQL search の上限値） */
 export const FIRST_TIMER_PAGE_SIZE = 100;
@@ -359,70 +355,6 @@ export async function fetchHealthyBottoms(
 }
 
 /**
- * GraphQL API を用いてマージ前線（1コミット完走組: 起票日時古い順 TOP 10）の
- * 全体および初回提出者限定リストを 1 回の走査で同時取得する。
- */
-export async function fetchSingleCommitBottoms(
-  client: GitHubApiClient,
-  baseQuery: string,
-  limit = BOTTOM_LIST_LIMIT,
-  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
-  mergedCountCache = new Map<string, number>(),
-): Promise<{
-  singleCommitBottom: DepthsRow[];
-  firstTimerSingleCommitBottom: DepthsRow[];
-  singleCommitTruncated: boolean;
-  firstTimerSingleCommitTruncated: boolean;
-}> {
-  const repository = extractRepositoryFromQuery(baseQuery);
-  const { all, firstTimer, allTruncated, firstTimerTruncated } = await collectBottomPairCandidates({
-    client,
-    query: `${baseQuery} sort:created-asc`,
-    repository,
-    limit,
-    maxTraverseNodes,
-    label: "マージ前線（1コミット完走組）",
-    mergedCountCache,
-    filterNode: isStaleCandidate,
-  });
-  return {
-    singleCommitBottom: all,
-    firstTimerSingleCommitBottom: firstTimer,
-    singleCommitTruncated: allTruncated,
-    firstTimerSingleCommitTruncated: firstTimerTruncated,
-  };
-}
-
-/**
- * GraphQL API を用いて更新停止最古（Stale Bottom: 1コミット限定・更新日時古い順）を取得する。
- * `authorAssociation === "NONE"` の行については生涯マージ数を照会し、`AuthorMergedCount` に記録する。
- */
-export async function fetchStaleBottom(
-  client: GitHubApiClient,
-  baseQuery: string,
-  limit = STALE_BOTTOM_LIMIT,
-  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
-  mergedCountCache = new Map<string, number>(),
-): Promise<DepthsRow[]> {
-  const repository = extractRepositoryFromQuery(baseQuery);
-  const rows = await collectBottomCandidates({
-    client,
-    query: `${baseQuery} sort:updated-asc`,
-    limit,
-    maxTraverseNodes,
-    label: "優等生の底",
-    filterNodes: (nodes) => nodes.filter(isStaleCandidate),
-  });
-  return attachAuthorMergedCounts({
-    client,
-    repository,
-    rows: rows.slice(0, limit),
-    mergedCountCache,
-    label: "優等生の底",
-  });
-}
-
-/**
  * GraphQL API を用いて初回提出者の底（First-Timer Bottom: 起票日時古い順・手直し込み・生涯マージ0回）を取得する。
  * 採用件数（limit）に達するか走査終了（hasNextPage=false）まで最大 maxTraverseNodes 件までページング走査する。
  * 通信障害や認証エラー時は例外を握りつぶさずコンテキスト付き例外として伝播させる。
@@ -430,7 +362,7 @@ export async function fetchStaleBottom(
 export async function fetchFirstTimerBottom(
   client: GitHubApiClient,
   baseQuery: string,
-  limit = STALE_BOTTOM_LIMIT,
+  limit = BOTTOM_LIST_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
   mergedCountCache = new Map<string, number>(),
 ): Promise<DepthsRow[]> {
@@ -537,7 +469,7 @@ async function fetchInterventionBatchNodes(params: {
 export async function fetchInterventionFrontiers(
   client: GitHubApiClient,
   baseQuery: string,
-  limit = STALE_BOTTOM_LIMIT,
+  limit = BOTTOM_LIST_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
   batchSize = INTERVENTION_BATCH_SIZE,
   mergedCountCache = new Map<string, number>(),
@@ -1215,30 +1147,7 @@ export async function runExploreDepths(
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
-  // 3A. マージ前線（1コミット完走組・起票日時古い順 TOP 10: 全体 ＋ 初回提出者のみ）
-  const {
-    singleCommitBottom,
-    firstTimerSingleCommitBottom,
-    singleCommitTruncated,
-    firstTimerSingleCommitTruncated,
-  } = await fetchSingleCommitBottoms(
-    client,
-    healthyBase,
-    BOTTOM_LIST_LIMIT,
-    FIRST_TIMER_MAX_NODES,
-    mergedCountCache,
-  );
-
-  // 3B. 更新停止最古（Stale Bottom: 1コミット限定・更新日時古い順、後方互換・補助参照用）
-  const staleBottom = await fetchStaleBottom(
-    client,
-    healthyBase,
-    STALE_BOTTOM_LIMIT,
-    FIRST_TIMER_MAX_NODES,
-    mergedCountCache,
-  );
-
-  // 5. 未レビュー（完全未着手）前線（全体 ＋ 初回提出者のみ）／介入済み前線（起票日時順）
+  // 3. 未レビュー（完全未着手）正常底（全体 ＋ 初回提出者のみ）／介入済み前線（起票日時順）
   const {
     unreviewedBottom,
     firstTimerUnreviewedBottom,
@@ -1249,7 +1158,7 @@ export async function runExploreDepths(
   } = await fetchInterventionFrontiers(
     client,
     healthyBase,
-    STALE_BOTTOM_LIMIT,
+    BOTTOM_LIST_LIMIT,
     FIRST_TIMER_MAX_NODES,
     INTERVENTION_BATCH_SIZE,
     mergedCountCache,
@@ -1296,14 +1205,7 @@ export async function runExploreDepths(
     printRowTable(absoluteBottom, log);
     log("");
 
-    log("【3. 優等生の底 (Stale Bottom / Healthy Oldest)】");
-    log(
-      "説明: 指摘なく健康な1コミット限定PR（常連含む）の中で、更新日時(updated)が最も古い放置前線",
-    );
-    printRowTable(staleBottom, log, { showThirdPartyAssignees: true });
-    log("");
-
-    log("【4. 初回提出者の底 (First-Timer Bottom)】");
+    log("【3. 初回提出者の底 (First-Timer Bottom)】");
     log(
       "説明: 初回提出者（authorAssociation = NONE・生涯マージ 0 回）の健康なPR全体（手直し込み）の、起票日時(created)が最も古い先頭",
     );
@@ -1368,11 +1270,6 @@ export async function runExploreDepths(
     targetPr: targetInfo,
     healthyBottom,
     absoluteBottom,
-    singleCommitBottom,
-    firstTimerSingleCommitBottom,
-    singleCommitTruncated,
-    firstTimerSingleCommitTruncated,
-    staleBottom,
     firstTimerBottom,
     firstTimerBottomTruncated,
     unreviewedBottom,

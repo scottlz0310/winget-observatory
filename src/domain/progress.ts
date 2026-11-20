@@ -184,6 +184,8 @@ export interface CreateProgressSnapshotParams {
   firstTimerStats?: ProgressStatsSummary | null;
   /** 初回提出者コホートの採用サンプル件数（任意） */
   firstTimerSampleCount?: number;
+  /** 初回提出者コホートの採用サンプル配列（初回提出者窓。任意） */
+  firstTimerSamples?: MergedCandidateSample[];
   /** 初回提出者コホートの集計窓（日。任意） */
   firstTimerLookbackDays?: number;
 }
@@ -252,5 +254,8 @@ export function createProgressSnapshot(params: CreateProgressSnapshotParams): Pr
     FirstTimerTurnP75Days: firstTimerStats ? firstTimerStats.turn.p75 : null,
     FirstTimerSampleCount:
       params.firstTimerSampleCount ?? (firstTimerStats ? firstTimerStats.sampleCount : 0),
+    ...(params.firstTimerSamples !== undefined
+      ? { FirstTimerSamples: toSnapshotSamples(params.firstTimerSamples, targetPr) }
+      : {}),
   };
 }

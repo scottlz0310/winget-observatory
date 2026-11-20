@@ -285,6 +285,7 @@ export interface DepthsSnapshot {
    * - 3: 介入判定分離版（UnreviewedBottom / IntervenedBottom: 人間レビュー・手動コメント・第三者アサイン OR 分離）
    * - 4: 主戦場ライン版（FirstReviewFrontier: 直近7日間初回人間介入コホートの createdAt 中央値・オープン＋マージ済み）
    * - 5: 2×2 待機ライン統一版（HealthyBottom GraphQL TOP 10、SingleCommitBottom / FirstTimerSingleCommitBottom / FirstTimerUnreviewedBottom、全象限作者メタデータ統一）
+   * - 6: 1コミット限定廃止版（SingleCommitBottom / StaleBottom の新規収集を廃止し、マージ前線は progress.Samples の直近マージ実績へ統一）
    */
   DepthsVersion?: number;
   Timestamp: string;
@@ -293,16 +294,16 @@ export interface DepthsSnapshot {
   TargetPr: TargetPrInfo | null;
   HealthyBottom: DepthsRow[];
   AbsoluteBottom: DepthsRow[];
-  /** マージ前線・全体（1コミット健康体 PR の起票日時古い順 TOP 10、v5 以降） */
+  /** @deprecated v6 で廃止（旧履歴互換用） */
   SingleCommitBottom?: DepthsRow[];
-  /** マージ前線・初回提出者のみ（1コミット健康体・生涯マージ 0 回の起票日時古い順 TOP 10、v5 以降） */
+  /** @deprecated v6 で廃止（旧履歴互換用） */
   FirstTimerSingleCommitBottom?: DepthsRow[];
-  /** マージ前線（全体）の探索が走査上限到達により途中で打ち切られた場合 true */
+  /** @deprecated v6 で廃止（旧履歴互換用） */
   SingleCommitTruncated?: boolean;
-  /** マージ前線（初回提出者のみ）の探索が走査上限到達により途中で打ち切られた場合 true */
+  /** @deprecated v6 で廃止（旧履歴互換用） */
   FirstTimerSingleCommitTruncated?: boolean;
-  /** 更新停止最古（1コミット限定の健康体の中で更新日時が最も古い PR。後方互換・補助参照用） */
-  StaleBottom: DepthsRow[];
+  /** @deprecated v6 で廃止（旧履歴互換用） */
+  StaleBottom?: DepthsRow[];
   /** 初回提出者の底（手直しコミット込み・生涯マージ 0 回の初回提出者の中で起票日時が最も古い健康な PR） */
   FirstTimerBottom?: DepthsRow[];
   /** 初回提出者の底の探索が走査上限到達により途中で打ち切られた場合 true */

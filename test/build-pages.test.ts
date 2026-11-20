@@ -241,8 +241,8 @@ describe("buildDashboard: 読み込み失敗時の中断", () => {
   );
 });
 
-describe("buildDashboard: 遭難の底と履歴の扱い", () => {
-  test("遭難の底を専用の表に更新の古い順で表示し、旧定義の履歴は推移に含めない", () => {
+describe("buildDashboard: マージ正常底と旧定義履歴の扱い", () => {
+  test("マージ正常底を専用の表に起票の古い順で表示し、旧定義の履歴は推移に含めない", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-stale-"));
     try {
       const dataDir = join(tempDir, "data");
@@ -256,8 +256,8 @@ describe("buildDashboard: 遭難の底と履歴の扱い", () => {
         更新日時: "2026-10-09 14:54",
         CreatedAt: "2026-10-09T04:39:00Z",
         UpdatedAt: updated,
-        タイトル: `Stale package ${number}`,
-        Title: `Stale package ${number}`,
+        タイトル: `Healthy package ${number}`,
+        Title: `Healthy package ${number}`,
         Url: `https://github.com/microsoft/winget-pkgs/pull/${number}`,
       });
       writeFileSync(
@@ -265,7 +265,10 @@ describe("buildDashboard: 遭難の底と履歴の扱い", () => {
         JSON.stringify({
           Timestamp: "2026-11-08T05:54:00Z",
           TimestampJst: "2026-11-08 14:54:00",
-          StaleBottom: [item(449320, "2026-10-09T05:54:00Z"), item(449314, "2026-10-09T07:46:00Z")],
+          HealthyBottom: [
+            item(449320, "2026-10-09T05:54:00Z"),
+            item(449314, "2026-10-09T07:46:00Z"),
+          ],
           FirstTimerBottom: [
             {
               ...item(450100, "2026-10-09T08:00:00Z"),
@@ -295,7 +298,7 @@ describe("buildDashboard: 遭難の底と履歴の扱い", () => {
       const { htmlPath } = buildDashboard({ dataDir, outputDir });
       const html = readFileSync(htmlPath, "utf-8");
 
-      expect(html).toContain("🚀 マージ前線（1コミット完走組・早ければ）");
+      expect(html).toContain("🚀 マージ前線（直近マージ実績・早ければ）");
       expect(html).toContain("⚓ マージ正常底（健康的大底・遅くとも）");
       expect(html).toContain("#450100");
       expect(html).toContain("alice");
@@ -813,7 +816,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain("実質待ち（更新順）");
       expect(html).toContain("累積待ち（作成順）");
       expect(html).toContain("🌱 マージ正常底（初回提出者のみ）起票経過");
-      expect(html).toContain("👀 初動正常底（主戦場ライン・7日介入中央値）");
+      expect(html).toContain("👀 初動前線（主戦場ライン・初回提出者 7日介入中央値）");
       expect(html.match(/<polyline /g)?.length).toBeGreaterThanOrEqual(4);
 
       // 3. マージ実績統計カードの分離
@@ -822,8 +825,8 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain("👥 全体実績（常連・特急レーンを含む全サンプル）");
 
       // 4. 2×2 待機ライン比較マトリクス ＆ 共通トグル
-      expect(html).toContain("🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ・起票日時順統一）");
-      expect(html).toContain("🚀 マージ前線（1コミット完走組・早ければ）");
+      expect(html).toContain("🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ）");
+      expect(html).toContain("🚀 マージ前線（直近マージ実績・早ければ）");
       expect(html).toContain("⚓ マージ正常底（健康的大底・遅くとも）");
       expect(html).toContain('data-matrix-filter="all"');
       expect(html).toContain('data-matrix-filter="first-timer"');
@@ -953,7 +956,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       expectFirstTimerBadge: false,
     },
   ])(
-    "マージ前線（1コミット完走組）初回提出者バッジ判定と起票日時順統一: $label",
+    "マージ正常底（健康的大底）初回提出者バッジ判定と起票日時順統一: $label",
     ({ association, mergedCount, expectFirstTimerBadge }) => {
       const tempDir = mkdtempSync(join(tmpdir(), "winget-obs-repeater-badge-"));
       const dataDir = join(tempDir, "data");
@@ -963,10 +966,10 @@ describe("buildDashboard: 過去実績との比較", () => {
       const dummyDepths = {
         Timestamp: "2026-11-08T12:00:00Z",
         TimestampJst: "2026-11-08 21:00:00",
-        StaleBottom: [
+        HealthyBottom: [
           {
             Number: 551001,
-            Title: "Stale Candidate",
+            Title: "Healthy Candidate",
             Url: "https://github.com/microsoft/winget-pkgs/pull/551001",
             Author: "candidate-user",
             AuthorAssociation: association,
@@ -995,20 +998,18 @@ describe("buildDashboard: 過去実績との比較", () => {
         const { htmlPath } = buildDashboard({ dataDir, outputDir });
         const html = readFileSync(htmlPath, "utf-8");
 
-        const mergeFrontSection = html
-          .split("🚀 マージ前線（1コミット完走組・早ければ）")[1]
-          .split("⚓ マージ正常底（健康的大底・遅くとも）")[0];
         const mergeBottomSection = html
           .split("⚓ マージ正常底（健康的大底・遅くとも）")[1]
           .split("🚧 例外・特殊境界（真の大底・特急レーン）")[0];
+        const mergeBottomAll = mergeBottomSection.split('data-matrix-view="first-timer"')[0];
 
-        // 4 象限すべて「起票からの経過」（38 日）で統一
-        expect(mergeFrontSection).toContain("<th>起票からの経過</th>");
-        expect(mergeFrontSection).toContain("<td>38 日</td>");
+        // 全体ビューは「起票からの経過」（38 日）で初回提出者バッジを判定
+        expect(mergeBottomAll).toContain("<th>起票からの経過</th>");
+        expect(mergeBottomAll).toContain("<td>38 日</td>");
         if (expectFirstTimerBadge) {
-          expect(mergeFrontSection).toContain(">🌱 初回提出者<");
+          expect(mergeBottomAll).toContain(">🌱 初回提出者<");
         } else {
-          expect(mergeFrontSection).not.toContain(">🌱 初回提出者<");
+          expect(mergeBottomAll).not.toContain(">🌱 初回提出者<");
         }
 
         // マージ正常底（初回提出者ビュー）も「起票からの経過」（36 日）であり、更新からの経過（1 日）ではない
@@ -1418,41 +1419,36 @@ describe("buildDashboard: 過去実績との比較", () => {
     try {
       const html = readFileSync(buildDashboard({ dataDir, outputDir }).htmlPath, "utf-8");
 
-      // 統合ヒーローカード内の初動正常底現在位置（外挿廃止・定常換算）
-      expect(html).toContain("👀 初動正常底（主戦場ライン・7日介入中央値）");
+      // 統合ヒーローカード内の初動前線現在位置（外挿廃止・定常換算・初回提出者明記）
+      expect(html).toContain("👀 初動前線（主戦場ライン・初回提出者 7日介入中央値）");
       expect(html).toContain("自PRと差 9 日（定常 1.0 日/日換算:");
       expect(html).toContain("7日初回介入 12件 [Open 5 / Merged 7]");
 
-      // 統合時系列チャートに初動正常底系列
-      expect(html).toContain("👀 初動正常底（主戦場ライン・7日介入中央値）");
+      // 統合時系列チャートに初動前線系列
+      expect(html).toContain("👀 初動前線（主戦場ライン・初回提出者 7日介入中央値）");
 
-      // 2×2 マトリクス内のマージ前線・マージ正常底で第三者アサイン済みバッジ
-      const mergeFrontSection = html
-        .split("🚀 マージ前線（1コミット完走組・早ければ）")[1]
-        .split("⚓ マージ正常底（健康的大底・遅くとも）")[0];
-      expect(mergeFrontSection).toContain("アサイン済: stephengillie");
-
+      // 2×2 マトリクス内のマージ正常底で第三者アサイン済みバッジ
       const mergeBottomSection = html
         .split("⚓ マージ正常底（健康的大底・遅くとも）")[1]
         .split("🚧 例外・特殊境界（真の大底・特急レーン）")[0];
       expect(mergeBottomSection).toContain("アサイン済: stephengillie");
 
-      // 2×2 マトリクス内の初動前線・初動正常底
-      expect(html).toContain("🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ・起票日時順統一）");
+      // 2×2 マトリクス内の初動前線（主戦場ライン）・初動正常底（未レビュー最古）
+      expect(html).toContain("🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ）");
       expect(html).not.toContain("（(");
-      expect(html).toContain("🎯 初動正常底（主戦場ライン・遅くとも）");
+      expect(html).toContain("🎯 初動前線（主戦場ライン・早ければ）");
       expect(html).toContain("計 12 件 (Open 5 / Merged 7)");
       expect(html).toContain("直近介入順 30 件表示");
       const mainstreamCardHtml = html
-        .split("🎯 初動正常底（主戦場ライン・遅くとも）")[1]
-        .split("② 最終マージ（FIFO 完了）")[0];
+        .split("🎯 初動前線（主戦場ライン・早ければ）")[1]
+        .split("🟦 初動正常底（未レビュー最古・遅くとも）")[0];
       expect(mainstreamCardHtml).toContain("<th>PR / パッケージ</th>");
       expect(mainstreamCardHtml).not.toContain("<th>タイトル</th>");
       expect(mainstreamCardHtml).toContain('title="New package: Vendor.App version 1.0.0"');
       expect(mainstreamCardHtml).toContain("Vendor.App version 1.0.0");
       expect(mainstreamCardHtml).toContain('title="New version: Another.Pkg version 2.1.0"');
       expect(mainstreamCardHtml).toContain("Another.Pkg version 2.1.0");
-      expect(html).toContain("🟦 初動前線（未レビュー前線・早ければ）");
+      expect(html).toContain("🟦 初動正常底（未レビュー最古・遅くとも）");
       expect(html).toContain("MERGED");
       expect(html).toContain("OPEN");
       expect(html).toContain("レビュー: matteozanettii");
@@ -1512,7 +1508,7 @@ describe("buildDashboard: 過去実績との比較", () => {
       expect(html).toContain("基準PR介入済み");
       expect(html).toContain("（コメント済: stephengillie）");
       expect(html).toContain(
-        "未レビュー前線のデータはまだありません（次回の定期観測から記録されます）。",
+        "未レビュー最古のデータはまだありません（次回の定期観測から記録されます）。",
       );
       expect(html).toContain(
         "主戦場ラインのデータはまだありません（次回の定期観測から記録されます）。",

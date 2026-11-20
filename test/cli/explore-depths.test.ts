@@ -9,8 +9,6 @@ import {
   fetchFirstTimerBottom,
   fetchHealthyBottoms,
   fetchInterventionFrontiers,
-  fetchSingleCommitBottoms,
-  fetchStaleBottom,
   parseArgs,
   resolveDefaultDataDir,
   runExploreDepths,
@@ -109,14 +107,14 @@ describe("CLI: explore-depths", () => {
       expect(snapshot.TargetPr?.Number).toBe(464302);
       expect(snapshot.HealthyBottom.length).toBe(1);
       expect(snapshot.AbsoluteBottom.length).toBe(1);
-      expect(snapshot.StaleBottom.length).toBe(1);
-      expect(snapshot.StaleBottom[0].CommitCount).toBe(1);
+      expect(snapshot.SingleCommitBottom).toBeUndefined();
+      expect(snapshot.StaleBottom).toBeUndefined();
       expect(snapshot.FirstTimerBottom?.length).toBe(1);
       expect(snapshot.FirstTimerBottom?.[0].Author).toBe("first-timer-user");
       expect(snapshot.FirstTimerBottom?.[0].CommitCount).toBe(1);
       expect(snapshot.ExpressLane.length).toBe(1);
 
-      // Search API は Absolute, Express の 2 クエリのみ（Healthy / SingleCommit / Stale / FirstTimer は GraphQL）
+      // Search API は Absolute, Express の 2 クエリのみ（Healthy / FirstTimer は GraphQL）
       expect(searchQueries.length).toBe(2);
 
       // 出力ファイルの検証
@@ -261,253 +259,6 @@ describe("CLI: explore-depths", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
-});
-
-describe("CLI: explore-depths の優等生の底（Stale Bottom）", () => {
-  test("優等生の底は sort:updated-asc ＋ progress と同じ健康条件で GraphQL 検索し、1コミット限定のみ上位 10 件取得する", async () => {
-    const gqlCalls: { query: string; variables: Record<string, unknown> }[] = [];
-    const mockClient = {
-      searchIssues: async (): Promise<GitHubSearchItem[]> => [],
-      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
-        gqlCalls.push({ query, variables });
-        const searchQuery = String(variables.query ?? "");
-        if (searchQuery.includes("sort:updated-asc")) {
-          return {
-            search: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [
-                {
-                  number: 1001,
-                  title: "Two-commit PR (excluded)",
-                  url: "https://github.com/microsoft/winget-pkgs/pull/1001",
-                  createdAt: "2026-10-01T00:00:00Z",
-                  updatedAt: "2026-10-01T01:00:00Z",
-                  author: { login: "user-a" },
-                  authorAssociation: "NONE",
-                  commits: { totalCount: 2 },
-                },
-                {
-                  number: 1002,
-                  title: "One-commit Contributor PR (included)",
-                  url: "https://github.com/microsoft/winget-pkgs/pull/1002",
-                  createdAt: "2026-10-02T00:00:00Z",
-                  updatedAt: "2026-10-02T01:00:00Z",
-                  author: { login: "contributor-b" },
-                  authorAssociation: "CONTRIBUTOR",
-                  commits: { totalCount: 1 },
-                },
-              ],
-            },
-          } as unknown as T;
-        }
-        return {
-          search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-        } as unknown as T;
-      },
-    } as unknown as GitHubApiClient;
-
-    const snapshot = await runExploreDepths(
-      {
-        targetPr: 1,
-        repository: "microsoft/winget-pkgs",
-        noTargetPr: true,
-        noHistory: true,
-        outputPath: join(tmpdir(), `winget-depths-stale-${Date.now()}.json`),
-        asJson: true,
-      },
-      mockClient,
-      () => {},
-    );
-
-    const staleCall = gqlCalls.find((c) =>
-      String(c.variables.query ?? "").includes("sort:updated-asc"),
-    );
-    expect(staleCall).toBeDefined();
-    expect(staleCall?.variables.query).toBe(
-      `${buildHealthyBaseQuery("microsoft/winget-pkgs")} sort:updated-asc`,
-    );
-    // 健康条件は progress 側と同じ定義（阻害・調査中ラベルをすべて除外）を使う
-    expect(staleCall?.variables.query).toContain('-label:"Validation-SmartScreen"');
-    expect(staleCall?.variables.query).toContain('-label:"Testing"');
-    expect(snapshot.StaleBottom.map((r) => r.Number)).toEqual([1002]);
-    expect(snapshot.StaleBottom[0].CommitCount).toBe(1);
-  });
-
-  test("fetchStaleBottom は 2コミット以上が並ぶページをまたいで 1コミットPR を limit 件補完する", async () => {
-    const page1Nodes: GraphQLPrNode[] = Array.from({ length: 10 }, (_, i) => ({
-      number: 2000 + i,
-      title: `Multi commit ${i}`,
-      url: `https://github.com/microsoft/winget-pkgs/pull/${2000 + i}`,
-      createdAt: "2026-10-01T00:00:00Z",
-      updatedAt: `2026-10-01T0${i}:00:00Z`,
-      author: { login: `multi-${i}` },
-      authorAssociation: "CONTRIBUTOR",
-      commits: { totalCount: 3 },
-    }));
-    const page2Nodes: GraphQLPrNode[] = Array.from({ length: 3 }, (_, i) => ({
-      number: 2100 + i,
-      title: `Single commit ${i}`,
-      url: `https://github.com/microsoft/winget-pkgs/pull/${2100 + i}`,
-      createdAt: "2026-10-02T00:00:00Z",
-      updatedAt: `2026-10-02T0${i}:00:00Z`,
-      author: { login: `single-${i}` },
-      authorAssociation: "NONE",
-      commits: { totalCount: 1 },
-    }));
-
-    const mockClient = {
-      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
-        if (!variables.after) {
-          return {
-            search: { pageInfo: { hasNextPage: true, endCursor: "c1" }, nodes: page1Nodes },
-          } as unknown as T;
-        }
-        return {
-          search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: page2Nodes },
-        } as unknown as T;
-      },
-    } as unknown as GitHubApiClient;
-
-    const results = await fetchStaleBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
-    expect(results.map((r) => r.Number)).toEqual([2100, 2101, 2102]);
-    expect(results.every((r) => r.CommitCount === 1)).toBe(true);
-  });
-
-  test("fetchStaleBottom は authorAssociation=NONE の行に対して生涯マージ数を照会し AuthorMergedCount に設定する", async () => {
-    const authorQueries: string[] = [];
-    const nodes: GraphQLPrNode[] = [
-      {
-        number: 2201,
-        title: "Hidden Repeater NONE",
-        url: "https://github.com/microsoft/winget-pkgs/pull/2201",
-        createdAt: "2026-10-01T00:00:00Z",
-        updatedAt: "2026-10-01T01:00:00Z",
-        author: { login: "hidden-repeater" },
-        authorAssociation: "NONE",
-        commits: { totalCount: 1 },
-      },
-      {
-        number: 2202,
-        title: "True First Timer NONE",
-        url: "https://github.com/microsoft/winget-pkgs/pull/2202",
-        createdAt: "2026-10-02T00:00:00Z",
-        updatedAt: "2026-10-02T01:00:00Z",
-        author: { login: "true-first-timer" },
-        authorAssociation: "NONE",
-        commits: { totalCount: 1 },
-      },
-      {
-        number: 2203,
-        title: "Contributor (no query needed)",
-        url: "https://github.com/microsoft/winget-pkgs/pull/2203",
-        createdAt: "2026-10-03T00:00:00Z",
-        updatedAt: "2026-10-03T01:00:00Z",
-        author: { login: "known-contributor" },
-        authorAssociation: "CONTRIBUTOR",
-        commits: { totalCount: 1 },
-      },
-    ];
-
-    const mockClient = {
-      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
-        if (variables.query) {
-          return {
-            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
-          } as unknown as T;
-        }
-        authorQueries.push(query);
-        return {
-          u_0: { issueCount: 3 },
-          u_1: { issueCount: 0 },
-        } as unknown as T;
-      },
-    } as unknown as GitHubApiClient;
-
-    const results = await fetchStaleBottom(mockClient, "repo:microsoft/winget-pkgs", 10);
-    expect(authorQueries.length).toBe(1);
-    expect(authorQueries[0]).toContain("author:hidden-repeater");
-    expect(authorQueries[0]).toContain("author:true-first-timer");
-    expect(authorQueries[0]).not.toContain("author:known-contributor");
-
-    expect(results[0].AuthorMergedCount).toBe(3);
-    expect(results[1].AuthorMergedCount).toBe(0);
-    expect(results[2].AuthorMergedCount).toBeUndefined();
-  });
-
-  test("runExploreDepths は StaleBottom と FirstTimerBottom で生涯マージ数キャッシュを共有し重複照会を避ける", async () => {
-    const authorQueries: string[] = [];
-    const sharedNode: GraphQLPrNode = {
-      number: 2301,
-      title: "Shared Hidden Repeater",
-      url: "https://github.com/microsoft/winget-pkgs/pull/2301",
-      createdAt: "2026-10-01T00:00:00Z",
-      updatedAt: "2026-10-01T01:00:00Z",
-      author: { login: "shared-repeater" },
-      authorAssociation: "NONE",
-      commits: { totalCount: 1 },
-    };
-
-    const mockClient = {
-      searchIssues: async (): Promise<GitHubSearchItem[]> => [],
-      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
-        if (variables.query) {
-          return {
-            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [sharedNode] },
-          } as unknown as T;
-        }
-        if (query.includes("GetPullRequestInterventionBatch")) {
-          return { repository: {} } as unknown as T;
-        }
-        authorQueries.push(query);
-        return { u_0: { issueCount: 2 } } as unknown as T;
-      },
-    } as unknown as GitHubApiClient;
-
-    const snapshot = await runExploreDepths(
-      {
-        targetPr: 1,
-        repository: "microsoft/winget-pkgs",
-        noTargetPr: true,
-        noHistory: true,
-        outputPath: join(tmpdir(), `winget-depths-cache-${Date.now()}.json`),
-        asJson: true,
-      },
-      mockClient,
-      () => {},
-    );
-
-    expect(authorQueries.length).toBe(1);
-    expect(snapshot.StaleBottom[0].AuthorMergedCount).toBe(2);
-    expect(snapshot.FirstTimerBottom).toEqual([]);
-  });
-
-  test("fetchStaleBottom は作者マージ数照会が失敗した場合にコンテキスト付き例外をスローする", async () => {
-    const node: GraphQLPrNode = {
-      number: 2401,
-      title: "NONE Author",
-      url: "https://github.com/microsoft/winget-pkgs/pull/2401",
-      createdAt: "2026-10-01T00:00:00Z",
-      updatedAt: "2026-10-01T01:00:00Z",
-      author: { login: "some-user" },
-      authorAssociation: "NONE",
-      commits: { totalCount: 1 },
-    };
-
-    const mockClient = {
-      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
-        if (variables.query) {
-          return {
-            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node] },
-          } as unknown as T;
-        }
-        throw new Error("HTTP 502 Bad Gateway");
-      },
-    } as unknown as GitHubApiClient;
-
-    await expect(fetchStaleBottom(mockClient, "repo:microsoft/winget-pkgs", 10)).rejects.toThrow(
-      "優等生の底の GraphQL 取得に失敗しました: HTTP 502 Bad Gateway",
-    );
   });
 });
 
@@ -1712,8 +1463,8 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       expect(snapshot.IntervenedBottom?.[0].Intervention?.PrimaryBadge?.Label).toBe(
         "コメント済: stephengillie",
       );
-      expect(snapshot.StaleBottom[0].ThirdPartyAssignees).toEqual([]);
-      expect(snapshot.StaleBottom[1].ThirdPartyAssignees).toEqual(["stephengillie"]);
+      expect(snapshot.HealthyBottom[0].ThirdPartyAssignees).toEqual([]);
+      expect(snapshot.HealthyBottom[1].ThirdPartyAssignees).toEqual(["stephengillie"]);
 
       const saved = JSON.parse(readFileSync(outputPath, "utf-8"));
       expect(saved.DepthsVersion).toBe(CURRENT_DEPTHS_VERSION);
@@ -2516,69 +2267,6 @@ describe("CLI: explore-depths Phase 1（2×2 GraphQL 統一・作者メタデー
     expect(mergedCountQueries.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("fetchSingleCommitBottoms は sort:created-asc で 1 コミット健康体 PR のみ抽出し全体・初回を同時収集する", async () => {
-    const nodes: GraphQLPrNode[] = [
-      {
-        number: 520001,
-        title: "Multi commit PR (excluded)",
-        url: "https://github.com/microsoft/winget-pkgs/pull/520001",
-        createdAt: "2026-10-01T00:00:00Z",
-        updatedAt: "2026-10-01T00:00:00Z",
-        author: { login: "ft-multi" },
-        authorAssociation: "NONE",
-        commits: { totalCount: 2 },
-      },
-      {
-        number: 520002,
-        title: "Single commit member",
-        url: "https://github.com/microsoft/winget-pkgs/pull/520002",
-        createdAt: "2026-10-02T00:00:00Z",
-        updatedAt: "2026-10-20T00:00:00Z",
-        author: { login: "member-dev" },
-        authorAssociation: "MEMBER",
-        commits: { totalCount: 1 },
-      },
-      {
-        number: 520003,
-        title: "Single commit first timer",
-        url: "https://github.com/microsoft/winget-pkgs/pull/520003",
-        createdAt: "2026-10-03T00:00:00Z",
-        updatedAt: "2026-10-03T00:00:00Z",
-        author: { login: "ft-single" },
-        authorAssociation: "NONE",
-        commits: { totalCount: 1 },
-      },
-    ];
-
-    const queries: string[] = [];
-    const mockClient = {
-      graphql: async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
-        if (variables.query) {
-          queries.push(String(variables.query));
-          return {
-            search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
-          } as unknown as T;
-        }
-        if (query.includes("u_0: search(")) {
-          return { u_0: { issueCount: 0 } } as unknown as T;
-        }
-        throw new Error(`想定外のクエリ: ${query}`);
-      },
-    } as unknown as GitHubApiClient;
-
-    const { singleCommitBottom, firstTimerSingleCommitBottom } = await fetchSingleCommitBottoms(
-      mockClient,
-      buildHealthyBaseQuery("microsoft/winget-pkgs"),
-      2,
-      100,
-    );
-
-    expect(queries[0]).toContain("sort:created-asc");
-    expect(singleCommitBottom.map((r) => r.Number)).toEqual([520002, 520003]);
-    expect(firstTimerSingleCommitBottom.map((r) => r.Number)).toEqual([520003]);
-    expect(firstTimerSingleCommitBottom[0].AuthorMergedCount).toBe(0);
-  });
-
   test("fetchInterventionFrontiers は未レビュー PR に AuthorMergedCount を付与し常連を除外した FirstTimerUnreviewedBottom を同時収集する", async () => {
     const mockNodes: Record<number, Record<string, unknown>> = {
       530001: {
@@ -2660,58 +2348,6 @@ describe("CLI: explore-depths Phase 1（2×2 GraphQL 統一・作者メタデー
     expect(result.unreviewedBottom[1].AuthorMergedCount).toBe(0);
     expect(result.firstTimerUnreviewedBottom.map((r) => r.Number)).toEqual([530002]);
     expect(result.firstTimerUnreviewedTruncated).toBe(false);
-  });
-
-  test("fetchSingleCommitBottoms は全体枠が充足した状態で初回枠が未充足のまま探索上限に達しても例外にせず打ち切りフラグ付きで返す", async () => {
-    // 多コミットの初回提出者 10 件 + 1コミットの常連 10 件 = 20 件で maxTraverseNodes=20 に到達
-    const nodes: GraphQLPrNode[] = [
-      ...Array.from({ length: 10 }, (_, i) => ({
-        number: 540000 + i,
-        title: `Multi commit first timer ${i}`,
-        url: `https://github.com/microsoft/winget-pkgs/pull/${540000 + i}`,
-        createdAt: `2026-10-01T0${i}:00:00Z`,
-        updatedAt: `2026-10-01T0${i}:00:00Z`,
-        author: { login: `ft-multi-${i}` },
-        authorAssociation: "NONE",
-        commits: { totalCount: 3 },
-      })),
-      ...Array.from({ length: 10 }, (_, i) => ({
-        number: 540100 + i,
-        title: `Single commit contributor ${i}`,
-        url: `https://github.com/microsoft/winget-pkgs/pull/${540100 + i}`,
-        createdAt: `2026-10-02T0${i}:00:00Z`,
-        updatedAt: `2026-10-02T0${i}:00:00Z`,
-        author: { login: `reg-single-${i}` },
-        authorAssociation: "CONTRIBUTOR",
-        commits: { totalCount: 1 },
-      })),
-    ];
-
-    const mockClient = {
-      graphql: async <T>(_query: string, variables: Record<string, unknown>): Promise<T> => {
-        if (variables.query) {
-          return {
-            search: {
-              pageInfo: { hasNextPage: true, endCursor: "cursor-next" },
-              nodes,
-            },
-          } as unknown as T;
-        }
-        return {} as T;
-      },
-    } as unknown as GitHubApiClient;
-
-    const result = await fetchSingleCommitBottoms(
-      mockClient,
-      buildHealthyBaseQuery("microsoft/winget-pkgs"),
-      10,
-      20,
-    );
-
-    expect(result.singleCommitBottom.length).toBe(10);
-    expect(result.firstTimerSingleCommitBottom.length).toBe(0);
-    expect(result.singleCommitTruncated).toBe(false);
-    expect(result.firstTimerSingleCommitTruncated).toBe(true);
   });
 
   test("fetchFirstReviewFrontiers は常連（CONTRIBUTOR・NONEマージ歴あり）と初回提出者が混在するケースで全体コホートと初回限定コホートを両方算出する", async () => {

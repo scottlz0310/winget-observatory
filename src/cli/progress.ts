@@ -629,6 +629,7 @@ export async function runProgressCli(
     targetReadyAt: targetReady,
     firstTimerStats,
     firstTimerSampleCount: firstTimerSamples.length,
+    firstTimerSamples,
     firstTimerLookbackDays,
   });
 

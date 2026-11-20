@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 待機ライン 2×2 マトリクスと統合処理バンドの実運用点検に基づき、1コミット限定指標を廃止して直近マージ実績へ統一し、初動の役割入替・母集団明記・モバイル横溢れを修正:
+  - `src/models/depths.ts`, `src/domain/depths.ts`, `src/cli/explore-depths.ts`, `src/models/forecast.ts`, `src/domain/forecast.ts`: `CURRENT_DEPTHS_VERSION = 6` へ更新し、1コミット限定取得（`fetchSingleCommitBottoms` / `fetchStaleBottom` / `isStaleCandidate` / `extractStaleFrontierSamples` / `extractSingleCommitFrontierSamples` / `calculateStaleFrontierForecast`）を廃止（旧スナップショット型は互換保持）
+  - `src/models/forecast-band.ts`, `src/domain/forecast-band.ts`: 処理バンドの前線（最短目安）から `stale-bottom:steady` を廃止して `first-timer:p50`（初回提出者コホート P50）へ統一し、前線 ＞ 本命の逆転を解消
+  - `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/sections/hero-and-kpi.ts`, `scripts/pages/template.ts`, `README.md`: 2×2 マトリクスの「① メンテナ初動」を `初動前線（主戦場ライン・7日介入中央値）` × `初動正常底（未レビュー最古）` へ入替、「② 最終マージ」のマージ前線を `progress.Samples`（直近マージ実績・全体／初回提出者トグル対応）へ統一し、ヒーロー 4 カードおよびチャート凡例の母集団表記（初回提出者／全体）を明記
+  - `scripts/pages/styles.ts`, `scripts/pages/sections/`: `.table-scroll` ラッパー、`.card { min-width: 0 }`、モバイル幅（640px 以下）の 1 カラム縦並び・トリアージフロー縦積みを追加し、狭幅（390px）での横溢れを解消
 - ダッシュボード UI・指標構造を「フェーズ（メンテナ初動 vs 最終マージ）× レンジ（前線 vs 正常底）」の 2×2 体系へ再構成（#127 Phase 2）:
   - `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/styles.ts`, `scripts/pages/template.ts`: 旧 3 セクション（キュー境界探索・未レビュー介入分離・待機列の底の比較）を「🧭 待機ライン 2×2 マトリクス（4 象限すべて起票日時古い順統一）」と「🚧 例外・特殊境界（真の大底・特急レーン）」へ再編し、セクション上部の共通フィルタバーで「すべて（常連込み）／🌱 初回提出者のみ」を 4 象限一括切替できるように実装（狭幅 1 カラム時の縦並び順序を固定するレスポンシブ CSS および旧スナップショットへの後方互換フォールバックを含む）
   - `scripts/pages/sections/hero-and-kpi.ts`, `src/domain/forecast-band.ts`, `scripts/build-pages.ts`, `scripts/pages/types.ts`: ヒーローエリア 4 カード・全体レンジ表記・タイムラインマーカー・処理バンド内訳ラベル・統合時系列チャート右軸（マージ正常底・全体／初回＋初動正常底）を「前線／正常底」用語体系へ統一

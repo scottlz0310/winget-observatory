@@ -4,7 +4,13 @@ import { formatDeltaBadge } from "../../../src/domain/dashboard";
 import { isFirstTimerDepthsRow } from "../../../src/domain/depths";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
 import { isPrivilegedOrBotAuthor } from "../../../src/domain/first-timer";
-import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
+import {
+  calculateNumericMedian,
+  DAY_MS,
+  formatJstDate,
+  formatJstDateTime,
+  round1,
+} from "../../../src/domain/formatters";
 import {
   FIRST_REVIEW_COHORT_ITEM_LIMIT,
   summarizeInterventionFrontier,
@@ -21,6 +27,7 @@ import type {
   ExitBreakdownUnavailableReason,
 } from "../../../src/models/exit-breakdown";
 import type { ForecastHistoryLine, ForecastScore } from "../../../src/models/forecast-history";
+import type { ProgressSnapshotSample } from "../../../src/models/progress";
 import {
   escapeHtml,
   formatErrorDays,
@@ -28,7 +35,7 @@ import {
   formatSamplePackageName,
   renderBadgeHtml,
 } from "../formatters";
-import type { LatestDepths } from "../types";
+import type { LatestDepths, LatestProgress } from "../types";
 
 interface BottomTableRenderOptions {
   showAuthor?: boolean;
@@ -105,22 +112,24 @@ function renderBottomRowTable(
   const elapsedHeader =
     elapsedBasis === "created" ? "<th>起票からの経過</th>" : "<th>更新からの経過</th>";
   return `
-    <table>
-      <thead>
-        <tr>
-          <th>順位</th>
-          <th>PR 番号</th>
-          ${authorHeader}
-          ${commitCountHeader}
-          <th>起票日時 (JST)</th>
-          <th>最終更新 (JST)</th>
-          ${elapsedHeader}
-          <th>タイトル</th>
-        </tr>
-      </thead>
-      <tbody>${rows}
-      </tbody>
-    </table>`;
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>順位</th>
+            <th>PR 番号</th>
+            ${authorHeader}
+            ${commitCountHeader}
+            <th>起票日時 (JST)</th>
+            <th>最終更新 (JST)</th>
+            ${elapsedHeader}
+            <th>タイトル</th>
+          </tr>
+        </thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 function renderBoundaryCategoryRows(
@@ -151,21 +160,23 @@ export function renderBoundaryTableSection(depths: LatestDepths | null): string 
     <p class="section-note">
       通常待機列（2×2 マトリクス）の枠外にある参照境界です。真の大底＝CI 待ち・阻害ラベルを含む未マージ全体の最古 3 件 / ⚡ 特急レーン＝基準 PR 起票後に作成されマージ済みの最新更新 5 件
     </p>
-    <table>
-      <thead>
-        <tr>
-          <th>カテゴリ</th>
-          <th>PR 番号</th>
-          <th>起票日時 (JST)</th>
-          <th>更新日時 (JST)</th>
-          <th>タイトル</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${renderBoundaryCategoryRows(depths?.AbsoluteBottom, 3, "background:#fce7f3;color:#9d174d;", "真の大底")}
-        ${renderBoundaryCategoryRows(depths?.ExpressLane, 5, "background:#fef3c7;color:#b45309;", "⚡ 特急レーン")}
-      </tbody>
-    </table>`;
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>カテゴリ</th>
+            <th>PR 番号</th>
+            <th>起票日時 (JST)</th>
+            <th>更新日時 (JST)</th>
+            <th>タイトル</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${renderBoundaryCategoryRows(depths?.AbsoluteBottom, 3, "background:#fce7f3;color:#9d174d;", "真の大底")}
+          ${renderBoundaryCategoryRows(depths?.ExpressLane, 5, "background:#fef3c7;color:#b45309;", "⚡ 特急レーン")}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 function renderMatrixRowListView(params: {
@@ -309,19 +320,21 @@ function renderMainstreamCohortView(params: {
 
   const body =
     items.length > 0
-      ? `<table class="sample-table">
-          <thead>
-            <tr>
-              <th>PR / パッケージ</th>
-              <th>作者</th>
-              <th class="sample-nowrap">コミット数</th>
-              <th class="sample-nowrap">起票日時 (JST)</th>
-              <th class="sample-nowrap">初回人間介入 (JST)</th>
-            </tr>
-          </thead>
-          <tbody>${items.map(renderRow).join("")}
-          </tbody>
-        </table>`
+      ? `<div class="table-scroll">
+          <table class="sample-table">
+            <thead>
+              <tr>
+                <th>PR / パッケージ</th>
+                <th>作者</th>
+                <th class="sample-nowrap">コミット数</th>
+                <th class="sample-nowrap">起票日時 (JST)</th>
+                <th class="sample-nowrap">初回人間介入 (JST)</th>
+              </tr>
+            </thead>
+            <tbody>${items.map(renderRow).join("")}
+            </tbody>
+          </table>
+        </div>`
       : `<p style="color: var(--text-muted); font-size: 0.875rem;">${escapeHtml(
           frontier
             ? "データ不足: 直近 7 日間に初回人間介入が入った対象 PR コホートは 0 件です。"
@@ -359,15 +372,138 @@ const MATRIX_FILTER_INLINE_SCRIPT = `<script>
 })();
 </script>`;
 
+const RECENT_MERGED_FRONTIER_LIMIT = 10;
+
+function renderRecentMergedFrontierView(params: {
+  viewKey: "all" | "first-timer";
+  samples: ProgressSnapshotSample[];
+  repo: string;
+  medianDays: number | null | undefined;
+  lookbackDays: number;
+  sampleCount: number | undefined;
+  hasRecordedProgress: boolean;
+  badgeStyle: string;
+}): string {
+  const {
+    viewKey,
+    samples,
+    repo,
+    medianDays,
+    lookbackDays,
+    sampleCount,
+    hasRecordedProgress,
+    badgeStyle,
+  } = params;
+  const items = samples.slice(0, RECENT_MERGED_FRONTIER_LIMIT);
+  const hasCountWithoutList = items.length === 0 && (sampleCount ?? 0) > 0;
+  const badgeText =
+    items.length > 0
+      ? `直近 ${items.length} 件表示（過去 ${lookbackDays} 日・採用 ${sampleCount ?? items.length} 件）`
+      : hasCountWithoutList
+        ? `過去 ${lookbackDays} 日・採用 ${sampleCount} 件（一覧未保存）`
+        : hasRecordedProgress
+          ? `該当 0 件（過去 ${lookbackDays} 日）`
+          : "未観測";
+
+  const createdMsList = samples
+    .map((s) => Date.parse(s.CreatedAt))
+    .filter((ms) => Number.isFinite(ms))
+    .sort((a, b) => a - b);
+  const medianCreatedMs = calculateNumericMedian(createdMsList);
+  const metaParts: string[] = [];
+  if (medianDays !== undefined && medianDays !== null) {
+    metaParts.push(`通算中央値: ${medianDays} 日`);
+  }
+  if (medianCreatedMs !== null) {
+    metaParts.push(
+      `直近サンプル起票中央値: ${formatJstDateTime(new Date(medianCreatedMs).toISOString(), false)}`,
+    );
+  }
+  const metaText = metaParts.join(" / ");
+
+  const renderRow = (sample: ProgressSnapshotSample): string => {
+    const ftBadge =
+      viewKey === "all" && sample.IsFirstTimer === true
+        ? `<span class="badge sample-nowrap" style="background: #dcfce7; color: #15803d; font-size: 0.7rem;">🌱 初回</span>`
+        : "";
+    const { displayName, fullTitle } = formatSamplePackageName(sample.Title);
+    const pkgHtml = displayName
+      ? `<div title="${escapeHtml(fullTitle)}" style="font-size: 0.8rem; color: var(--text-color); margin-top: 0.15rem; word-break: break-word;">${escapeHtml(displayName)}</div>`
+      : "";
+    return `
+      <tr>
+        <td style="min-width: 170px;">
+          <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+            <a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(sample.Number)}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; white-space: nowrap;">#${escapeHtml(sample.Number)}</a>
+            ${ftBadge}
+          </div>
+          ${pkgHtml}
+        </td>
+        <td>${escapeHtml(sample.Author ?? "-")}</td>
+        <td class="sample-nowrap">${escapeHtml(sample.CommitCount)}</td>
+        <td class="sample-nowrap">${escapeHtml(formatJstDateTime(sample.CreatedAt, false))}</td>
+        <td class="sample-nowrap">${escapeHtml(formatJstDateTime(sample.MergedAt, false))}</td>
+        <td class="sample-nowrap">${sample.TotalDays.toFixed(1)} 日</td>
+      </tr>`;
+  };
+
+  const body =
+    items.length > 0
+      ? `<div class="table-scroll">
+          <table class="sample-table">
+            <thead>
+              <tr>
+                <th>PR / パッケージ</th>
+                <th>作者</th>
+                <th class="sample-nowrap">コミット数</th>
+                <th class="sample-nowrap">起票日時 (JST)</th>
+                <th class="sample-nowrap">マージ日時 (JST)</th>
+                <th class="sample-nowrap">通算日数</th>
+              </tr>
+            </thead>
+            <tbody>${items.map(renderRow).join("")}
+            </tbody>
+          </table>
+        </div>`
+      : `<p style="color: var(--text-muted); font-size: 0.875rem;">${escapeHtml(
+          hasCountWithoutList
+            ? "旧スナップショットのため対象窓の専用サンプル一覧が未保存です（次回観測から表示されます）。"
+            : hasRecordedProgress
+              ? viewKey === "first-timer"
+                ? "直近マージ採用サンプル内に初回提出者の該当 PR はありません。"
+                : "直近マージ採用サンプルはありません。"
+              : "直近マージ実績のデータはまだありません。",
+        )}</p>`;
+
+  const hiddenStyle = viewKey === "first-timer" ? ' style="display: none;"' : "";
+  return `<div data-matrix-view="${viewKey}"${hiddenStyle}>
+        <div style="margin-bottom: 0.5rem;">
+          <span class="badge" style="${badgeStyle}">${escapeHtml(badgeText)}</span>
+        </div>
+        ${metaText ? `<p class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(metaText)}</p>` : ""}
+        ${body}
+      </div>`;
+}
+
 /**
  * 待機ライン 2×2 マトリクス（フェーズ: メンテナ初動 vs 最終マージ × レンジ: 前線 vs 正常底）を描画する。
- * 4 象限すべてを「起票日時（CreatedAt）古い順」で統一し、セクション上部の共通フィルタバーで
- * 「すべて（常連込み）」と「🌱 初回提出者のみ」を 4 象限一括で切り替えられる。
+ * セクション上部の共通フィルタバーで「すべて（常連込み）」と「🌱 初回提出者のみ」を 4 象限一括で切り替えられる。
  */
-export function renderWaitlineMatrixSection(depths: LatestDepths | null): string {
+export function renderWaitlineMatrixSection(
+  depths: LatestDepths | null,
+  progress: LatestProgress | null = null,
+  repo?: string,
+): string {
   const timestamp = depths?.Timestamp ?? "";
+  const resolvedRepo =
+    repo || progress?.Repository || depths?.Repository || "microsoft/winget-pkgs";
 
-  // ① 初動前線（未レビュー前線）
+  // ① 初動前線（主戦場ライン: 直近7日初回人間介入コホート）
+  const hasAllAuthorsFrontier = depths?.AllAuthorsFirstReviewFrontier !== undefined;
+  const frontierAll = depths?.AllAuthorsFirstReviewFrontier ?? depths?.FirstReviewFrontier;
+  const frontierFt = depths?.FirstReviewFrontier;
+
+  // ② 初動正常底（未レビュー最古: 完全未着手キュー）
   const unreviewedAll = depths?.UnreviewedBottom ?? [];
   const hasDedicatedUnreviewedFt =
     depths?.FirstTimerUnreviewedBottom !== undefined ||
@@ -381,24 +517,31 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
     ? Boolean(depths?.FirstTimerUnreviewedTruncated)
     : Boolean(depths?.UnreviewedTruncated);
 
-  // ② 初動正常底（主戦場ライン）
-  const hasAllAuthorsFrontier = depths?.AllAuthorsFirstReviewFrontier !== undefined;
-  const frontierAll = depths?.AllAuthorsFirstReviewFrontier ?? depths?.FirstReviewFrontier;
-  const frontierFt = depths?.FirstReviewFrontier;
-
-  // ③ マージ前線（1コミット完走組）
-  const hasSingleCommit = depths?.SingleCommitBottom !== undefined;
-  const mergeFrontAll = depths?.SingleCommitBottom ?? depths?.StaleBottom ?? [];
-  const hasDedicatedMergeFrontFt =
-    depths?.FirstTimerSingleCommitBottom !== undefined ||
-    Boolean(depths?.FirstTimerSingleCommitTruncated);
-  const mergeFrontFt = hasDedicatedMergeFrontFt
-    ? (depths?.FirstTimerSingleCommitBottom ?? [])
-    : mergeFrontAll.filter(isFirstTimerDepthsRow);
-  const hasRecordedMergeFront = hasSingleCommit || depths?.StaleBottom !== undefined;
-  const mergeFrontFtTruncated = hasDedicatedMergeFrontFt
-    ? Boolean(depths?.FirstTimerSingleCommitTruncated)
-    : Boolean(depths?.SingleCommitTruncated);
+  // ③ マージ前線（直近マージ実績: 全体は progress.Samples、初回提出者は FirstTimerSamples 優先）
+  const mergedSamplesAll = progress?.Samples ?? [];
+  const hasRecordedProgress = progress !== null;
+  const lookbackDays = progress?.LookbackDays ?? 30;
+  const firstTimerLookbackDays = progress?.FirstTimerLookbackDays ?? lookbackDays;
+  let mergedSamplesFt: ProgressSnapshotSample[];
+  if (progress?.FirstTimerSamples !== undefined) {
+    mergedSamplesFt = progress.FirstTimerSamples;
+  } else {
+    const observedProgressMs = progress?.Timestamp ? Date.parse(progress.Timestamp) : Number.NaN;
+    if (Number.isFinite(observedProgressMs)) {
+      const ftWindowStartMs = observedProgressMs - firstTimerLookbackDays * DAY_MS;
+      mergedSamplesFt = mergedSamplesAll.filter((s) => {
+        if (s.IsFirstTimer !== true) return false;
+        const mergedMs = Date.parse(s.MergedAt);
+        return (
+          Number.isFinite(mergedMs) && mergedMs >= ftWindowStartMs && mergedMs <= observedProgressMs
+        );
+      });
+    } else if (firstTimerLookbackDays < lookbackDays) {
+      mergedSamplesFt = [];
+    } else {
+      mergedSamplesFt = mergedSamplesAll.filter((s) => s.IsFirstTimer === true);
+    }
+  }
 
   // ④ マージ正常底（健康的大底）
   const mergeBottomAll = depths?.HealthyBottom ?? [];
@@ -407,9 +550,9 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
   const hasRecordedMergeBottomFt = depths?.FirstTimerBottom !== undefined;
 
   return `<section data-matrix-section>
-    <h2 class="section-title">🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ・起票日時順統一）</h2>
+    <h2 class="section-title">🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ）</h2>
     <p class="section-note">
-      「前線（早ければこのくらい）」と「正常底（遅くともここまでには）」を、メンテナ初動・最終マージの 2 フェーズ×起票日時（CreatedAt）古い順で並列比較します。上部トグルで 4 象限すべてを一括切替できます。
+      「前線（早ければこのくらい）」と「正常底（遅くともここまでには）」を、メンテナ初動・最終マージの 2 フェーズで並列比較します。上部トグルで 4 象限すべてを一括切替できます。
     </p>
     <div class="sample-filter-bar" role="group" aria-label="2×2 マトリクス対象母集団フィルタ">
       <button type="button" class="sample-filter-btn is-active" data-matrix-filter="all" aria-pressed="true">
@@ -422,49 +565,8 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
 
     <h3 class="matrix-phase-header">① メンテナ初動（初回人間アクション）</h3>
     <div class="matrix-phase-grid">
-      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #64748b;">
-        <h4 style="font-size: 1.05rem; font-weight: 600; color: #475569; margin-bottom: 0.4rem;">🟦 初動前線（未レビュー前線・早ければ）</h4>
-        <p class="section-note" style="margin-bottom: 0.6rem;">
-          人間レビュー・手動コメント・第三者 Assignees・特権ロール自動指摘がいずれも無い完全未着手キュー（複数コミット込み・起票日時古い順）。
-        </p>
-        ${renderMatrixRowListView({
-          viewKey: "all",
-          items: unreviewedAll,
-          timestamp,
-          truncated: Boolean(depths?.UnreviewedTruncated),
-          hasRecorded: hasRecordedUnreviewed,
-          emptyConfirmedText: "現在、完全未着手の健康な待機 PR はありません。",
-          emptyLegacyText:
-            "未レビュー前線のデータはまだありません（次回の定期観測から記録されます）。",
-          highlightInterventions: false,
-          highlightFirstTimer: true,
-          showAuthor: true,
-          showCommitCount: true,
-          badgeStyle: "background: var(--code-bg); color: var(--text-muted); font-weight: 600;",
-        })}
-        ${renderMatrixRowListView({
-          viewKey: "first-timer",
-          items: unreviewedFt,
-          timestamp,
-          truncated: unreviewedFtTruncated,
-          hasRecorded: hasDedicatedUnreviewedFt,
-          emptyConfirmedText: "現在、初回提出者の完全未着手 PR はありません。",
-          emptyLegacyText:
-            "初回提出者専用の未レビュー前線データはまだありません（次回の定期観測から記録されます）。",
-          highlightInterventions: false,
-          highlightFirstTimer: false,
-          showAuthor: true,
-          showCommitCount: true,
-          badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
-          fallbackNote:
-            !hasDedicatedUnreviewedFt && unreviewedFt.length > 0
-              ? "※ 旧スナップショットの全体一覧から初回提出者を参考抽出しています（次回観測から専用 TOP 10 を記録）"
-              : undefined,
-        })}
-      </div>
-
-      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #0ea5e9;">
-        <h4 style="font-size: 1.05rem; font-weight: 600; color: #0284c7; margin-bottom: 0.4rem;">🎯 初動正常底（主戦場ライン・遅くとも）</h4>
+      <div class="card" style="padding: 1.25rem; border-top: 4px solid #0ea5e9;">
+        <h4 style="font-size: 1.05rem; font-weight: 600; color: #0284c7; margin-bottom: 0.4rem;">🎯 初動前線（主戦場ライン・早ければ）</h4>
         <p class="section-note" style="margin-bottom: 0.6rem;">
           直近 7 日間に初めて人間介入が入った PR（オープン中 ＋ 直近マージ済み）の起票日時中央値と直近介入順内訳です。
         </p>
@@ -481,55 +583,79 @@ export function renderWaitlineMatrixSection(depths: LatestDepths | null): string
           frontier: frontierFt,
         })}
       </div>
-    </div>
 
-    <h3 class="matrix-phase-header">② 最終マージ（FIFO 完了）</h3>
-    <div class="matrix-phase-grid">
-      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--primary);">
-        <h4 style="font-size: 1.05rem; font-weight: 600; color: var(--primary); margin-bottom: 0.4rem;">🚀 マージ前線（1コミット完走組・早ければ）</h4>
+      <div class="card" style="padding: 1.25rem; border-top: 4px solid #64748b;">
+        <h4 style="font-size: 1.05rem; font-weight: 600; color: #475569; margin-bottom: 0.4rem;">🟦 初動正常底（未レビュー最古・遅くとも）</h4>
         <p class="section-note" style="margin-bottom: 0.6rem;">
-          手直しなしの 1 コミット健康体 PR の待機先頭（起票日時古い順 TOP 10）。
+          人間レビュー・手動コメント・第三者 Assignees・特権ロール自動指摘がいずれも無い完全未着手キュー（複数コミット込み・起票日時古い順 TOP 10）。これより古い健康 PR には原則メンテナの手が入っています。
         </p>
         ${renderMatrixRowListView({
           viewKey: "all",
-          items: mergeFrontAll,
+          items: unreviewedAll,
           timestamp,
-          truncated: Boolean(depths?.SingleCommitTruncated),
-          hasRecorded: hasRecordedMergeFront,
-          emptyConfirmedText: "現在、該当する 1 コミット健康体 PR はありません。",
-          emptyLegacyText: "マージ前線（1コミット完走組）のデータはまだありません。",
-          highlightInterventions: true,
+          truncated: Boolean(depths?.UnreviewedTruncated),
+          hasRecorded: hasRecordedUnreviewed,
+          emptyConfirmedText: "現在、完全未着手の健康な待機 PR はありません。",
+          emptyLegacyText:
+            "未レビュー最古のデータはまだありません（次回の定期観測から記録されます）。",
+          highlightInterventions: false,
           highlightFirstTimer: true,
           showAuthor: true,
-          showCommitCount: false,
-          badgeStyle: "background: var(--primary-light); color: var(--primary); font-weight: 600;",
-          fallbackNote:
-            !hasSingleCommit && mergeFrontAll.length > 0
-              ? "※ 旧スナップショットのため更新順 1 コミット健康体を表示中（次回観測から起票順 TOP 10 を記録）"
-              : undefined,
+          showCommitCount: true,
+          badgeStyle: "background: var(--code-bg); color: var(--text-muted); font-weight: 600;",
         })}
         ${renderMatrixRowListView({
           viewKey: "first-timer",
-          items: mergeFrontFt,
+          items: unreviewedFt,
           timestamp,
-          truncated: mergeFrontFtTruncated,
-          hasRecorded: hasDedicatedMergeFrontFt,
-          emptyConfirmedText: "現在、初回提出者の 1 コミット健康体 PR はありません。",
+          truncated: unreviewedFtTruncated,
+          hasRecorded: hasDedicatedUnreviewedFt,
+          emptyConfirmedText: "現在、初回提出者の完全未着手 PR はありません。",
           emptyLegacyText:
-            "初回提出者専用のマージ前線データはまだありません（次回の定期観測から記録されます）。",
-          highlightInterventions: true,
+            "初回提出者専用の未レビュー最古データはまだありません（次回の定期観測から記録されます）。",
+          highlightInterventions: false,
           highlightFirstTimer: false,
           showAuthor: true,
-          showCommitCount: false,
+          showCommitCount: true,
           badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
           fallbackNote:
-            !hasDedicatedMergeFrontFt && mergeFrontFt.length > 0
+            !hasDedicatedUnreviewedFt && unreviewedFt.length > 0
               ? "※ 旧スナップショットの全体一覧から初回提出者を参考抽出しています（次回観測から専用 TOP 10 を記録）"
               : undefined,
         })}
       </div>
+    </div>
 
-      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--success);">
+    <h3 class="matrix-phase-header">② 最終マージ（FIFO 完了）</h3>
+    <div class="matrix-phase-grid">
+      <div class="card" style="padding: 1.25rem; border-top: 4px solid var(--primary);">
+        <h4 style="font-size: 1.05rem; font-weight: 600; color: var(--primary); margin-bottom: 0.4rem;">🚀 マージ前線（直近マージ実績・早ければ）</h4>
+        <p class="section-note" style="margin-bottom: 0.6rem;">
+          直近にマージされた健康体 PR の採用サンプル（マージ日時新しい順 TOP 10）と通算所要日数・起票日時中央値です。
+        </p>
+        ${renderRecentMergedFrontierView({
+          viewKey: "all",
+          samples: mergedSamplesAll,
+          repo: resolvedRepo,
+          medianDays: progress?.TotalMedianDays,
+          lookbackDays,
+          sampleCount: progress?.SampleCount,
+          hasRecordedProgress,
+          badgeStyle: "background: var(--primary-light); color: var(--primary); font-weight: 600;",
+        })}
+        ${renderRecentMergedFrontierView({
+          viewKey: "first-timer",
+          samples: mergedSamplesFt,
+          repo: resolvedRepo,
+          medianDays: progress?.FirstTimerMedianDays,
+          lookbackDays: firstTimerLookbackDays,
+          sampleCount: progress?.FirstTimerSampleCount,
+          hasRecordedProgress,
+          badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
+        })}
+      </div>
+
+      <div class="card" style="padding: 1.25rem; border-top: 4px solid var(--success);">
         <h4 style="font-size: 1.05rem; font-weight: 600; color: var(--success); margin-bottom: 0.4rem;">⚓ マージ正常底（健康的大底・遅くとも）</h4>
         <p class="section-note" style="margin-bottom: 0.6rem;">
           手直しコミット込みで CI・検証通過済みの最古健康 PR（起票日時古い順 TOP 10）。
@@ -609,31 +735,35 @@ export function renderForecastScoreSection(
       const b = score.bandScore;
       const bandTable = b
         ? `
-    <table style="margin-top: -0.75rem;">
-      <thead>
-        <tr><th>統合処理バンド評価 (JST暦日基準)</th><th>本命バンド的中率</th><th>全体レンジ包含率</th><th>中央値平均誤差 / 絶対誤差</th><th>直前の本命予想</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>処理バンド統合</td>
-          <td><strong>${b.count > 0 ? `${b.mainstreamHitRatePct}% (${b.mainstreamHitCount}/${b.count} 回)` : "-"}</strong></td>
-          <td>${b.overallCount > 0 ? `${b.overallHitRatePct}% (${b.overallHitCount}/${b.overallCount} 回)` : "-"}</td>
-          <td>${b.medianMeanErrorDays !== null ? `${formatErrorDays(b.medianMeanErrorDays)} / ${b.medianMeanAbsErrorDays ?? "-"} 日` : "-"}</td>
-          <td>${b.lastInMainstreamBand === null ? "-" : b.lastInMainstreamBand ? "✅ バンド内" : "❌ バンド外"}${b.medianLastErrorDays !== null ? ` (${formatErrorDays(b.medianLastErrorDays)})` : ""}</td>
-        </tr>
-      </tbody>
-    </table>`
+    <div class="table-scroll" style="margin-top: -0.75rem;">
+      <table>
+        <thead>
+          <tr><th>統合処理バンド評価 (JST暦日基準)</th><th>本命バンド的中率</th><th>全体レンジ包含率</th><th>中央値平均誤差 / 絶対誤差</th><th>直前の本命予想</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>処理バンド統合</td>
+            <td><strong>${b.count > 0 ? `${b.mainstreamHitRatePct}% (${b.mainstreamHitCount}/${b.count} 回)` : "-"}</strong></td>
+            <td>${b.overallCount > 0 ? `${b.overallHitRatePct}% (${b.overallHitCount}/${b.overallCount} 回)` : "-"}</td>
+            <td>${b.medianMeanErrorDays !== null ? `${formatErrorDays(b.medianMeanErrorDays)} / ${b.medianMeanAbsErrorDays ?? "-"} 日` : "-"}</td>
+            <td>${b.lastInMainstreamBand === null ? "-" : b.lastInMainstreamBand ? "✅ バンド内" : "❌ バンド外"}${b.medianLastErrorDays !== null ? ` (${formatErrorDays(b.medianLastErrorDays)})` : ""}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`
         : "";
 
       return `
     <h3 class="section-note" style="margin: 1rem 0 0.5rem; font-weight: 600;">${escapeHtml(score.repository)} #${score.targetPr}（マージ: ${escapeHtml(formatJstDate(score.mergedAtMs))}、予想の記録 ${score.observationCount} 回）</h3>
-    <table>
-      <thead>
-        <tr><th>仮説・モデル</th><th>採点数</th><th>平均誤差</th><th>平均絶対誤差</th><th>最後の予想の誤差</th></tr>
-      </thead>
-      <tbody>${rows}
-      </tbody>
-    </table>${bandTable}`;
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>仮説・モデル</th><th>採点数</th><th>平均誤差</th><th>平均絶対誤差</th><th>最後の予想の誤差</th></tr>
+        </thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+    </div>${bandTable}`;
     })
     .join("");
   return `
@@ -680,13 +810,15 @@ export function renderExitBreakdownSection(result: ExitBreakdownResult): string 
 
   return `${head}
     <p class="section-note">${escapeHtml(formatJstDateTime(result.baseMs))} 〜 ${escapeHtml(formatJstDateTime(result.latestMs))}（${windowSpan}）の変化。${summary}</p>
-    <table>
-      <thead>
-        <tr><th>内訳</th><th>件数</th><th>1 日あたり</th><th>割合</th></tr>
-      </thead>
-      <tbody>${row("実質待ち（更新順）の減少", "rank")}${row("マージ", "merged", true)}${row("未マージでクローズ", "closed", true)}${row("健康条件の変化など（推定）", "healthChange", true)}${row("更新による順位の入れ替わり（推定）", "reshuffle", true)}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>内訳</th><th>件数</th><th>1 日あたり</th><th>割合</th></tr>
+        </thead>
+        <tbody>${row("実質待ち（更新順）の減少", "rank")}${row("マージ", "merged", true)}${row("未マージでクローズ", "closed", true)}${row("健康条件の変化など（推定）", "healthChange", true)}${row("更新による順位の入れ替わり（推定）", "reshuffle", true)}
+        </tbody>
+      </table>
+    </div>
     <p class="section-note">
       マージ・クローズは、起票が基準 PR より前で、必須ラベルが現在も付いている PR の、基準 PR の起票以降の累積件数の差です（検索の集計）。「健康条件の変化など」は、累積待ち（作成順）の減少からマージ・クローズを引いた残り、「更新による順位の入れ替わり」は、実質待ちの減少から累積待ちの減少を引いた差で、どちらも推定です。
     </p>`;
@@ -701,39 +833,41 @@ export function renderRecentHistorySection(
     ${
       recentHistoryWithDeltas.length > 0
         ? `
-    <table>
-      <thead>
-        <tr>
-          <th>観測日時 (JST)</th>
-          <th>基準 PR</th>
-          <th>健康的大底 PR</th>
-          <th>実質待ち件数</th>
-          <th>前回比 (Δ)</th>
-          <th>累積待ち件数</th>
-          <th>後続件数</th>
-          <th>待機日数</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${recentHistoryWithDeltas
-          .map((row) => {
-            const badge = formatDeltaBadge(row.activeAheadDelta);
-            return `
-        <tr>
-          <td>${escapeHtml(row.timestamp)}</td>
-          <td>#${escapeHtml(row.targetPr)}</td>
-          <td><a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(row.frontNumber)}" target="_blank">#${escapeHtml(row.frontNumber)}</a></td>
-          <td><strong>${formatNumber(row.activeAhead)}</strong></td>
-          <td>${renderBadgeHtml(badge)}</td>
-          <td>${formatNumber(row.totalAhead)}</td>
-          <td>${formatNumber(row.behind)}</td>
-          <td>${escapeHtml(row.waitDays)} 日</td>
-        </tr>
-        `;
-          })
-          .join("")}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>観測日時 (JST)</th>
+            <th>基準 PR</th>
+            <th>健康的大底 PR</th>
+            <th>実質待ち件数</th>
+            <th>前回比 (Δ)</th>
+            <th>累積待ち件数</th>
+            <th>後続件数</th>
+            <th>待機日数</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${recentHistoryWithDeltas
+            .map((row) => {
+              const badge = formatDeltaBadge(row.activeAheadDelta);
+              return `
+          <tr>
+            <td>${escapeHtml(row.timestamp)}</td>
+            <td>#${escapeHtml(row.targetPr)}</td>
+            <td><a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(row.frontNumber)}" target="_blank">#${escapeHtml(row.frontNumber)}</a></td>
+            <td><strong>${formatNumber(row.activeAhead)}</strong></td>
+            <td>${renderBadgeHtml(badge)}</td>
+            <td>${formatNumber(row.totalAhead)}</td>
+            <td>${formatNumber(row.behind)}</td>
+            <td>${escapeHtml(row.waitDays)} 日</td>
+          </tr>
+          `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
     `
         : `<p style="color: var(--text-muted); font-size: 0.875rem;">現在の指標定義（更新順の待ち順位）の推移データはまだ蓄積されていません。旧定義の履歴は比較できないため表示しません。</p>`
     }`;

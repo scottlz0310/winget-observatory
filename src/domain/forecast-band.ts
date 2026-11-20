@@ -42,8 +42,6 @@ export interface ForecastBandSource {
   history: HistoryRecord[];
   lookbackDays?: number;
   firstTimerLookbackDays?: number;
-  staleBottomPr: number | null;
-  staleBottomCreatedMs: number | null;
   healthyBottomPr: number | null;
   healthyBottomCreatedMs: number | null;
   mainstreamSamples: MainstreamFrontierSample[];
@@ -63,10 +61,6 @@ export function buildForecastBandSource(input: {
 }): ForecastBandSource {
   const { progress, depths, history, mainstreamFrontierSamples } = input;
   const base = buildForecastSource({ progress, depths, history });
-
-  const staleHead = depths?.SingleCommitBottom?.[0] ?? depths?.StaleBottom?.[0];
-  const staleBottomCreatedMs =
-    parseIsoOrJstMs(staleHead?.CreatedAt) ?? parseIsoOrJstMs(staleHead?.UpdatedAt);
 
   const healthyHead = depths?.HealthyBottom?.[0];
   const healthyBottomCreatedMs =
@@ -100,8 +94,6 @@ export function buildForecastBandSource(input: {
     ...base,
     firstTimerMedianDays: progress?.FirstTimerMedianDays,
     firstTimerP75Days: progress?.FirstTimerP75Days,
-    staleBottomPr: staleHead?.Number ?? null,
-    staleBottomCreatedMs,
     healthyBottomPr:
       healthyHead?.Number ?? (progress?.FrontNumber ? Number(progress.FrontNumber) : null),
     healthyBottomCreatedMs,
@@ -155,19 +147,12 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
   );
 
   const hasTarget = Number.isFinite(targetCreatedMs);
-  const staleBottomGapDays =
-    hasTarget && source.staleBottomCreatedMs !== null
-      ? round1((targetCreatedMs - source.staleBottomCreatedMs) / DAY_MS)
-      : null;
   const healthyBottomGapDays =
     hasTarget && source.healthyBottomCreatedMs !== null
       ? round1((targetCreatedMs - source.healthyBottomCreatedMs) / DAY_MS)
       : null;
 
   const snapshot = {
-    staleBottomPr: source.staleBottomPr,
-    staleBottomCreatedMs: source.staleBottomCreatedMs,
-    staleBottomGapDays,
     healthyBottomPr: source.healthyBottomPr,
     healthyBottomCreatedMs: source.healthyBottomCreatedMs,
     healthyBottomGapDays,
@@ -187,7 +172,7 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
     };
   }
 
-  // 1. 前線（最短目安）: 初回コホート P50 と 優等生の底の定常換算
+  // 1. 前線（最短目安）: 初回提出者コホート P50（直近マージ実績）
   const frontEstimates: BandPointEstimate[] = [];
   const ftMedian = positiveDays(source.firstTimerMedianDays);
   if (hasTarget && ftMedian !== undefined) {
@@ -197,17 +182,6 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
         "first-timer:p50",
         "初回提出者コホート P50",
         targetCreatedMs + ftMedian * DAY_MS,
-      ),
-    );
-  }
-  if (hasTarget && source.staleBottomCreatedMs !== null) {
-    const gapMs = Math.max(0, targetCreatedMs - source.staleBottomCreatedMs);
-    frontEstimates.push(
-      clampEstimate(
-        nowMs,
-        "stale-bottom:steady",
-        "マージ前線・1コミット完走組（定常 1.0 日/日）",
-        nowMs + gapMs,
       ),
     );
   }
@@ -259,7 +233,7 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
       clampEstimate(
         nowMs,
         "mainstream-steady",
-        "初動正常底・主戦場ライン（定常 1.0 日/日）",
+        "初動前線・主戦場ライン（初回提出者・定常 1.0 日/日）",
         nowMs + firstReview.steadyEtaDays * DAY_MS,
       ),
     );

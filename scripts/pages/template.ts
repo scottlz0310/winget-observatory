@@ -160,7 +160,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
   const mainstreamSeries: DualAxisSeries | null =
     mainstreamFrontierSamples.length > 0
       ? {
-          label: "👀 初動正常底（主戦場ライン・7日介入中央値）",
+          label: "👀 初動前線（主戦場ライン・初回提出者 7日介入中央値）",
           axis: "right",
           color: "#0ea5e9",
           strokeWidth: 2.5,
@@ -295,7 +295,7 @@ ${DASHBOARD_CSS}
     <section data-chart-section>
       <h2 class="section-title">📉 待ち件数の推移（キュー推移と正常底の進行の統合時系列）</h2>
       <p class="section-note">
-        左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は各正常底の起票経過日数（⚓ マージ正常底・全体 ／ 🌱 マージ正常底・初回提出者のみ、👀 初動正常底・直近7日初回介入中央値）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
+        左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は各待機ラインの起票経過日数（⚓ マージ正常底・全体 ／ 🌱 マージ正常底・初回提出者のみ、👀 初動前線・初回提出者 7日介入中央値）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
       </p>
       ${
         hasChartPopulationToggle
@@ -330,7 +330,7 @@ ${DASHBOARD_CSS}
 
     ${renderRivalsSection(progress)}
 
-    ${renderWaitlineMatrixSection(depths)}
+    ${renderWaitlineMatrixSection(depths, progress, repo)}
 
     ${renderBoundaryTableSection(depths)}
 

@@ -127,17 +127,35 @@ function renderHeroStatusGrid(params: {
     mainstreamSubHtml = `${escapeHtml(formatTargetInterventionLabel(firstReview))}（主戦場ラインは未観測）`;
   }
 
-  // 2. マージ前線（1コミット完走組）
-  const staleHtml =
-    band.snapshot.staleBottomCreatedMs !== null
-      ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(band.snapshot.staleBottomPr)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(band.snapshot.staleBottomPr)}</a> ${escapeHtml(formatJstDate(band.snapshot.staleBottomCreatedMs))}`
-      : `<span style="color: var(--text-muted);">-</span>`;
-  const staleSubHtml =
-    band.snapshot.staleBottomGapDays !== null
-      ? `自PRと差 ${band.snapshot.staleBottomGapDays} 日（1コミット健康体・起票順最古）`
-      : "マージ前線データ未観測";
+  // 2. マージ前線（直近マージ実績・全体）
+  const lookbackDays = progress?.LookbackDays ?? 30;
+  const totalSampleCount = progress?.SampleCount ?? 0;
+  const totalMedian = progress?.TotalMedianDays;
+  const latestMerged = progress?.Samples?.[0];
+  let mergeFrontHtml = `<span style="color: var(--text-muted);">-</span>`;
+  let mergeFrontSubHtml = "直近マージ実績未観測";
+  if (totalMedian !== undefined && totalMedian !== null) {
+    mergeFrontHtml = `P50: ${escapeHtml(totalMedian)} <span style="font-size: 0.85rem; font-weight: normal;">日</span>`;
+    if (latestMerged) {
+      const createdMd = Number.isFinite(Date.parse(latestMerged.CreatedAt))
+        ? formatMonthDay(Date.parse(latestMerged.CreatedAt))
+        : "-";
+      const mergedMd = Number.isFinite(Date.parse(latestMerged.MergedAt))
+        ? formatMonthDay(Date.parse(latestMerged.MergedAt))
+        : "-";
+      mergeFrontSubHtml = `最新マージ: <a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(latestMerged.Number)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(latestMerged.Number)}</a>（起票 ${escapeHtml(createdMd)} → ${escapeHtml(mergedMd)}・${latestMerged.TotalDays.toFixed(1)} 日） / 採用 ${escapeHtml(totalSampleCount)} 件`;
+    } else {
+      mergeFrontSubHtml = `過去 ${escapeHtml(lookbackDays)} 日間の採用 ${escapeHtml(totalSampleCount)} 件（全体・常連込み）`;
+    }
+  } else if (latestMerged) {
+    const createdMd = Number.isFinite(Date.parse(latestMerged.CreatedAt))
+      ? formatMonthDay(Date.parse(latestMerged.CreatedAt))
+      : "-";
+    mergeFrontHtml = `<a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(latestMerged.Number)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(latestMerged.Number)}</a> ${escapeHtml(createdMd)}`;
+    mergeFrontSubHtml = `最新マージ（所要 ${latestMerged.TotalDays.toFixed(1)} 日 / 採用 ${escapeHtml(totalSampleCount)} 件）`;
+  }
 
-  // 3. 実質待ち順位 / マージ正常底（健康的大底）差
+  // 3. 実質待ち順位 / マージ正常底（健康的大底・全体）差
   const healthyPr = band.snapshot.healthyBottomPr;
   const healthyGap = band.snapshot.healthyBottomGapDays;
   const queueSubHtml =
@@ -161,17 +179,17 @@ function renderHeroStatusGrid(params: {
   return `
     <div class="hero-status-grid" aria-label="現在の処理帯ステータス">
       <div class="hero-status-item">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">👀 初動正常底（主戦場ライン・7日介入中央値）</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">👀 初動前線（主戦場ライン・初回提出者 7日介入中央値）</div>
         <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${mainstreamHeadHtml}</div>
         <div class="card-subtext">${mainstreamSubHtml}</div>
       </div>
       <div class="hero-status-item">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">🚀 マージ前線（1コミット完走組）</div>
-        <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${staleHtml}</div>
-        <div class="card-subtext">${escapeHtml(staleSubHtml)}</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">🚀 マージ前線（直近マージ実績・全体 ${escapeHtml(lookbackDays)} 日）</div>
+        <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${mergeFrontHtml}</div>
+        <div class="card-subtext">${mergeFrontSubHtml}</div>
       </div>
       <div class="hero-status-item">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">⚓ 実質待ち順位 / マージ正常底（健康的大底）差</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">⚓ 実質待ち順位 / マージ正常底（健康的大底・全体）差</div>
         <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${formatNumber(progress?.ActiveAhead)} <span style="font-size: 0.85rem; font-weight: normal;">件</span></div>
         <div class="card-subtext">${escapeHtml(queueSubHtml)}</div>
       </div>

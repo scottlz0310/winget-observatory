@@ -172,16 +172,18 @@ export function renderOvertakeSection(progress: LatestProgress | null): string {
     <p class="section-note">
       ${sampleScopeText}で、基準 PR と比べたマージ済み件数です（全期間の件数ではありません）。
     </p>
-    <table>
-      <thead>
-        <tr><th>比較</th><th>件数</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>自分より後に作成され、マージ済み（追い越し）</td><td><strong>${c.LaterCreated}</strong> 件${overtakeDetail}</td></tr>
-        <tr><td>自分より前に作成され、マージ済み</td><td>${c.EarlierCreated} 件</td></tr>
-        <tr><td>自分より後に条件が整い（ReadyAt）、マージ済み</td><td>${c.LaterReady} 件</td></tr>
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>比較</th><th>件数</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>自分より後に作成され、マージ済み（追い越し）</td><td><strong>${c.LaterCreated}</strong> 件${overtakeDetail}</td></tr>
+          <tr><td>自分より前に作成され、マージ済み</td><td>${c.EarlierCreated} 件</td></tr>
+          <tr><td>自分より後に条件が整い（ReadyAt）、マージ済み</td><td>${c.LaterReady} 件</td></tr>
+        </tbody>
+      </table>
+    </div>
     ${firstTimerHighlight}
     <p class="section-note" style="color: ${noteColor};">※ ${escapeHtml(describeOvertake(c))}</p>`;
 }
@@ -213,19 +215,21 @@ export function renderRivalsSection(progress: LatestProgress | null): string {
     <p class="section-note">
       作成順で基準 PR の直前に並ぶ健康な未マージ PR です。更新が止まっているほど、順番待ちに徹している PR と読めます。
     </p>
-    <table>
-      <thead>
-        <tr>
-          <th>PR 番号</th>
-          <th>起票 (JST)</th>
-          <th>最終更新 (JST)</th>
-          <th>更新からの経過</th>
-          <th>タイトル</th>
-        </tr>
-      </thead>
-      <tbody>${rows}
-      </tbody>
-    </table>`;
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>PR 番号</th>
+            <th>起票 (JST)</th>
+            <th>最終更新 (JST)</th>
+            <th>更新からの経過</th>
+            <th>タイトル</th>
+          </tr>
+        </thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 /** 初回提出者限定の最速マージランキング（直近90日起票 TOP 10） */

@@ -103,6 +103,7 @@ export const DASHBOARD_CSS = `    :root {
       border-radius: 0.75rem;
       padding: 1.25rem;
       box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      min-width: 0;
     }
     .card-title {
       font-size: 0.875rem;
@@ -314,9 +315,43 @@ export const DASHBOARD_CSS = `    :root {
       gap: 1.5rem;
       margin-bottom: 1.5rem;
     }
+    .table-scroll {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin-bottom: 1.5rem;
+    }
+    .table-scroll table {
+      margin-bottom: 0;
+    }
     @media (max-width: 960px) {
       .matrix-phase-grid {
         grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 640px) {
+      body {
+        padding: 0.75rem;
+      }
+      h1 {
+        font-size: 1.45rem;
+      }
+      .grid,
+      .hero-band-summary,
+      .hero-status-grid,
+      .samples-summary-grid {
+        grid-template-columns: 1fr;
+      }
+      .flow-container {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 1rem;
+      }
+      .flow-node {
+        min-width: 0;
+      }
+      .flow-arrow {
+        white-space: normal;
       }
     }
     a { color: var(--primary); text-decoration: none; }

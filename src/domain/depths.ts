@@ -32,8 +32,9 @@ export function getThirdPartyAssignees(
  * - 3: 介入判定分離版（UnreviewedBottom / IntervenedBottom: 人間レビュー・手動コメント・第三者アサイン OR 分離）
  * - 4: 主戦場ライン版（FirstReviewFrontier: 直近7日間初回人間介入コホートの createdAt 中央値・オープン＋マージ済み）
  * - 5: 2×2 待機ライン統一版（HealthyBottom GraphQL TOP 10、SingleCommitBottom / FirstTimerSingleCommitBottom / FirstTimerUnreviewedBottom、全象限作者メタデータ統一）
+ * - 6: 1コミット限定廃止版（SingleCommitBottom / StaleBottom の新規収集を廃止し、マージ前線は progress.Samples の直近マージ実績へ統一）
  */
-export const CURRENT_DEPTHS_VERSION = 5;
+export const CURRENT_DEPTHS_VERSION = 6;
 
 /**
  * タイトル文字列をコンソール/表示用に切り詰める（45文字超は先頭42文字 + "..."）。
@@ -135,14 +136,6 @@ export function formatGraphQLDepthsRow(
 }
 
 /**
- * GraphQL 検索ノードが「優等生の底（1コミット限定）」の条件を満たすか判定する。
- * 阻害ラベルの除外は Search クエリ（`-label:...`）側で実施済み。
- */
-export function isStaleCandidate(node: GraphQLPrNode): boolean {
-  return node.commits?.totalCount === 1;
-}
-
-/**
  * GraphQL 検索ノードが「初回提出者（authorAssociation = NONE）」の条件を満たすか判定する。
  * 阻害ラベルの除外は Search クエリ（`-label:...`）側で実施済み。
  * PR #65（初回提出者コホートのコミット数制限撤廃）に準拠し、手直しコミットが入った健康な初回提出者も許容する。
@@ -232,11 +225,6 @@ export function createDepthsSnapshot(params: {
   targetPr: TargetPrInfo | null;
   healthyBottom: DepthsRow[];
   absoluteBottom: DepthsRow[];
-  singleCommitBottom?: DepthsRow[];
-  firstTimerSingleCommitBottom?: DepthsRow[];
-  singleCommitTruncated?: boolean;
-  firstTimerSingleCommitTruncated?: boolean;
-  staleBottom: DepthsRow[];
   firstTimerBottom?: DepthsRow[];
   firstTimerBottomTruncated?: boolean;
   unreviewedBottom?: DepthsRow[];
@@ -257,13 +245,6 @@ export function createDepthsSnapshot(params: {
     TargetPr: params.targetPr,
     HealthyBottom: params.healthyBottom,
     AbsoluteBottom: params.absoluteBottom,
-    ...(params.singleCommitBottom ? { SingleCommitBottom: params.singleCommitBottom } : {}),
-    ...(params.firstTimerSingleCommitBottom
-      ? { FirstTimerSingleCommitBottom: params.firstTimerSingleCommitBottom }
-      : {}),
-    ...(params.singleCommitTruncated ? { SingleCommitTruncated: true } : {}),
-    ...(params.firstTimerSingleCommitTruncated ? { FirstTimerSingleCommitTruncated: true } : {}),
-    StaleBottom: params.staleBottom,
     ...(params.firstTimerBottom ? { FirstTimerBottom: params.firstTimerBottom } : {}),
     ...(params.firstTimerBottomTruncated ? { FirstTimerBottomTruncated: true } : {}),
     ...(params.unreviewedBottom ? { UnreviewedBottom: params.unreviewedBottom } : {}),
