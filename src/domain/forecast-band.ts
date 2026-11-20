@@ -203,7 +203,12 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
   if (hasTarget && source.staleBottomCreatedMs !== null) {
     const gapMs = Math.max(0, targetCreatedMs - source.staleBottomCreatedMs);
     frontEstimates.push(
-      clampEstimate(nowMs, "stale-bottom:steady", "優等生の底（定常 1.0 日/日）", nowMs + gapMs),
+      clampEstimate(
+        nowMs,
+        "stale-bottom:steady",
+        "マージ前線・1コミット完走組（定常 1.0 日/日）",
+        nowMs + gapMs,
+      ),
     );
   }
   const frontRange = summarizeBandRange(
@@ -254,7 +259,7 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
       clampEstimate(
         nowMs,
         "mainstream-steady",
-        "主戦場ライン（定常 1.0 日/日）",
+        "初動正常底・主戦場ライン（定常 1.0 日/日）",
         nowMs + firstReview.steadyEtaDays * DAY_MS,
       ),
     );
@@ -275,14 +280,14 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
         }
       : null;
 
-  // 3. 大底（最長目安）: 健康的大底（最古健康 PR）の定常換算
+  // 3. 正常底（最長目安）: マージ正常底（健康的大底）の定常換算
   let bottom: ForecastBottomBand | null = null;
   if (hasTarget && source.healthyBottomCreatedMs !== null) {
     const gapMs = Math.max(0, targetCreatedMs - source.healthyBottomCreatedMs);
     const estimate = clampEstimate(
       nowMs,
       "healthy-bottom:steady",
-      "健康的大底（定常 1.0 日/日）",
+      "マージ正常底・健康的大底（定常 1.0 日/日）",
       nowMs + gapMs,
     );
     bottom = {

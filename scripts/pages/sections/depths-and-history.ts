@@ -1,6 +1,7 @@
-// キュー境界探索テーブル・待機列の底の比較・未レビュー介入分離・予想答え合わせ・離脱内訳・直近10回履歴テーブルの描画セクション
+// 待機ライン 2×2 マトリクス・例外境界テーブル・予想答え合わせ・離脱内訳・直近10回履歴テーブルの描画セクション
 
 import { formatDeltaBadge } from "../../../src/domain/dashboard";
+import { isFirstTimerDepthsRow } from "../../../src/domain/depths";
 import { DEFAULT_EXIT_WINDOW_HOURS } from "../../../src/domain/exit-breakdown";
 import { DAY_MS, formatJstDate, formatJstDateTime, round1 } from "../../../src/domain/formatters";
 import {
@@ -31,7 +32,7 @@ import type { LatestDepths } from "../types";
 interface BottomTableRenderOptions {
   showAuthor?: boolean;
   showCommitCount?: boolean;
-  highlightRepeaters?: boolean;
+  highlightFirstTimer?: boolean;
   highlightThirdPartyAssignees?: boolean;
   elapsedBasis?: "updated" | "created";
 }
@@ -64,9 +65,9 @@ function renderBottomRowTable(
   const {
     showAuthor = false,
     showCommitCount = false,
-    highlightRepeaters = false,
+    highlightFirstTimer = false,
     highlightThirdPartyAssignees = true,
-    elapsedBasis = "updated",
+    elapsedBasis = "created",
   } = options;
   const observedMs = Date.parse(timestampIso);
   const rows = items
@@ -77,12 +78,9 @@ function renderBottomRowTable(
         Number.isNaN(observedMs) || Number.isNaN(baseMs)
           ? "-"
           : `${round1((observedMs - baseMs) / DAY_MS)} 日`;
-      const isRepeater =
-        (Boolean(item.AuthorAssociation) && item.AuthorAssociation !== "NONE") ||
-        (item.AuthorMergedCount ?? 0) > 0;
-      const repeaterBadge =
-        highlightRepeaters && isRepeater
-          ? `<span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者ではないため、初回提出者の底では除外">常連除外</span>`
+      const firstTimerBadge =
+        highlightFirstTimer && isFirstTimerDepthsRow(item)
+          ? `<span class="badge" style="background: #dcfce7; color: #15803d; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者（authorAssociation = NONE・生涯マージ 0 回）">🌱 初回提出者</span>`
           : "";
       const interventionBadge = highlightThirdPartyAssignees ? renderInterventionBadge(item) : "";
       const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
@@ -91,7 +89,7 @@ function renderBottomRowTable(
       return `
         <tr>
           <td>${index + 1}</td>
-          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${repeaterBadge}${interventionBadge}</td>
+          <td><a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.Number)}</a>${firstTimerBadge}${interventionBadge}</td>
           ${authorCell}
           ${commitCountCell}
           <td>${escapeHtml(item.作成日時 || item.CreatedAt)}</td>
@@ -124,34 +122,6 @@ function renderBottomRowTable(
     </table>`;
 }
 
-/** 優等生の底（1コミット限定・更新が古い順の健康な PR）の表。先頭からの遅れ = 観測時刻 − 最終更新 */
-function renderStaleBottomTable(depths: LatestDepths | null): string {
-  const items = depths?.StaleBottom ?? [];
-  if (items.length === 0) {
-    return `<p style="color: var(--text-muted); font-size: 0.875rem;">優等生の底のデータはまだありません。</p>`;
-  }
-  return renderBottomRowTable(items, depths?.Timestamp ?? "", {
-    showAuthor: false,
-    showCommitCount: false,
-    highlightRepeaters: true,
-    elapsedBasis: "updated",
-  });
-}
-
-/** 初回提出者の底（手直し込みの初回提出者全体・起票日時順の PR）の表。経過 = 観測時刻 − 起票日時 */
-function renderFirstTimerBottomTable(depths: LatestDepths | null): string {
-  const items = depths?.FirstTimerBottom ?? [];
-  if (items.length === 0) {
-    return `<p style="color: var(--text-muted); font-size: 0.875rem;">初回提出者の底のデータはまだありません（次回の定期観測から記録されます）。</p>`;
-  }
-  return renderBottomRowTable(items, depths?.Timestamp ?? "", {
-    showAuthor: true,
-    showCommitCount: true,
-    highlightRepeaters: false,
-    elapsedBasis: "created",
-  });
-}
-
 function renderBoundaryCategoryRows(
   items: DepthsRow[] | undefined,
   limit: number,
@@ -174,11 +144,11 @@ function renderBoundaryCategoryRows(
     .join("");
 }
 
-/** キュー境界探索（健康的大底・真の大底・特急レーン）テーブルセクションを描画する */
+/** 例外・特殊境界（真の大底・特急レーン）テーブルセクションを描画する */
 export function renderBoundaryTableSection(depths: LatestDepths | null): string {
-  return `<h2 class="section-title">🧭 キュー境界探索（健康的大底・真の大底・特急レーン）</h2>
+  return `<h2 class="section-title">🚧 例外・特殊境界（真の大底・特急レーン）</h2>
     <p class="section-note">
-      健康的大底＝CI・検証通過済みの最古 3 件 / 真の大底＝CI 待ち・阻害ラベルを含む未マージ全体の最古 3 件 / ⚡ 特急レーン＝基準 PR 起票後に作成されマージ済みの最新更新 5 件
+      通常待機列（2×2 マトリクス）の枠外にある参照境界です。真の大底＝CI 待ち・阻害ラベルを含む未マージ全体の最古 3 件 / ⚡ 特急レーン＝基準 PR 起票後に作成されマージ済みの最新更新 5 件
     </p>
     <table>
       <thead>
@@ -191,47 +161,14 @@ export function renderBoundaryTableSection(depths: LatestDepths | null): string 
         </tr>
       </thead>
       <tbody>
-        ${renderBoundaryCategoryRows(depths?.HealthyBottom, 3, "background:#e0f2fe;color:#0369a1;", "健康的大底")}
         ${renderBoundaryCategoryRows(depths?.AbsoluteBottom, 3, "background:#fce7f3;color:#9d174d;", "真の大底")}
         ${renderBoundaryCategoryRows(depths?.ExpressLane, 5, "background:#fef3c7;color:#b45309;", "⚡ 特急レーン")}
       </tbody>
     </table>`;
 }
 
-/** 下部比較グリッド（優等生の底 vs 初回提出者の底）セクションを描画する */
-export function renderBottomComparisonSection(depths: LatestDepths | null): string {
-  return `<h2 class="section-title">🧗 待機列の底の比較（優等生 vs 初回提出者）</h2>
-    <p class="section-note">
-      左は「1コミット完全放置」の待機前線（常連含む）、右はコミット数制限を外した「初回提出者全体（手直し込み）」の待機前線です。第三者 Assignees が付いている PR は「アサイン済」バッジで識別できます。
-    </p>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
-      <div class="card" style="padding: 1.25rem; overflow-x: auto;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-          <h3 style="font-size: 1.05rem; font-weight: 600;">🧗 優等生の底（順番待ちの先頭）</h3>
-          <span class="badge" style="background: var(--code-bg); color: var(--text-muted);">全1コミット健康体</span>
-        </div>
-        <p class="section-note" style="margin-bottom: 0.75rem;">
-          指摘なし・健康な1コミットPR（常連含む）。最終更新が古い順です。
-        </p>
-        ${renderStaleBottomTable(depths)}
-      </div>
-
-      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--success);">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-          <h3 style="font-size: 1.05rem; font-weight: 600; color: var(--success);">🌱 初回提出者の底（真の FIFO 前線）</h3>
-          <span class="badge" style="background: #dcfce7; color: #15803d; font-weight: 600;">手直し込み初回全体</span>
-        </div>
-        <p class="section-note" style="margin-bottom: 0.75rem;">
-          初回提出者（authorAssociation = NONE・生涯マージ 0 回）の健康なPR全体（手直しコミット込み）。起票日時の古い順です。
-        </p>
-        ${renderFirstTimerBottomTable(depths)}
-      </div>
-    </div>`;
-}
-
-function renderInterventionFrontierCard(params: {
-  title: string;
-  description: string;
+function renderMatrixRowListView(params: {
+  viewKey: "all" | "first-timer";
   items: DepthsRow[];
   timestamp: string;
   truncated: boolean;
@@ -239,10 +176,11 @@ function renderInterventionFrontierCard(params: {
   emptyConfirmedText: string;
   emptyLegacyText: string;
   highlightInterventions: boolean;
-  borderColor: string;
-  titleColor: string;
+  highlightFirstTimer: boolean;
+  showAuthor: boolean;
+  showCommitCount: boolean;
   badgeStyle: string;
-  extraMeta?: string;
+  fallbackNote?: string;
 }): string {
   const summary = summarizeInterventionFrontier(params.items, params.timestamp);
   const badgeText = params.truncated
@@ -254,9 +192,9 @@ function renderInterventionFrontierCard(params: {
   const body =
     params.items.length > 0
       ? `${renderBottomRowTable(params.items, params.timestamp, {
-          showAuthor: true,
-          showCommitCount: true,
-          highlightRepeaters: false,
+          showAuthor: params.showAuthor,
+          showCommitCount: params.showCommitCount,
+          highlightFirstTimer: params.highlightFirstTimer,
           highlightThirdPartyAssignees: params.highlightInterventions,
           elapsedBasis: "created",
         })}${
@@ -273,18 +211,16 @@ function renderInterventionFrontierCard(params: {
         )}</p>`;
 
   const meta = summary.head
-    ? `先頭: #${escapeHtml(summary.head.Number)}（起票 ${escapeHtml(summary.head.作成日時 || summary.head.CreatedAt)}・経過 ${summary.headElapsedDays ?? "-"} 日）${params.extraMeta ?? ""}`
+    ? `先頭: #${escapeHtml(summary.head.Number)}（起票 ${escapeHtml(summary.head.作成日時 || summary.head.CreatedAt)}・経過 ${summary.headElapsedDays ?? "-"} 日）`
     : "";
 
-  return `<div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid ${params.borderColor};">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-          <h3 style="font-size: 1.05rem; font-weight: 600; color: ${params.titleColor};">${params.title}</h3>
+  const hiddenStyle = params.viewKey === "first-timer" ? ' style="display: none;"' : "";
+  return `<div data-matrix-view="${params.viewKey}"${hiddenStyle}>
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem;">
           <span class="badge" style="${params.badgeStyle}">${escapeHtml(badgeText)}</span>
+          ${meta ? `<span class="card-subtext" style="margin-top: 0;">${escapeHtml(meta)}</span>` : ""}
         </div>
-        <p class="section-note" style="margin-bottom: 0.5rem;">
-          ${params.description}
-        </p>
-        ${meta ? `<p class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(meta)}</p>` : ""}
+        ${params.fallbackNote ? `<p class="card-subtext" style="margin-bottom: 0.5rem;">${escapeHtml(params.fallbackNote)}</p>` : ""}
         ${body}
       </div>`;
 }
@@ -295,7 +231,12 @@ const COHORT_INTERVENTION_LABELS: Record<InterventionKind, string> = {
   assignee: "アサイン",
 };
 
-function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): string {
+function renderMainstreamCohortView(params: {
+  viewKey: "all" | "first-timer";
+  frontier: FirstReviewFrontier | undefined;
+  fallbackNote?: string;
+}): string {
+  const { viewKey, frontier, fallbackNote } = params;
   const items = frontier?.Items ?? [];
   const badgeText = frontier
     ? `計 ${frontier.CohortCount} 件 (Open ${frontier.OpenCount} / Merged ${frontier.MergedCount})`
@@ -324,6 +265,15 @@ function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): 
       item.State === "MERGED"
         ? `<span class="badge sample-nowrap" style="background: #dcfce7; color: #15803d; font-size: 0.7rem;">MERGED</span>`
         : `<span class="badge sample-nowrap" style="background: #e0f2fe; color: #0369a1; font-size: 0.7rem;">OPEN</span>`;
+    const isFt =
+      viewKey === "all" &&
+      ((item.State === "OPEN" &&
+        item.AuthorAssociation === "NONE" &&
+        item.AuthorMergedCount === 0) ||
+        (item.State === "MERGED" && item.AuthorMergedCount === 1));
+    const ftBadge = isFt
+      ? `<span class="badge sample-nowrap" style="background: #dcfce7; color: #15803d; font-size: 0.7rem;">🌱 初回</span>`
+      : "";
     const kindLabel = item.InterventionKind
       ? COHORT_INTERVENTION_LABELS[item.InterventionKind]
       : "介入";
@@ -339,7 +289,7 @@ function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): 
         <td style="min-width: 170px;">
           <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
             <a href="${escapeHtml(item.Url)}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; white-space: nowrap;">#${escapeHtml(item.Number)}</a>
-            ${stateBadge}
+            ${stateBadge}${ftBadge}
           </div>
           ${pkgHtml}
         </td>
@@ -367,54 +317,231 @@ function renderMainstreamCohortCard(frontier: FirstReviewFrontier | undefined): 
         </table>`
       : `<p style="color: var(--text-muted); font-size: 0.875rem;">${escapeHtml(
           frontier
-            ? "データ不足: 直近 7 日間に初回人間介入が入った初回提出 PR コホートは 0 件です。"
+            ? "データ不足: 直近 7 日間に初回人間介入が入った対象 PR コホートは 0 件です。"
             : "主戦場ラインのデータはまだありません（次回の定期観測から記録されます）。",
         )}</p>`;
 
-  return `<div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #0ea5e9;">
-        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
-          <h3 style="font-size: 1.05rem; font-weight: 600; color: #0284c7;">🎯 主戦場ライン内訳（直近7日・初回介入コホート）</h3>
-          ${countBadgesHtml}
-        </div>
-        <p class="section-note" style="margin-bottom: 0.5rem;">
-          直近 7 日間に初めて人間介入が入った初回提出者 PR（オープン中 ＋ 直近マージ済み）の初回介入新しい順内訳です。この母集団全体の起票日時中央値を主戦場ラインとします。
-        </p>
+  const hiddenStyle = viewKey === "first-timer" ? ' style="display: none;"' : "";
+  return `<div data-matrix-view="${viewKey}"${hiddenStyle}>
+        <div style="margin-bottom: 0.5rem;">${countBadgesHtml}</div>
+        ${fallbackNote ? `<p class="card-subtext" style="margin-bottom: 0.5rem;">${escapeHtml(fallbackNote)}</p>` : ""}
         ${medianMeta ? `<p class="card-subtext" style="margin-bottom: 0.75rem;">${escapeHtml(medianMeta)}</p>` : ""}
         ${body}
       </div>`;
 }
 
-/** 未レビュー・介入分離（主戦場ライン初回介入コホート vs 未レビュー前線）比較セクションを描画する */
-export function renderInterventionFrontierComparisonSection(depths: LatestDepths | null): string {
+const MATRIX_FILTER_INLINE_SCRIPT = `<script>
+(() => {
+  for (const section of document.querySelectorAll("[data-matrix-section]")) {
+    const buttons = section.querySelectorAll("[data-matrix-filter]");
+    const views = section.querySelectorAll("[data-matrix-view]");
+    for (const btn of buttons) {
+      btn.addEventListener("click", () => {
+        const mode = btn.getAttribute("data-matrix-filter") || "all";
+        for (const b of buttons) {
+          const active = b === btn;
+          b.classList.toggle("is-active", active);
+          b.setAttribute("aria-pressed", active ? "true" : "false");
+        }
+        for (const v of views) {
+          v.style.display = v.getAttribute("data-matrix-view") === mode ? "" : "none";
+        }
+      });
+    }
+  }
+})();
+</script>`;
+
+/**
+ * 待機ライン 2×2 マトリクス（フェーズ: メンテナ初動 vs 最終マージ × レンジ: 前線 vs 正常底）を描画する。
+ * 4 象限すべてを「起票日時（CreatedAt）古い順」で統一し、セクション上部の共通フィルタバーで
+ * 「すべて（常連込み）」と「🌱 初回提出者のみ」を 4 象限一括で切り替えられる。
+ */
+export function renderWaitlineMatrixSection(depths: LatestDepths | null): string {
   const timestamp = depths?.Timestamp ?? "";
-  const unreviewedItems = depths?.UnreviewedBottom ?? [];
-  const unreviewedTruncated = Boolean(depths?.UnreviewedTruncated);
-  const hasRecordedUnreviewed = depths?.UnreviewedBottom !== undefined || unreviewedTruncated;
 
-  return `<h2 class="section-title">👀 未レビュー・介入分離（主戦場ライン 7日初回介入コホート vs 未レビュー前線）</h2>
+  // ① 初動前線（未レビュー前線）
+  const unreviewedAll = depths?.UnreviewedBottom ?? [];
+  const unreviewedFt =
+    depths?.FirstTimerUnreviewedBottom ?? unreviewedAll.filter(isFirstTimerDepthsRow);
+  const hasRecordedUnreviewed =
+    depths?.UnreviewedBottom !== undefined || Boolean(depths?.UnreviewedTruncated);
+  const hasRecordedUnreviewedFt =
+    depths?.FirstTimerUnreviewedBottom !== undefined ||
+    Boolean(depths?.FirstTimerUnreviewedTruncated) ||
+    hasRecordedUnreviewed;
+
+  // ② 初動正常底（主戦場ライン）
+  const hasAllAuthorsFrontier = depths?.AllAuthorsFirstReviewFrontier !== undefined;
+  const frontierAll = depths?.AllAuthorsFirstReviewFrontier ?? depths?.FirstReviewFrontier;
+  const frontierFt = depths?.FirstReviewFrontier;
+
+  // ③ マージ前線（1コミット完走組）
+  const hasSingleCommit = depths?.SingleCommitBottom !== undefined;
+  const mergeFrontAll = depths?.SingleCommitBottom ?? depths?.StaleBottom ?? [];
+  const mergeFrontFt =
+    depths?.FirstTimerSingleCommitBottom ?? mergeFrontAll.filter(isFirstTimerDepthsRow);
+  const hasRecordedMergeFront = hasSingleCommit || depths?.StaleBottom !== undefined;
+
+  // ④ マージ正常底（健康的大底）
+  const mergeBottomAll = depths?.HealthyBottom ?? [];
+  const mergeBottomFt = depths?.FirstTimerBottom ?? [];
+  const hasRecordedMergeBottom = depths?.HealthyBottom !== undefined;
+  const hasRecordedMergeBottomFt = depths?.FirstTimerBottom !== undefined;
+
+  return `<section data-matrix-section>
+    <h2 class="section-title">🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ・起票日時順統一）</h2>
     <p class="section-note">
-      ボット・作成者本人・自動検証ログ（Deterministic automation）を除いた人間介入の有無・初回日時をもとに、「主戦場ライン（直近 7 日に初めて人間介入が入ったオープン中＋マージ済み初回 PR コホート）」の内訳と、参考指標としての完全未着手キュー（未レビュー前線）を示します。
+      「前線（早ければこのくらい）」と「正常底（遅くともここまでには）」を、メンテナ初動・最終マージの 2 フェーズ×起票日時（CreatedAt）古い順で並列比較します。上部トグルで 4 象限すべてを一括切替できます。
     </p>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
-      ${renderMainstreamCohortCard(depths?.FirstReviewFrontier)}
+    <div class="sample-filter-bar" role="group" aria-label="2×2 マトリクス対象母集団フィルタ">
+      <button type="button" class="sample-filter-btn is-active" data-matrix-filter="all" aria-pressed="true">
+        すべて（常連込み）
+      </button>
+      <button type="button" class="sample-filter-btn" data-matrix-filter="first-timer" aria-pressed="false">
+        🌱 初回提出者のみ
+      </button>
+    </div>
 
-      ${renderInterventionFrontierCard({
-        title: "🟦 未レビュー前線（参考: 完全未着手キュー）",
-        description:
-          "人間レビュー・手動コメント・第三者 Assignees・Collaborator 以上の自動指摘（Deterministic automation）がいずれも無い完全未着手キュー。起票日時の古い順です。",
-        items: unreviewedItems,
-        timestamp,
-        truncated: unreviewedTruncated,
-        hasRecorded: hasRecordedUnreviewed,
-        emptyConfirmedText: "現在、完全未着手の健康な待機 PR はありません。",
-        emptyLegacyText:
-          "未レビュー前線のデータはまだありません（次回の定期観測から記録されます）。",
-        highlightInterventions: false,
-        borderColor: "#64748b",
-        titleColor: "#475569",
-        badgeStyle: "background: var(--code-bg); color: var(--text-muted); font-weight: 600;",
-      })}
-    </div>`;
+    <h3 class="matrix-phase-header">① メンテナ初動（初回人間アクション）</h3>
+    <div class="matrix-phase-grid">
+      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #64748b;">
+        <h4 style="font-size: 1.05rem; font-weight: 600; color: #475569; margin-bottom: 0.4rem;">🟦 初動前線（未レビュー前線・早ければ）</h4>
+        <p class="section-note" style="margin-bottom: 0.6rem;">
+          人間レビュー・手動コメント・第三者 Assignees・特権ロール自動指摘がいずれも無い完全未着手キュー（複数コミット込み・起票日時古い順）。
+        </p>
+        ${renderMatrixRowListView({
+          viewKey: "all",
+          items: unreviewedAll,
+          timestamp,
+          truncated: Boolean(depths?.UnreviewedTruncated),
+          hasRecorded: hasRecordedUnreviewed,
+          emptyConfirmedText: "現在、完全未着手の健康な待機 PR はありません。",
+          emptyLegacyText:
+            "未レビュー前線のデータはまだありません（次回の定期観測から記録されます）。",
+          highlightInterventions: false,
+          highlightFirstTimer: true,
+          showAuthor: true,
+          showCommitCount: true,
+          badgeStyle: "background: var(--code-bg); color: var(--text-muted); font-weight: 600;",
+        })}
+        ${renderMatrixRowListView({
+          viewKey: "first-timer",
+          items: unreviewedFt,
+          timestamp,
+          truncated: Boolean(depths?.FirstTimerUnreviewedTruncated),
+          hasRecorded: hasRecordedUnreviewedFt,
+          emptyConfirmedText: "現在、初回提出者の完全未着手 PR はありません。",
+          emptyLegacyText:
+            "初回提出者の未レビュー前線データはまだありません（次回の定期観測から記録されます）。",
+          highlightInterventions: false,
+          highlightFirstTimer: false,
+          showAuthor: true,
+          showCommitCount: true,
+          badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
+        })}
+      </div>
+
+      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid #0ea5e9;">
+        <h4 style="font-size: 1.05rem; font-weight: 600; color: #0284c7; margin-bottom: 0.4rem;">🎯 初動正常底（主戦場ライン・遅くとも）</h4>
+        <p class="section-note" style="margin-bottom: 0.6rem;">
+          直近 7 日間に初めて人間介入が入った PR（オープン中 ＋ 直近マージ済み）の起票日時中央値と直近介入順内訳です。
+        </p>
+        ${renderMainstreamCohortView({
+          viewKey: "all",
+          frontier: frontierAll,
+          fallbackNote:
+            !hasAllAuthorsFrontier && frontierAll
+              ? "※ 旧スナップショットのため初回提出者コホートを表示中（次回観測から常連込み全体コホートを記録）"
+              : undefined,
+        })}
+        ${renderMainstreamCohortView({
+          viewKey: "first-timer",
+          frontier: frontierFt,
+        })}
+      </div>
+    </div>
+
+    <h3 class="matrix-phase-header">② 最終マージ（FIFO 完了）</h3>
+    <div class="matrix-phase-grid">
+      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--primary);">
+        <h4 style="font-size: 1.05rem; font-weight: 600; color: var(--primary); margin-bottom: 0.4rem;">🚀 マージ前線（1コミット完走組・早ければ）</h4>
+        <p class="section-note" style="margin-bottom: 0.6rem;">
+          手直しなしの 1 コミット健康体 PR の待機先頭（起票日時古い順 TOP 10）。
+        </p>
+        ${renderMatrixRowListView({
+          viewKey: "all",
+          items: mergeFrontAll,
+          timestamp,
+          truncated: Boolean(depths?.SingleCommitTruncated),
+          hasRecorded: hasRecordedMergeFront,
+          emptyConfirmedText: "現在、該当する 1 コミット健康体 PR はありません。",
+          emptyLegacyText: "マージ前線（1コミット完走組）のデータはまだありません。",
+          highlightInterventions: true,
+          highlightFirstTimer: true,
+          showAuthor: true,
+          showCommitCount: false,
+          badgeStyle: "background: var(--primary-light); color: var(--primary); font-weight: 600;",
+          fallbackNote:
+            !hasSingleCommit && mergeFrontAll.length > 0
+              ? "※ 旧スナップショットのため更新順 1 コミット健康体を表示中（次回観測から起票順 TOP 10 を記録）"
+              : undefined,
+        })}
+        ${renderMatrixRowListView({
+          viewKey: "first-timer",
+          items: mergeFrontFt,
+          timestamp,
+          truncated: Boolean(depths?.FirstTimerSingleCommitTruncated),
+          hasRecorded: depths?.FirstTimerSingleCommitBottom !== undefined || hasRecordedMergeFront,
+          emptyConfirmedText: "現在、初回提出者の 1 コミット健康体 PR はありません。",
+          emptyLegacyText:
+            "初回提出者のマージ前線データはまだありません（次回の定期観測から記録されます）。",
+          highlightInterventions: true,
+          highlightFirstTimer: false,
+          showAuthor: true,
+          showCommitCount: false,
+          badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
+        })}
+      </div>
+
+      <div class="card" style="padding: 1.25rem; overflow-x: auto; border-top: 4px solid var(--success);">
+        <h4 style="font-size: 1.05rem; font-weight: 600; color: var(--success); margin-bottom: 0.4rem;">⚓ マージ正常底（健康的大底・遅くとも）</h4>
+        <p class="section-note" style="margin-bottom: 0.6rem;">
+          手直しコミット込みで CI・検証通過済みの最古健康 PR（起票日時古い順 TOP 10）。
+        </p>
+        ${renderMatrixRowListView({
+          viewKey: "all",
+          items: mergeBottomAll,
+          timestamp,
+          truncated: false,
+          hasRecorded: hasRecordedMergeBottom,
+          emptyConfirmedText: "現在、該当する健康体 PR はありません。",
+          emptyLegacyText: "マージ正常底（健康的大底）のデータはまだありません。",
+          highlightInterventions: true,
+          highlightFirstTimer: true,
+          showAuthor: mergeBottomAll.some((r) => r.Author !== undefined),
+          showCommitCount: mergeBottomAll.some((r) => r.CommitCount !== undefined),
+          badgeStyle: "background: #e0f2fe; color: #0369a1; font-weight: 600;",
+        })}
+        ${renderMatrixRowListView({
+          viewKey: "first-timer",
+          items: mergeBottomFt,
+          timestamp,
+          truncated: Boolean(depths?.FirstTimerBottomTruncated),
+          hasRecorded: hasRecordedMergeBottomFt,
+          emptyConfirmedText: "現在、初回提出者の健康体 PR はありません。",
+          emptyLegacyText:
+            "初回提出者のマージ正常底データはまだありません（次回の定期観測から記録されます）。",
+          highlightInterventions: true,
+          highlightFirstTimer: false,
+          showAuthor: true,
+          showCommitCount: true,
+          badgeStyle: "background: #dcfce7; color: #15803d; font-weight: 600;",
+        })}
+      </div>
+    </div>
+    ${MATRIX_FILTER_INLINE_SCRIPT}
+  </section>`;
 }
 
 const SCORE_KEY_LABELS: Record<string, string> = {

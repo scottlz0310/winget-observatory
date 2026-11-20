@@ -18,12 +18,11 @@ import { scoreForecasts } from "../../src/domain/forecast-history";
 import { DAY_MS, formatHumanDays } from "../../src/domain/formatters";
 import { escapeHtml } from "./formatters";
 import {
-  renderBottomComparisonSection,
   renderBoundaryTableSection,
   renderExitBreakdownSection,
   renderForecastScoreSection,
-  renderInterventionFrontierComparisonSection,
   renderRecentHistorySection,
+  renderWaitlineMatrixSection,
 } from "./sections/depths-and-history";
 import {
   buildBandTimelineMarkers,
@@ -58,6 +57,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     depths,
     csvRows,
     forecastHistory = [],
+    healthyFrontierSamples = [],
     firstTimerFrontierSamples = [],
     mainstreamFrontierSamples = [],
     firstTimerFastestRanking,
@@ -109,12 +109,25 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     },
   ];
 
+  if (healthyFrontierSamples.length > 0) {
+    dualSeries.push({
+      label: "⚓ マージ正常底（健康的大底）起票経過",
+      axis: "right",
+      color: "var(--warning)",
+      strokeWidth: 2.5,
+      points: healthyFrontierSamples
+        .slice(-CHART_MAX_POINTS)
+        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
+    });
+  }
+
   if (firstTimerFrontierSamples.length > 0) {
     dualSeries.push({
-      label: "🌱 初回提出者の底 起票からの経過",
+      label: "🌱 マージ正常底（初回提出者のみ）起票経過",
       axis: "right",
       color: "var(--success)",
-      strokeWidth: 3,
+      strokeWidth: 2.5,
+      strokeDasharray: "6 3",
       points: firstTimerFrontierSamples
         .slice(-CHART_MAX_POINTS)
         .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
@@ -123,7 +136,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
 
   if (mainstreamFrontierSamples.length > 0) {
     dualSeries.push({
-      label: "👀 主戦場ライン 起票経過（7日初回介入中央値）",
+      label: "👀 初動正常底（主戦場ライン・7日介入中央値）",
       axis: "right",
       color: "#0ea5e9",
       strokeWidth: 2.5,
@@ -134,9 +147,9 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
   }
 
   const queueChart = renderDualAxisLineChartSvg({
-    title: "待ち件数と底の遅れの推移（統合時系列チャート）",
+    title: "待ち件数と正常底の推移（統合時系列チャート）",
     leftAxisLabel: "待ち件数",
-    rightAxisLabel: "先頭・主戦場の経過（日）",
+    rightAxisLabel: "正常底の起票経過（日）",
     series: dualSeries,
     rightDecimals: 1,
   });
@@ -215,9 +228,9 @@ ${DASHBOARD_CSS}
       behindDeltaBadge,
     })}
 
-    <h2 class="section-title">📉 待ち件数の推移（キュー推移と底の進行の統合時系列）</h2>
+    <h2 class="section-title">📉 待ち件数の推移（キュー推移と正常底の進行の統合時系列）</h2>
     <p class="section-note">
-      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は前線の起票経過日数（🌱 初回提出者の底＝起票からの経過、👀 主戦場ライン＝直近7日初回介入コホートの起票日時中央値）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
+      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は各正常底の起票経過日数（⚓ マージ正常底・全体、🌱 マージ正常底・初回提出者のみ、👀 初動正常底・直近7日初回介入中央値）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
     </p>
     ${renderChartCard(queueChart)}
 
@@ -237,11 +250,9 @@ ${DASHBOARD_CSS}
 
     ${renderRivalsSection(progress)}
 
+    ${renderWaitlineMatrixSection(depths)}
+
     ${renderBoundaryTableSection(depths)}
-
-    ${renderInterventionFrontierComparisonSection(depths)}
-
-    ${renderBottomComparisonSection(depths)}
 
     ${renderForecastScoreSection(forecastHistory, forecastScores)}
 

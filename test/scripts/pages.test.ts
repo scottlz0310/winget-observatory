@@ -153,7 +153,7 @@ describe("generateDashboardHtml", () => {
     );
 
     const markers = buildBandTimelineMarkers(band);
-    expect(markers.map((m) => m.label.slice(0, 3))).toEqual(["▼前線", "★本命", "▼大底"]);
+    expect(markers.map((m) => m.label.slice(0, 4))).toEqual(["▼前線 ", "★本命 ", "▼正常底"]);
 
     const html = renderIntegratedForecastHero({
       targetPrNum: 464302,
@@ -165,7 +165,142 @@ describe("generateDashboardHtml", () => {
     expect(html).toContain("🎯 基準 PR #464302 着地予測（統合処理バンド）");
     expect(html).toContain("代表中央値:");
     expect(html).toContain("#449390");
-    expect(html).toContain("健康的大底（#436234）と差");
+    expect(html).toContain("マージ正常底（#436234）と差");
     expect(html).toContain("🔍 統合処理バンドの内訳と 2 仮説比較（検証用詳細）");
+  });
+
+  test("2×2 待機ラインマトリクスは 4 象限が起票日時順・所定 DOM 順序で描画され、レスポンシブ CSS と共通トグルを含む", () => {
+    const html = generateDashboardHtml({
+      progress: null,
+      depths: {
+        DepthsVersion: 5,
+        Timestamp: "2026-11-20T00:00:00Z",
+        HealthyBottom: [
+          {
+            PR: "#100",
+            Number: 100,
+            作成日時: "2026-10-01 09:00",
+            更新日時: "2026-11-01 09:00",
+            CreatedAt: "2026-10-01T00:00:00Z",
+            UpdatedAt: "2026-11-01T00:00:00Z",
+            タイトル: "Healthy FT",
+            Title: "Healthy FT",
+            Url: "https://example.com/100",
+            Author: "ft-user",
+            AuthorAssociation: "NONE",
+            AuthorMergedCount: 0,
+            CommitCount: 2,
+          },
+        ],
+        SingleCommitBottom: [
+          {
+            PR: "#200",
+            Number: 200,
+            作成日時: "2026-10-05 09:00",
+            更新日時: "2026-10-05 09:00",
+            CreatedAt: "2026-10-05T00:00:00Z",
+            UpdatedAt: "2026-10-05T00:00:00Z",
+            タイトル: "Single Commit",
+            Title: "Single Commit",
+            Url: "https://example.com/200",
+            Author: "contrib-user",
+            AuthorAssociation: "CONTRIBUTOR",
+            CommitCount: 1,
+          },
+        ],
+        UnreviewedBottom: [
+          {
+            PR: "#300",
+            Number: 300,
+            作成日時: "2026-10-10 09:00",
+            更新日時: "2026-10-10 09:00",
+            CreatedAt: "2026-10-10T00:00:00Z",
+            UpdatedAt: "2026-10-10T00:00:00Z",
+            タイトル: "Unreviewed",
+            Title: "Unreviewed",
+            Url: "https://example.com/300",
+            Author: "ft-unrev",
+            AuthorAssociation: "NONE",
+            AuthorMergedCount: 0,
+            CommitCount: 3,
+          },
+        ],
+      },
+      csvRows: [],
+    });
+
+    // レスポンシブ CSS
+    expect(html).toContain(".matrix-phase-grid");
+    expect(html).toContain("@media (max-width: 960px)");
+
+    // 共通フィルタバー（セクション上部）
+    expect(html).toContain('data-matrix-filter="all"');
+    expect(html).toContain('data-matrix-filter="first-timer"');
+
+    // DOM 順序: 初動前線 → 初動正常底 → マージ前線 → マージ正常底
+    const idx1 = html.indexOf("🟦 初動前線（未レビュー前線・早ければ）");
+    const idx2 = html.indexOf("🎯 初動正常底（主戦場ライン・遅くとも）");
+    const idx3 = html.indexOf("🚀 マージ前線（1コミット完走組・早ければ）");
+    const idx4 = html.indexOf("⚓ マージ正常底（健康的大底・遅くとも）");
+    expect(idx1).toBeGreaterThan(-1);
+    expect(idx2).toBeGreaterThan(idx1);
+    expect(idx3).toBeGreaterThan(idx2);
+    expect(idx4).toBeGreaterThan(idx3);
+
+    // 補助境界テーブルは例外・特殊境界に特化し、健康的大底を重複表示しない
+    const boundarySection = html.slice(html.indexOf("🚧 例外・特殊境界（真の大底・特急レーン）"));
+    expect(boundarySection).not.toContain(">健康的大底<");
+  });
+
+  test("旧スナップショット（HealthyBottom 3件・メタデータ未記録・SingleCommitBottom/AllAuthorsFirstReviewFrontier なし）でも安全にフォールバック描画する", () => {
+    const html = generateDashboardHtml({
+      progress: null,
+      depths: {
+        DepthsVersion: 4,
+        Timestamp: "2026-11-18T00:00:00Z",
+        HealthyBottom: [
+          {
+            PR: "#101",
+            Number: 101,
+            作成日時: "2026-09-10 09:00",
+            更新日時: "2026-11-01 09:00",
+            CreatedAt: "2026-09-10T00:00:00Z",
+            UpdatedAt: "2026-11-01T00:00:00Z",
+            タイトル: "Legacy Healthy",
+            Title: "Legacy Healthy",
+            Url: "https://example.com/101",
+          },
+        ],
+        StaleBottom: [
+          {
+            PR: "#102",
+            Number: 102,
+            作成日時: "2026-10-01 09:00",
+            更新日時: "2026-10-02 09:00",
+            CreatedAt: "2026-10-01T00:00:00Z",
+            UpdatedAt: "2026-10-02T00:00:00Z",
+            タイトル: "Legacy Stale",
+            Title: "Legacy Stale",
+            Url: "https://example.com/102",
+          },
+        ],
+        FirstReviewFrontier: {
+          Mode: FIRST_REVIEW_MAINSTREAM_MODE,
+          WindowDays: 7,
+          CohortCount: 1,
+          OpenCount: 1,
+          MergedCount: 0,
+          MedianCreatedAt: "2026-10-05T00:00:00Z",
+          LagDays: 44,
+          Items: [],
+        },
+      },
+      csvRows: [],
+    });
+
+    expect(html).toContain("#101");
+    expect(html).toContain("#102");
+    expect(html).toContain("旧スナップショットのため更新順 1 コミット健康体を表示中");
+    expect(html).toContain("旧スナップショットのため初回提出者コホートを表示中");
   });
 });

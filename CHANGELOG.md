@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `src/cli/explore-depths.ts`: `HealthyBottom`（TOP 10）と `FirstTimerBottom`（TOP 10）を 1 回の GraphQL 走査で同時取得する `fetchHealthyBottoms`、1コミット完走組（全体・初回）を `sort:created-asc` で同時取得する `fetchSingleCommitBottoms`（走査上限到達時は打ち切りフラグ付きで確定済みデータを返却）、常連含む全体コホートと初回限定コホートを同時算出する `fetchFirstReviewFrontiers` を追加し、全指標で `mergedCountCache` を共有して作者メタデータを統一付与
   - `src/models/forecast.ts`, `src/domain/forecast.ts`, `src/domain/forecast-band.ts`: `extractHealthyFrontierSamples` / `extractSingleCommitFrontierSamples` を追加し、統合処理バンドの `stale-bottom:steady` が `SingleCommitBottom[0]` を優先参照（旧スナップショットでは `StaleBottom[0]` へフォールバック）するよう更新
 
+### Changed
+
+- ダッシュボード UI・指標構造を「フェーズ（メンテナ初動 vs 最終マージ）× レンジ（前線 vs 正常底）」の 2×2 体系へ再構成（#127 Phase 2）:
+  - `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/styles.ts`, `scripts/pages/template.ts`: 旧 3 セクション（キュー境界探索・未レビュー介入分離・待機列の底の比較）を「🧭 待機ライン 2×2 マトリクス（4 象限すべて起票日時古い順統一）」と「🚧 例外・特殊境界（真の大底・特急レーン）」へ再編し、セクション上部の共通フィルタバーで「すべて（常連込み）／🌱 初回提出者のみ」を 4 象限一括切替できるように実装（狭幅 1 カラム時の縦並び順序を固定するレスポンシブ CSS および旧スナップショットへの後方互換フォールバックを含む）
+  - `scripts/pages/sections/hero-and-kpi.ts`, `src/domain/forecast-band.ts`, `scripts/build-pages.ts`, `scripts/pages/types.ts`: ヒーローエリア 4 カード・全体レンジ表記・タイムラインマーカー・処理バンド内訳ラベル・統合時系列チャート右軸（マージ正常底・全体／初回＋初動正常底）を「前線／正常底」用語体系へ統一
+  - `README.md`, `src/domain/forecast.ts`, `src/models/forecast.ts`: 残存していた旧称（「遭難の底」「優等生の底」「3 つの仮説」等）を 2×2 待機ライン体系へ統一
+
 ## [0.6.0] - 2026-11-19
 
 ### Added
