@@ -21,6 +21,7 @@ export {
   FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS,
   FIRST_TIMER_FASTEST_RANKING_MIN_VERSION,
   FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS,
+  indexSampleCache,
   pruneSampleCache,
   selectMetadataRefreshCandidates,
   summarizeSampleCacheVersions,
@@ -186,17 +187,6 @@ export function parseSampleCache(text: string): SampleCacheEntry[] {
     entries.push(validateEntry(parsed, index + 1));
   }
   return entries;
-}
-
-/** PR 番号で引けるようにする。同じ番号が複数あれば、後続に記録されたものを正とする */
-export function indexSampleCache(
-  entries: readonly SampleCacheEntry[],
-): Map<number, SampleCacheEntry> {
-  const index = new Map<number, SampleCacheEntry>();
-  for (const entry of entries) {
-    index.set(entry.Number, entry);
-  }
-  return index;
 }
 
 /** 追記用の JSONL（各行の末尾に改行）にする。空配列なら空文字列 */

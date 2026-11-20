@@ -24,6 +24,7 @@ import {
   FIRST_TIMER_FASTEST_RANKING_MIN_VERSION as DIRECT_FIRST_TIMER_FASTEST_RANKING_MIN_VERSION,
   FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS as DIRECT_FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS,
   extractFirstTimerFastestRanking as directExtractFirstTimerFastestRanking,
+  indexSampleCache as directIndexSampleCache,
   pruneSampleCache as directPruneSampleCache,
   selectMetadataRefreshCandidates as directSelectMetadataRefreshCandidates,
   summarizeSampleCacheVersions as directSummarizeSampleCacheVersions,
@@ -718,6 +719,7 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
     );
     expect(DEFAULT_SAMPLE_CACHE_RETENTION_DAYS).toBe(DIRECT_DEFAULT_SAMPLE_CACHE_RETENTION_DAYS);
     expect(DEFAULT_METADATA_REFRESH_BUDGET).toBe(DIRECT_DEFAULT_METADATA_REFRESH_BUDGET);
+    expect(indexSampleCache).toBe(directIndexSampleCache);
     expect(extractFirstTimerFastestRanking).toBe(directExtractFirstTimerFastestRanking);
     expect(pruneSampleCache).toBe(directPruneSampleCache);
     expect(selectMetadataRefreshCandidates).toBe(directSelectMetadataRefreshCandidates);

@@ -16,7 +16,17 @@ import {
   shouldReevaluateCachedSample,
 } from "./first-timer";
 import { DAY_MS } from "./formatters";
-import { indexSampleCache } from "./sample-cache";
+
+/** PR 番号で引けるようにする。同じ番号が複数あれば、後続に記録されたものを正とする */
+export function indexSampleCache(
+  entries: readonly SampleCacheEntry[],
+): Map<number, SampleCacheEntry> {
+  const index = new Map<number, SampleCacheEntry>();
+  for (const entry of entries) {
+    index.set(entry.Number, entry);
+  }
+  return index;
+}
 
 /** 初回提出者 最速マージランキングの既定表示上限件数 */
 export const FIRST_TIMER_FASTEST_RANKING_LIMIT = 10;
