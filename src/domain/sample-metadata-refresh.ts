@@ -17,12 +17,13 @@ import {
   DEFAULT_METADATA_REFRESH_BUDGET,
   selectMetadataRefreshCandidates,
 } from "./sample-cache-maintenance";
-import type { SampleCollectorClient } from "./sample-collector";
 
 export interface RefreshLegacyAuthorMetadataParams {
   cacheIndex: Map<number, SampleCacheEntry>;
   samples?: MergedCandidateSample[];
-  client: Pick<SampleCollectorClient, "graphql">;
+  client: {
+    graphql<T = unknown>(query: string): Promise<T>;
+  };
   repository: string;
   now?: Date;
   windowDays?: number;

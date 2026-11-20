@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 肥大化していたテストファイル上位 5 本の関心事別分割および循環インポート検知テストの追加（#134 Step 4/4）:
+  - `test/cli/progress.test.ts` を `test/cli/progress.test.ts`（CLI 引数・基本フロー・エラー伝播）、`test/cli/progress-rivals.test.ts`（ライバル PR・実績比較・初回コホート分離・日付窓スライス・1,000 件二分走査）、`test/cli/progress-samples.test.ts`（キャッシュ再評価・自己修復パイプライン）の 3 ファイルへ分割
+  - `test/cli/explore-depths.test.ts` を `test/cli/explore-depths.test.ts`（CLI・主戦場ライン・互換 re-export）、`test/cli/explore-depths-bottoms.test.ts`（初回提出者の底・2×2 GraphQL 統一底走査）、`test/cli/explore-depths-intervention.test.ts`（未レビュー前線・介入済み前線 2 段階走査）の 3 ファイルへ分割
+  - `test/api/github.test.ts` を `test/api/github.test.ts`（検索・PR 詳細・タイムライン取得）と `test/api/github-graphql-retry.test.ts`（GraphQL リトライ・バックオフ・レート制限・互換 re-export）の 2 ファイルへ分割
+  - `test/build-pages.test.ts` を `test/build-pages.test.ts`（ダッシュボード基本生成・予想・比較・初回コホート UX）と `test/build-pages-matrix.test.ts`（2×2 マトリクス・主戦場ライン・最速ランキング）の 2 ファイルへ分割
+  - `test/domain/sample-collector.test.ts` を `test/domain/sample-collector.test.ts`（サンプル収集オーケストレーション）と `test/domain/sample-metadata-refresh.test.ts`（中間世代メタデータ段階補完）の 2 ファイルへ分割
+  - `test/architecture.test.ts`, `src/domain/sample-metadata-refresh.ts`, `src/cli/progress-io.ts`, `src/cli/progress.ts`: `src/` および `scripts/` 配下の全 TypeScript モジュール間の循環インポート不在および `src/` から `scripts/` への逆方向参照禁止を検証するアーキテクチャ境界テストを追加し、型インポートの相互参照 2 箇所（`sample-collector.ts` ⇄ `sample-metadata-refresh.ts`、`progress.ts` ⇄ `progress-io.ts`）を単方向へ整理
 - `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/sections/stats-and-samples.ts` の責務分割（#133 Step 3/4）:
   - `scripts/pages/sections/waitline-matrix.ts`: `scripts/pages/sections/depths-and-history.ts` から待機ライン 2×2 マトリクス（メンテナ初動・最終マージ 4 象限、全体／初回提出者トグル、旧スナップショット互換表示）の描画関数 `renderWaitlineMatrixSection` を分離（`depths-and-history.ts` からの re-export を維持）
   - `scripts/pages/sections/samples-and-ranking.ts`: `scripts/pages/sections/stats-and-samples.ts` から初回提出者 最速マージランキング（`renderFirstTimerFastestRankingSection`）、比較サンプル一覧・通過ペースサマリー・3種インライン切替（`renderSamplesSection`, `summarizeRecentSamplesPace`, `formatCreatedToMergedRange`, `formatSamplePackageName`）を分離（`stats-and-samples.ts` からの re-export を維持）
@@ -37,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/styles.ts`, `scripts/pages/template.ts`: 旧 3 セクション（キュー境界探索・未レビュー介入分離・待機列の底の比較）を「🧭 待機ライン 2×2 マトリクス（4 象限すべて起票日時古い順統一）」と「🚧 例外・特殊境界（真の大底・特急レーン）」へ再編し、セクション上部の共通フィルタバーで「すべて（常連込み）／🌱 初回提出者のみ」を 4 象限一括切替できるように実装（狭幅 1 カラム時の縦並び順序を固定するレスポンシブ CSS および旧スナップショットへの後方互換フォールバックを含む）
   - `scripts/pages/sections/hero-and-kpi.ts`, `src/domain/forecast-band.ts`, `scripts/build-pages.ts`, `scripts/pages/types.ts`: ヒーローエリア 4 カード・全体レンジ表記・タイムラインマーカー・処理バンド内訳ラベル・統合時系列チャート右軸（マージ正常底・全体／初回＋初動正常底）を「前線／正常底」用語体系へ統一
   - `README.md`, `src/domain/forecast.ts`, `src/models/forecast.ts`: 残存していた旧称（「遭難の底」「優等生の底」「3 つの仮説」等）を 2×2 待機ライン体系へ統一
+
+### Fixed
+
+- アーキテクチャ境界テストで静的 import・export を構文木から抽出し、コメントを挟む型専用依存の見落としを修正（#134）。
 
 ## [0.6.0] - 2026-11-19
 
