@@ -25,6 +25,26 @@ export interface FirstTimerFrontierSample {
   createdMs: number;
 }
 
+/** マージ正常底（健康的大底）の先頭（起票が最古の健康な PR）の 1 回分の観測 */
+export interface HealthyFrontierSample {
+  /** 観測時刻（UTC ミリ秒） */
+  timestampMs: number;
+  /** 先頭 PR の番号 */
+  pr: number;
+  /** 先頭 PR の起票時刻（UTC ミリ秒） */
+  createdMs: number;
+}
+
+/** マージ前線（1コミット完走組）の先頭（起票が最古の 1コミット健康体 PR）の 1 回分の観測（v5 以降） */
+export interface SingleCommitFrontierSample {
+  /** 観測時刻（UTC ミリ秒） */
+  timestampMs: number;
+  /** 先頭 PR の番号 */
+  pr: number;
+  /** 先頭 PR の起票時刻（UTC ミリ秒） */
+  createdMs: number;
+}
+
 import type { FirstReviewFrontierMode, PrInterventionSummary } from "./depths";
 
 /** 未レビュー（完全未着手）前線の先頭（人間レビュー・手動コメント・第三者アサインなし・起票が最古の健康な PR）の 1 回分の観測（旧 v3 用） */

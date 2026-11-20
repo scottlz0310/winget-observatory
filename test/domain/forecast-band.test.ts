@@ -303,4 +303,57 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
     expect(band.bottom).toBeNull();
     expect(band.overallRange).toBeNull();
   });
+
+  test("SingleCommitBottom が存在する場合は StaleBottom より優先して前線（stale-bottom:steady）を算出する", () => {
+    const progress: Partial<ProgressSnapshot> = {
+      Timestamp: new Date(T0).toISOString(),
+      TargetPr: 464302,
+      ActiveAhead: 1000,
+    };
+    const depths: Partial<DepthsSnapshot> = {
+      DepthsVersion: 5,
+      Timestamp: new Date(T0).toISOString(),
+      TargetPr: {
+        Number: 464302,
+        Title: "Target",
+        Url: "https://example.com/464302",
+        CreatedAt: new Date(TARGET_CREATED).toISOString(),
+        CreatedAtJst: "2026-10-29 06:47",
+        UpdatedAt: new Date(T0).toISOString(),
+      },
+      SingleCommitBottom: [
+        {
+          PR: "#455000",
+          Number: 455000,
+          作成日時: "2026-10-15 00:00",
+          更新日時: "2026-10-15 00:00",
+          CreatedAt: "2026-10-14T15:00:00Z",
+          UpdatedAt: "2026-10-14T15:00:00Z",
+          タイトル: "SingleCommit",
+          Title: "SingleCommit",
+          Url: "https://example.com/455000",
+        },
+      ],
+      StaleBottom: [
+        {
+          PR: "#449390",
+          Number: 449390,
+          作成日時: "2026-10-09 16:57",
+          更新日時: "2026-10-09 17:42",
+          CreatedAt: "2026-10-09T07:57:34Z",
+          UpdatedAt: "2026-10-09T08:42:30Z",
+          タイトル: "Stale",
+          Title: "Stale",
+          Url: "https://example.com/449390",
+        },
+      ],
+    };
+
+    const source = buildForecastBandSource({ progress, depths, history: [] });
+    expect(source.staleBottomPr).toBe(455000);
+    expect(source.staleBottomCreatedMs).toBe(Date.parse("2026-10-14T15:00:00Z"));
+    const band = calculateForecastBand(source);
+    expect(band.snapshot.staleBottomPr).toBe(455000);
+    expect(band.front?.estimates[0]?.key).toBe("stale-bottom:steady");
+  });
 });

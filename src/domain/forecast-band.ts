@@ -64,7 +64,7 @@ export function buildForecastBandSource(input: {
   const { progress, depths, history, mainstreamFrontierSamples } = input;
   const base = buildForecastSource({ progress, depths, history });
 
-  const staleHead = depths?.StaleBottom?.[0];
+  const staleHead = depths?.SingleCommitBottom?.[0] ?? depths?.StaleBottom?.[0];
   const staleBottomCreatedMs =
     parseIsoOrJstMs(staleHead?.CreatedAt) ?? parseIsoOrJstMs(staleHead?.UpdatedAt);
 

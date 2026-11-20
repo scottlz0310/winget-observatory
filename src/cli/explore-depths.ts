@@ -17,6 +17,7 @@ import {
   formatGraphQLDepthsRow,
   formatTargetPrInfo,
   isFirstTimerCandidate,
+  isFirstTimerDepthsRow,
   isStaleCandidate,
 } from "../domain/depths";
 import {
@@ -52,8 +53,11 @@ import {
 
 export { resolveDefaultDataDir };
 
-/** 遭難の底（更新が最も古い健康な PR）として取得・表示する件数 */
-export const STALE_BOTTOM_LIMIT = 10;
+/** 各待機ライン（健康的大底・1コミット完走組・初回提出者・未レビュー前線）の取得・表示件数 */
+export const BOTTOM_LIST_LIMIT = 10;
+
+/** 後方互換エイリアス（BOTTOM_LIST_LIMIT と同値） */
+export const STALE_BOTTOM_LIMIT = BOTTOM_LIST_LIMIT;
 
 /** 初回提出者の底を走査する際の 1 ページあたりの取得件数（GraphQL search の上限値） */
 export const FIRST_TIMER_PAGE_SIZE = 100;
@@ -151,7 +155,223 @@ function extractRepositoryFromQuery(baseQuery: string): string | undefined {
 }
 
 /**
- * GraphQL API を用いて優等生の底（Stale Bottom: 1コミット限定・更新日時古い順）を取得する。
+ * `AuthorAssociation === "NONE"` の行について生涯マージ数を照会（キャッシュ共有）し、`AuthorMergedCount` を付与する。
+ */
+async function attachAuthorMergedCounts(params: {
+  client: GitHubApiClient;
+  repository: string | undefined;
+  rows: DepthsRow[];
+  mergedCountCache: Map<string, number>;
+  label: string;
+}): Promise<DepthsRow[]> {
+  const { client, repository, rows, mergedCountCache, label } = params;
+  const noneAuthors = rows
+    .filter((row) => row.AuthorAssociation === "NONE" && Boolean(row.Author))
+    .map((row) => row.Author as string);
+
+  if (noneAuthors.length > 0 && repository) {
+    try {
+      await resolveAuthorMergedCounts(
+        repository,
+        noneAuthors,
+        (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
+        { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`${label}の GraphQL 取得に失敗しました: ${msg}`, {
+        cause: err,
+      });
+    }
+  }
+
+  return rows.map((row) => {
+    if (row.AuthorAssociation === "NONE" && row.Author && mergedCountCache.has(row.Author)) {
+      return { ...row, AuthorMergedCount: mergedCountCache.get(row.Author) };
+    }
+    return row;
+  });
+}
+
+export interface BottomPairResult {
+  all: DepthsRow[];
+  firstTimer: DepthsRow[];
+}
+
+/**
+ * 1 回の GraphQL Search ページング走査で、条件に一致する「全体 TOP limit 件」と
+ * 「初回提出者（NONE・生涯マージ 0 回）TOP limit 件」を同時収集し、両方に AuthorMergedCount を付与する。
+ */
+async function collectBottomPairCandidates(params: {
+  client: GitHubApiClient;
+  query: string;
+  repository: string | undefined;
+  limit: number;
+  maxTraverseNodes: number;
+  label: string;
+  mergedCountCache: Map<string, number>;
+  filterNode?: (node: GraphQLPrNode) => boolean;
+}): Promise<BottomPairResult> {
+  const {
+    client,
+    query,
+    repository,
+    limit,
+    maxTraverseNodes,
+    label,
+    mergedCountCache,
+    filterNode,
+  } = params;
+  let cursor: string | null = null;
+  let hasNext = true;
+  let traversedCount = 0;
+  const allRows: DepthsRow[] = [];
+  const firstTimerRows: DepthsRow[] = [];
+
+  while (hasNext && (allRows.length < limit || firstTimerRows.length < limit)) {
+    if (traversedCount >= maxTraverseNodes) {
+      throw new Error(
+        `${label}の探索上限 (${maxTraverseNodes}件) に達しましたが、未走査の PR が残っています (全体: ${allRows.length}/${limit}件, 初回: ${firstTimerRows.length}/${limit}件)。不完全な結果を避けるため中断します。`,
+      );
+    }
+
+    const fetchCount = Math.min(FIRST_TIMER_PAGE_SIZE, maxTraverseNodes - traversedCount);
+    try {
+      const gqlRes: GraphQLSearchFirstTimerResponse =
+        await client.graphql<GraphQLSearchFirstTimerResponse>(FIRST_TIMER_GRAPHQL_QUERY, {
+          query,
+          first: fetchCount,
+          ...(cursor ? { after: cursor } : {}),
+        });
+
+      const rawNodes = gqlRes.search?.nodes ?? [];
+      traversedCount += rawNodes.length;
+      const matchedNodes = filterNode ? rawNodes.filter(filterNode) : rawNodes;
+
+      // 全体枠に入る行と、初回提出者枠の候補行をまとめて AuthorMergedCount 解決する
+      const needAll = Math.max(0, limit - allRows.length);
+      const allSliceNodes = matchedNodes.slice(0, needAll);
+      const allSliceRows = await attachAuthorMergedCounts({
+        client,
+        repository,
+        rows: allSliceNodes.map((n) => formatGraphQLDepthsRow(n)),
+        mergedCountCache,
+        label,
+      });
+
+      const resolvedByNumber = new Map<number, DepthsRow>();
+      for (const row of allSliceRows) {
+        resolvedByNumber.set(row.Number, row);
+        if (allRows.length < limit) {
+          allRows.push(row);
+        }
+        if (firstTimerRows.length < limit && isFirstTimerDepthsRow(row)) {
+          firstTimerRows.push(row);
+        }
+      }
+
+      if (firstTimerRows.length < limit) {
+        const remainingFirstTimerCandidates = matchedNodes
+          .slice(allSliceNodes.length)
+          .filter(isFirstTimerCandidate);
+
+        for (
+          let i = 0;
+          i < remainingFirstTimerCandidates.length && firstTimerRows.length < limit;
+          i += AUTHOR_MERGED_BATCH_SIZE
+        ) {
+          const slice = remainingFirstTimerCandidates.slice(i, i + AUTHOR_MERGED_BATCH_SIZE);
+          const enrichedSlice = await attachAuthorMergedCounts({
+            client,
+            repository,
+            rows: slice.map((n) => formatGraphQLDepthsRow(n)),
+            mergedCountCache,
+            label,
+          });
+          for (const row of enrichedSlice) {
+            if (resolvedByNumber.has(row.Number)) continue;
+            if (isFirstTimerDepthsRow(row)) {
+              firstTimerRows.push(row);
+              if (firstTimerRows.length >= limit) break;
+            }
+          }
+        }
+      }
+
+      hasNext = Boolean(gqlRes.search?.pageInfo?.hasNextPage);
+      cursor = gqlRes.search?.pageInfo?.endCursor ?? null;
+
+      if (!cursor || rawNodes.length === 0) {
+        break;
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith(`${label}の GraphQL 取得に失敗しました:`)) {
+        throw err;
+      }
+      throw new Error(`${label}の GraphQL 取得に失敗しました: ${msg}`, {
+        cause: err,
+      });
+    }
+  }
+
+  return {
+    all: allRows.slice(0, limit),
+    firstTimer: firstTimerRows.slice(0, limit),
+  };
+}
+
+/**
+ * GraphQL API を用いてマージ正常底（健康的大底: 起票日時古い順 TOP 10）と
+ * 初回提出者の底（手直し込み・生涯マージ 0 回 TOP 10）を 1 回の走査で同時取得する。
+ */
+export async function fetchHealthyBottoms(
+  client: GitHubApiClient,
+  baseQuery: string,
+  limit = BOTTOM_LIST_LIMIT,
+  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+  mergedCountCache = new Map<string, number>(),
+): Promise<{ healthyBottom: DepthsRow[]; firstTimerBottom: DepthsRow[] }> {
+  const repository = extractRepositoryFromQuery(baseQuery);
+  const { all, firstTimer } = await collectBottomPairCandidates({
+    client,
+    query: `${baseQuery} sort:created-asc`,
+    repository,
+    limit,
+    maxTraverseNodes,
+    label: "健康的大底・初回提出者の底",
+    mergedCountCache,
+  });
+  return { healthyBottom: all, firstTimerBottom: firstTimer };
+}
+
+/**
+ * GraphQL API を用いてマージ前線（1コミット完走組: 起票日時古い順 TOP 10）の
+ * 全体および初回提出者限定リストを 1 回の走査で同時取得する。
+ */
+export async function fetchSingleCommitBottoms(
+  client: GitHubApiClient,
+  baseQuery: string,
+  limit = BOTTOM_LIST_LIMIT,
+  maxTraverseNodes = FIRST_TIMER_MAX_NODES,
+  mergedCountCache = new Map<string, number>(),
+): Promise<{ singleCommitBottom: DepthsRow[]; firstTimerSingleCommitBottom: DepthsRow[] }> {
+  const repository = extractRepositoryFromQuery(baseQuery);
+  const { all, firstTimer } = await collectBottomPairCandidates({
+    client,
+    query: `${baseQuery} sort:created-asc`,
+    repository,
+    limit,
+    maxTraverseNodes,
+    label: "マージ前線（1コミット完走組）",
+    mergedCountCache,
+    filterNode: isStaleCandidate,
+  });
+  return { singleCommitBottom: all, firstTimerSingleCommitBottom: firstTimer };
+}
+
+/**
+ * GraphQL API を用いて更新停止最古（Stale Bottom: 1コミット限定・更新日時古い順）を取得する。
  * `authorAssociation === "NONE"` の行については生涯マージ数を照会し、`AuthorMergedCount` に記録する。
  */
 export async function fetchStaleBottom(
@@ -170,33 +390,12 @@ export async function fetchStaleBottom(
     label: "優等生の底",
     filterNodes: (nodes) => nodes.filter(isStaleCandidate),
   });
-  const sorted = rows.slice(0, limit);
-
-  const noneAuthors = sorted
-    .filter((row) => row.AuthorAssociation === "NONE" && Boolean(row.Author))
-    .map((row) => row.Author as string);
-
-  if (noneAuthors.length > 0 && repository) {
-    try {
-      await resolveAuthorMergedCounts(
-        repository,
-        noneAuthors,
-        (query) => client.graphql<Record<string, { issueCount?: number } | undefined>>(query, {}),
-        { batchSize: AUTHOR_MERGED_BATCH_SIZE, cache: mergedCountCache },
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`優等生の底の GraphQL 取得に失敗しました: ${msg}`, {
-        cause: err,
-      });
-    }
-  }
-
-  return sorted.map((row) => {
-    if (row.AuthorAssociation === "NONE" && row.Author && mergedCountCache.has(row.Author)) {
-      return { ...row, AuthorMergedCount: mergedCountCache.get(row.Author) };
-    }
-    return row;
+  return attachAuthorMergedCounts({
+    client,
+    repository,
+    rows: rows.slice(0, limit),
+    mergedCountCache,
+    label: "優等生の底",
   });
 }
 
@@ -263,8 +462,10 @@ export const INTERVENTION_BATCH_SIZE = 15;
 
 export interface InterventionFrontiersResult {
   unreviewedBottom: DepthsRow[];
+  firstTimerUnreviewedBottom: DepthsRow[];
   intervenedBottom: DepthsRow[];
   unreviewedTruncated: boolean;
+  firstTimerUnreviewedTruncated: boolean;
   intervenedTruncated: boolean;
 }
 
@@ -316,25 +517,27 @@ export async function fetchInterventionFrontiers(
   limit = STALE_BOTTOM_LIMIT,
   maxTraverseNodes = FIRST_TIMER_MAX_NODES,
   batchSize = INTERVENTION_BATCH_SIZE,
+  mergedCountCache = new Map<string, number>(),
 ): Promise<InterventionFrontiersResult> {
-  const { owner, name } = parseRepository(
-    extractRepositoryFromQuery(baseQuery) ?? DEFAULT_REPOSITORY,
-  );
+  const repository = extractRepositoryFromQuery(baseQuery) ?? DEFAULT_REPOSITORY;
+  const { owner, name } = parseRepository(repository);
   let cursor: string | null = null;
   let hasNext = true;
   let traversedCount = 0;
   let reachedNaturalEnd = false;
   const unreviewedBottom: DepthsRow[] = [];
+  const firstTimerUnreviewedBottom: DepthsRow[] = [];
   const intervenedBottom: DepthsRow[] = [];
   const query = `${baseQuery} sort:created-asc`;
   const graphqlInvoker = <T = unknown>(q: string, vars?: Record<string, unknown>) =>
     client.graphql<T>(q, vars);
 
-  while (
-    hasNext &&
-    traversedCount < maxTraverseNodes &&
-    (unreviewedBottom.length < limit || intervenedBottom.length < limit)
-  ) {
+  const isDone = (): boolean =>
+    unreviewedBottom.length >= limit &&
+    firstTimerUnreviewedBottom.length >= limit &&
+    intervenedBottom.length >= limit;
+
+  while (hasNext && traversedCount < maxTraverseNodes && !isDone()) {
     const fetchCount = Math.min(FIRST_TIMER_PAGE_SIZE, maxTraverseNodes - traversedCount);
     try {
       const searchRes: GraphQLSearchNumbersResponse =
@@ -351,11 +554,12 @@ export async function fetchInterventionFrontiers(
         .filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0);
 
       for (let i = 0; i < numbers.length; i += batchSize) {
-        if (unreviewedBottom.length >= limit && intervenedBottom.length >= limit) {
+        if (isDone()) {
           break;
         }
         const chunk = numbers.slice(i, i + batchSize);
         const batchNodes = await fetchInterventionBatchNodes({ client, owner, name, chunk });
+        const batchUnreviewed: DepthsRow[] = [];
         for (const prNode of batchNodes) {
           const { node: resolvedNode, summary } = await resolvePrInterventionWithPaging(
             graphqlInvoker,
@@ -366,16 +570,32 @@ export async function fetchInterventionFrontiers(
           const row = formatGraphQLDepthsRow(resolvedNode, summary);
 
           if (!summary.Intervened) {
-            if (unreviewedBottom.length < limit) {
-              unreviewedBottom.push(row);
-            }
+            batchUnreviewed.push(row);
           } else if (intervenedBottom.length < limit) {
             intervenedBottom.push(row);
           }
+        }
 
-          if (unreviewedBottom.length >= limit && intervenedBottom.length >= limit) {
-            break;
+        if (batchUnreviewed.length > 0) {
+          const enrichedUnreviewed = await attachAuthorMergedCounts({
+            client,
+            repository,
+            rows: batchUnreviewed,
+            mergedCountCache,
+            label: "未レビュー前線・介入済み前線",
+          });
+          for (const row of enrichedUnreviewed) {
+            if (unreviewedBottom.length < limit) {
+              unreviewedBottom.push(row);
+            }
+            if (firstTimerUnreviewedBottom.length < limit && isFirstTimerDepthsRow(row)) {
+              firstTimerUnreviewedBottom.push(row);
+            }
           }
+        }
+
+        if (isDone()) {
+          break;
         }
       }
 
@@ -388,6 +608,9 @@ export async function fetchInterventionFrontiers(
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith("未レビュー前線・介入済み前線の GraphQL 取得に失敗しました:")) {
+        throw err;
+      }
       throw new Error(`未レビュー前線・介入済み前線の GraphQL 取得に失敗しました: ${msg}`, {
         cause: err,
       });
@@ -396,8 +619,10 @@ export async function fetchInterventionFrontiers(
 
   return {
     unreviewedBottom: unreviewedBottom.slice(0, limit),
+    firstTimerUnreviewedBottom: firstTimerUnreviewedBottom.slice(0, limit),
     intervenedBottom: intervenedBottom.slice(0, limit),
     unreviewedTruncated: !reachedNaturalEnd && unreviewedBottom.length < limit,
+    firstTimerUnreviewedTruncated: !reachedNaturalEnd && firstTimerUnreviewedBottom.length < limit,
     intervenedTruncated: !reachedNaturalEnd && intervenedBottom.length < limit,
   };
 }
@@ -531,6 +756,7 @@ function toFirstReviewCohortCandidate(
   node: GraphQLPullRequestNode & GraphQLPrNode,
   summary: PrInterventionSummary,
   state: "OPEN" | "MERGED",
+  authorMergedCount?: number,
 ): FirstReviewCohortCandidate {
   return {
     number: node.number,
@@ -538,6 +764,8 @@ function toFirstReviewCohortCandidate(
     url: node.url,
     state,
     author: node.author?.login,
+    ...(node.authorAssociation ? { authorAssociation: node.authorAssociation } : {}),
+    ...(authorMergedCount !== undefined ? { authorMergedCount } : {}),
     commitCount: node.commits?.totalCount,
     createdAt: node.createdAt,
     ...(state === "MERGED" ? { mergedAt: node.mergedAt ?? null } : {}),
@@ -643,8 +871,9 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       );
       for (const candidate of openIntervenedCandidates) {
         if (!candidate.author) continue;
-        if ((mergedCountCache.get(candidate.author) ?? 0) === 0) {
-          candidates.push(candidate);
+        const mergedCount = mergedCountCache.get(candidate.author) ?? 0;
+        if (mergedCount === 0) {
+          candidates.push({ ...candidate, authorMergedCount: mergedCount });
         }
       }
     }
@@ -712,7 +941,10 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
     for (const { node, summary } of resolvedMergedNodes) {
       if (!summary.FirstHumanInterventionAt) continue;
       if (cachedFirstTimerSet.has(node.number)) {
-        candidates.push(toFirstReviewCohortCandidate(node, summary, "MERGED"));
+        const cachedCount = node.author?.login
+          ? mergedCountCache.get(node.author.login)
+          : undefined;
+        candidates.push(toFirstReviewCohortCandidate(node, summary, "MERGED", cachedCount));
         continue;
       }
       if (!isTimestampWithinWindow(summary.FirstHumanInterventionAt, windowStartMs, nowMs)) {
@@ -734,8 +966,9 @@ export async function fetchFirstReviewMainstreamFrontier(params: {
       for (const candidate of uncachedMergedIntervened) {
         if (!candidate.author) continue;
         // 既にマージ済みの初回 PR なので累計マージ数は 1 件以下（単発マージ）のみ許容
-        if ((mergedCountCache.get(candidate.author) ?? 0) <= 1) {
-          candidates.push(candidate);
+        const mergedCount = mergedCountCache.get(candidate.author) ?? 0;
+        if (mergedCount <= 1) {
+          candidates.push({ ...candidate, authorMergedCount: mergedCount });
         }
       }
     }
@@ -858,19 +1091,33 @@ export async function runExploreDepths(
     log("");
   }
 
-  // 1. 健康的な大底（Healthy Bottom）
   const healthyBase = buildHealthyBaseQuery(options.repository);
-  const healthyItems = await client.searchIssues(healthyBase, "created", "asc", 3);
-  const healthyBottom = healthyItems.map(formatDepthsRow);
+  const mergedCountCache = new Map<string, number>();
+
+  // 1. マージ正常底（健康的大底 TOP 10）＋ 初回提出者の底（TOP 10）を GraphQL で同時取得
+  const { healthyBottom, firstTimerBottom } = await fetchHealthyBottoms(
+    client,
+    healthyBase,
+    BOTTOM_LIST_LIMIT,
+    FIRST_TIMER_MAX_NODES,
+    mergedCountCache,
+  );
 
   // 2. 真の大底（Absolute Bottom）
   const absoluteBase = buildAbsoluteBaseQuery(options.repository);
   const absoluteItems = await client.searchIssues(absoluteBase, "created", "asc", 3);
   const absoluteBottom = absoluteItems.map(formatDepthsRow);
 
-  const mergedCountCache = new Map<string, number>();
+  // 3A. マージ前線（1コミット完走組・起票日時古い順 TOP 10: 全体 ＋ 初回提出者のみ）
+  const { singleCommitBottom, firstTimerSingleCommitBottom } = await fetchSingleCommitBottoms(
+    client,
+    healthyBase,
+    BOTTOM_LIST_LIMIT,
+    FIRST_TIMER_MAX_NODES,
+    mergedCountCache,
+  );
 
-  // 3. 優等生の底（Stale Bottom）: 指摘なく健康な1コミット限定 PR の中で更新日時が古い先頭
+  // 3B. 更新停止最古（Stale Bottom: 1コミット限定・更新日時古い順、後方互換・補助参照用）
   const staleBottom = await fetchStaleBottom(
     client,
     healthyBase,
@@ -879,23 +1126,22 @@ export async function runExploreDepths(
     mergedCountCache,
   );
 
-  // 4. 初回提出者の底（First-Timer Bottom）: 初回提出者（NONE・生涯マージ 0 回）の健康な PR 全体（手直し込み・起票日時順）
-  const firstTimerBottom = await fetchFirstTimerBottom(
+  // 5. 未レビュー（完全未着手）前線（全体 ＋ 初回提出者のみ）／介入済み前線（起票日時順）
+  const {
+    unreviewedBottom,
+    firstTimerUnreviewedBottom,
+    intervenedBottom,
+    unreviewedTruncated,
+    firstTimerUnreviewedTruncated,
+    intervenedTruncated,
+  } = await fetchInterventionFrontiers(
     client,
     healthyBase,
     STALE_BOTTOM_LIMIT,
     FIRST_TIMER_MAX_NODES,
+    INTERVENTION_BATCH_SIZE,
     mergedCountCache,
   );
-
-  // 5. 未レビュー（完全未着手）前線／レビュー・介入済み前線（健康な待機 PR を 2 段階判定で分離・起票日時順）
-  const { unreviewedBottom, intervenedBottom, unreviewedTruncated, intervenedTruncated } =
-    await fetchInterventionFrontiers(
-      client,
-      healthyBase,
-      STALE_BOTTOM_LIMIT,
-      FIRST_TIMER_MAX_NODES,
-    );
 
   // 6. 特急レーン（Express Lane）
   let expressBottom: DepthsRow[] = [];
@@ -1010,11 +1256,15 @@ export async function runExploreDepths(
     targetPr: targetInfo,
     healthyBottom,
     absoluteBottom,
+    singleCommitBottom,
+    firstTimerSingleCommitBottom,
     staleBottom,
     firstTimerBottom,
     unreviewedBottom,
+    firstTimerUnreviewedBottom,
     intervenedBottom,
     unreviewedTruncated,
+    firstTimerUnreviewedTruncated,
     intervenedTruncated,
     firstReviewFrontier,
     expressLane: expressBottom,
