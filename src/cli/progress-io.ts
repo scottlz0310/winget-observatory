@@ -15,7 +15,29 @@ import type {
   ProgressSnapshot,
 } from "../models/progress";
 import type { SampleCacheEntry } from "../models/sample-cache";
-import type { ProgressCliOptions } from "./progress";
+
+export interface ProgressCliOptions {
+  targetPr: number;
+  repository: string;
+  lookbackDays: number;
+  /** 初回提出者コホートの集計窓（日。省略時は 90） */
+  firstTimerLookbackDays?: number;
+  /** 1 回の実行で新規に取得するマージ済み PR の上限（キャッシュ済みの分は数えない） */
+  fetchBudget: number;
+  fetchLimit: number;
+  /** 軽量メタデータバッチで中間世代を段階更新する上限件数（省略時は DEFAULT_METADATA_REFRESH_BUDGET、0 で無効） */
+  metadataRefreshBudget?: number;
+  /** キャッシュの保持日数（MergedAt TTL、省略時は DEFAULT_SAMPLE_CACHE_RETENTION_DAYS、0 で無効） */
+  cacheRetentionDays?: number;
+  /** マージ済み PR のサンプルキャッシュ（JSONL）。省略時はキャッシュを使わない */
+  cachePath?: string;
+  logPath?: string;
+  snapshotPath?: string;
+  noLog: boolean;
+  asJson: boolean;
+  /** テスト用等で基準時刻を固定する場合に指定 */
+  now?: Date;
+}
 
 export function readSampleCache(path: string): SampleCacheEntry[] {
   if (!existsSync(path)) return [];

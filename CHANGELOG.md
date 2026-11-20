@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 肥大化していたテストファイル上位 5 本の関心事別分割および循環インポート検知テストの追加（#134 Step 4/4）:
+  - `test/cli/progress.test.ts` を `test/cli/progress.test.ts`（CLI 引数・基本フロー・エラー伝播）、`test/cli/progress-rivals.test.ts`（ライバル PR・実績比較・初回コホート分離・日付窓スライス・1,000 件二分走査）、`test/cli/progress-samples.test.ts`（キャッシュ再評価・自己修復パイプライン）の 3 ファイルへ分割
+  - `test/cli/explore-depths.test.ts` を `test/cli/explore-depths.test.ts`（CLI・主戦場ライン・互換 re-export）、`test/cli/explore-depths-bottoms.test.ts`（初回提出者の底・2×2 GraphQL 統一底走査）、`test/cli/explore-depths-intervention.test.ts`（未レビュー前線・介入済み前線 2 段階走査）の 3 ファイルへ分割
+  - `test/api/github.test.ts` を `test/api/github.test.ts`（検索・PR 詳細・タイムライン取得）と `test/api/github-graphql-retry.test.ts`（GraphQL リトライ・バックオフ・レート制限・互換 re-export）の 2 ファイルへ分割
+  - `test/build-pages.test.ts` を `test/build-pages.test.ts`（ダッシュボード基本生成・予想・比較・初回コホート UX）と `test/build-pages-matrix.test.ts`（2×2 マトリクス・主戦場ライン・最速ランキング）の 2 ファイルへ分割
+  - `test/domain/sample-collector.test.ts` を `test/domain/sample-collector.test.ts`（サンプル収集オーケストレーション）と `test/domain/sample-metadata-refresh.test.ts`（中間世代メタデータ段階補完）の 2 ファイルへ分割
+  - `test/architecture.test.ts`, `src/domain/sample-metadata-refresh.ts`, `src/cli/progress-io.ts`, `src/cli/progress.ts`: `src/` および `scripts/` 配下の全 TypeScript モジュール間の循環インポート不在および `src/` から `scripts/` への逆方向参照禁止を検証するアーキテクチャ境界テストを追加し、型インポートの相互参照 2 箇所（`sample-collector.ts` ⇄ `sample-metadata-refresh.ts`、`progress.ts` ⇄ `progress-io.ts`）を単方向へ整理
 - `scripts/pages/sections/depths-and-history.ts`, `scripts/pages/sections/stats-and-samples.ts` の責務分割（#133 Step 3/4）:
   - `scripts/pages/sections/waitline-matrix.ts`: `scripts/pages/sections/depths-and-history.ts` から待機ライン 2×2 マトリクス（メンテナ初動・最終マージ 4 象限、全体／初回提出者トグル、旧スナップショット互換表示）の描画関数 `renderWaitlineMatrixSection` を分離（`depths-and-history.ts` からの re-export を維持）
   - `scripts/pages/sections/samples-and-ranking.ts`: `scripts/pages/sections/stats-and-samples.ts` から初回提出者 最速マージランキング（`renderFirstTimerFastestRankingSection`）、比較サンプル一覧・通過ペースサマリー・3種インライン切替（`renderSamplesSection`, `summarizeRecentSamplesPace`, `formatCreatedToMergedRange`, `formatSamplePackageName`）を分離（`stats-and-samples.ts` からの re-export を維持）
