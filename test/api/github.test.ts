@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   calculateBackoffDelay,
   computeRetryMinDelayMs,
+  DEFAULT_MAX_INTERVENTION_EXTRA_PAGES,
   GET_PULL_REQUEST_DETAILS_QUERY,
   GET_PULL_REQUEST_TIMELINE_QUERY,
   GET_PULL_REQUEST_VIEW_QUERY,
@@ -27,6 +28,10 @@ import {
   SEARCH_ISSUES_QUERY as DIRECT_SEARCH_ISSUES_QUERY,
   FIRST_TIMER_GRAPHQL_QUERY,
 } from "../../src/api/graphql-queries";
+import {
+  DEFAULT_MAX_INTERVENTION_EXTRA_PAGES as DIRECT_DEFAULT_MAX_INTERVENTION_EXTRA_PAGES,
+  resolvePrInterventionWithPaging as directResolvePrInterventionWithPaging,
+} from "../../src/api/intervention-paging";
 import {
   RETRYABLE_STATUS_CODES as DIRECT_RETRYABLE_STATUS_CODES,
   GitHubApiError as DirectGitHubApiError,
@@ -2365,6 +2370,10 @@ describe("API: GitHubApiClient", () => {
       expect(GitHubApiError).toBe(DirectGitHubApiError);
       expect(GitHubGraphQLError).toBe(DirectGitHubGraphQLError);
       expect(isPrNotFoundGraphQLError).toBe(directIsPrNotFoundGraphQLError);
+      expect(DEFAULT_MAX_INTERVENTION_EXTRA_PAGES).toBe(
+        DIRECT_DEFAULT_MAX_INTERVENTION_EXTRA_PAGES,
+      );
+      expect(resolvePrInterventionWithPaging).toBe(directResolvePrInterventionWithPaging);
     });
   });
 });
