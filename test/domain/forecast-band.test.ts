@@ -123,14 +123,11 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
     });
     const band = calculateForecastBand(source);
 
-    // 前線: 初回 P50 (残り約10.2日) 〜 優等生の底 (残り約19.6日)
+    // 前線: 初回 P50 (残り約10.2日) のみに統一（1コミット限定は廃止）
     expect(band.front).not.toBeNull();
-    expect(band.front?.estimates.map((e) => e.key)).toEqual([
-      "first-timer:p50",
-      "stale-bottom:steady",
-    ]);
+    expect(band.front?.estimates.map((e) => e.key)).toEqual(["first-timer:p50"]);
     expect(band.front?.etaDays).toBeCloseTo(10.2, 1);
-    expect(band.front?.range.maxDays).toBeCloseTo(19.6, 1);
+    expect(band.front?.range.maxDays).toBeCloseTo(10.2, 1);
 
     // 本命中央値: creation-order:median (~17.6d), first-timer:p75 (~18.3d), rank-velocity (~21.0d), mainstream-steady (~24.2d)
     expect(band.mainstream).not.toBeNull();
@@ -151,8 +148,6 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
     expect(band.bottom?.etaDays).toBeCloseTo(42.0, 1);
     expect(band.snapshot.healthyBottomPr).toBe(436234);
     expect(band.snapshot.healthyBottomGapDays).toBeCloseTo(42.0, 1);
-    expect(band.snapshot.staleBottomPr).toBe(449390);
-    expect(band.snapshot.staleBottomGapDays).toBeCloseTo(19.6, 1);
 
     // 全体レンジ: 前線 (~10.2d) 〜 大底 (~42.0d)
     expect(band.overallRange?.minDays).toBeCloseTo(10.2, 1);
@@ -304,7 +299,7 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
     expect(band.overallRange).toBeNull();
   });
 
-  test("SingleCommitBottom が存在する場合は StaleBottom より優先して前線（stale-bottom:steady）を算出する", () => {
+  test("旧スナップショットに SingleCommitBottom / StaleBottom が残っていても前線には混入させず FirstTimerMedianDays のみで算出する", () => {
     const progress: Partial<ProgressSnapshot> = {
       Timestamp: new Date(T0).toISOString(),
       TargetPr: 464302,
@@ -349,11 +344,7 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
       ],
     };
 
-    const source = buildForecastBandSource({ progress, depths, history: [] });
-    expect(source.staleBottomPr).toBe(455000);
-    expect(source.staleBottomCreatedMs).toBe(Date.parse("2026-10-14T15:00:00Z"));
-    const band = calculateForecastBand(source);
-    expect(band.snapshot.staleBottomPr).toBe(455000);
-    expect(band.front?.estimates[0]?.key).toBe("stale-bottom:steady");
+    const band = calculateForecastBand(buildForecastBandSource({ progress, depths, history: [] }));
+    expect(band.front).toBeNull();
   });
 });

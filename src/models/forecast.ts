@@ -1,16 +1,8 @@
 /**
- * 待機ライン（前線・正常底・更新停止最古）の推移から基準 PR のマージ時期を予想するモデルの型定義。
+ * 待機ライン（前線・正常底）の推移から基準 PR のマージ時期を予想するモデルの型定義。
  */
 
-/** 更新停止最古（Stale Bottom: 更新が最古の健康な 1コミット PR）の 1 回分の観測 */
-export interface StaleFrontierSample {
-  /** 観測時刻（UTC ミリ秒） */
-  timestampMs: number;
-  /** 先頭 PR の番号 */
-  pr: number;
-  /** 先頭 PR の最終更新時刻（UTC ミリ秒） */
-  updatedMs: number;
-}
+import type { FirstReviewFrontierMode, PrInterventionSummary } from "./depths";
 
 /** 初回提出者の底の先頭（起票が最古の初回提出者 PR）の 1 回分の観測 */
 export interface FirstTimerFrontierSample {
@@ -32,19 +24,7 @@ export interface HealthyFrontierSample {
   createdMs: number;
 }
 
-/** マージ前線（1コミット完走組）の先頭（起票が最古の 1コミット健康体 PR）の 1 回分の観測（v5 以降） */
-export interface SingleCommitFrontierSample {
-  /** 観測時刻（UTC ミリ秒） */
-  timestampMs: number;
-  /** 先頭 PR の番号 */
-  pr: number;
-  /** 先頭 PR の起票時刻（UTC ミリ秒） */
-  createdMs: number;
-}
-
-import type { FirstReviewFrontierMode, PrInterventionSummary } from "./depths";
-
-/** 未レビュー（完全未着手）前線の先頭（人間レビュー・手動コメント・第三者アサインなし・起票が最古の健康な PR）の 1 回分の観測（旧 v3 用） */
+/** 未レビュー（完全未着手）正常底の先頭（起票が最古の健康な PR）の 1 回分の観測（旧 v3 用） */
 export interface UnreviewedFrontierSample {
   /** 観測時刻（UTC ミリ秒） */
   timestampMs: number;
@@ -69,16 +49,6 @@ export interface MainstreamFrontierSample {
   /** 指標モード識別子（旧未着手底との混在ガード用） */
   mode: FirstReviewFrontierMode;
 }
-
-export type ForecastUnavailableReason =
-  /** 先頭の観測が無い */
-  | "no-samples"
-  /** 基準 PR の更新時刻が不明 */
-  | "no-target"
-  /** 観測期間が短く速度を測れない */
-  | "insufficient-window"
-  /** 観測期間内に先頭が進んでいない（または後退した） */
-  | "no-progress";
 
 export type FirstReviewForecastStatus =
   | "no-samples"
@@ -114,25 +84,6 @@ export interface FirstReviewForecast {
   steadyEtaDays: number | null;
   /** 定常ペース（速度 1.0 日/日）仮定での到達目安日（UTC ミリ秒） */
   steadyDateMs: number | null;
-}
-
-export interface StaleFrontierForecast {
-  /** 最新の先頭 PR */
-  frontier: { pr: number; updatedMs: number; observedMs: number } | null;
-  /** 先頭の遅れ: 観測時刻 − 先頭の更新時刻（日） */
-  lagDays: number | null;
-  /** 基準 PR の更新時刻 − 先頭の更新時刻（日）。0 以下なら先頭が基準 PR に到達済み */
-  gapDays: number | null;
-  /** 定常待ち時間モデル: 先頭の遅れが一定（速度 1 日/日）と仮定した予想日数 */
-  steadyEtaDays: number | null;
-  /** 観測速度モデル: 先頭の更新時刻の進み（日/日）。測れない場合は null */
-  observedSpeed: number | null;
-  /** 観測速度モデルの予想日数 */
-  observedEtaDays: number | null;
-  /** 観測速度の算出に使った期間（時間） */
-  windowHours: number;
-  /** 観測速度が算出できない理由 */
-  observedUnavailable: ForecastUnavailableReason | null;
 }
 
 /**

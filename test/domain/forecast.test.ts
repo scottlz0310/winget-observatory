@@ -3,32 +3,19 @@ import { CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
 import {
   calculateFirstReviewForecast,
   calculateLifetimeForecast,
-  calculateStaleFrontierForecast,
   extractFirstTimerFrontierSamples,
   extractHealthyFrontierSamples,
   extractMainstreamFrontierSamples,
-  extractSingleCommitFrontierSamples,
-  extractStaleFrontierSamples,
   extractUnreviewedFrontierSamples,
   parseDepthsHistory,
 } from "../../src/domain/forecast";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "../../src/domain/intervention";
 import type { DepthsRow, DepthsSnapshot, FirstReviewFrontier } from "../../src/models/depths";
-import type { MainstreamFrontierSample, StaleFrontierSample } from "../../src/models/forecast";
+import type { MainstreamFrontierSample } from "../../src/models/forecast";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const T0 = Date.parse("2026-11-01T00:00:00Z");
-
-const sample = (
-  hoursFromT0: number,
-  frontierDaysBeforeT0: number,
-  pr = 1,
-): StaleFrontierSample => ({
-  timestampMs: T0 + hoursFromT0 * HOUR,
-  pr,
-  updatedMs: T0 - frontierDaysBeforeT0 * DAY,
-});
 
 const row = (number: number, updatedAt: string, createdAt = updatedAt): DepthsRow => ({
   PR: `#${number}`,
@@ -70,46 +57,6 @@ describe("Domain: parseDepthsHistory", () => {
   test("壊れた行は握りつぶさず行番号付きで例外にする", () => {
     const text = `${JSON.stringify(snapshot("2026-11-01T00:00:00Z", []))}\n{ broken\n`;
     expect(() => parseDepthsHistory(text)).toThrow("2 行目のパースに失敗しました");
-  });
-});
-
-describe("Domain: extractStaleFrontierSamples", () => {
-  test("遭難の底の先頭を時刻昇順で取り出し、空・不正な観測は除く", () => {
-    const samples = extractStaleFrontierSamples([
-      snapshot("2026-11-01T08:00:00Z", [row(20, "2026-10-10T00:00:00Z")]),
-      snapshot("2026-11-01T00:00:00Z", [row(10, "2026-10-09T00:00:00Z")]),
-      snapshot("2026-11-01T04:00:00Z", []),
-      snapshot("invalid", [row(30, "2026-10-11T00:00:00Z")]),
-      snapshot("2026-11-01T06:00:00Z", [row(40, "not-a-date")]),
-    ]);
-    expect(samples.map((s) => s.pr)).toEqual([10, 20]);
-  });
-
-  test("旧定義（DepthsVersion 未設定・旧版）と新定義が混在しても旧定義を除外し、条件切替を前線進行として速度計算しない", () => {
-    // 11/13 旧定義: 2コミットPR (更新 10/1)、11/14 新定義: 1コミットPR (更新 11/1)
-    const oldUnversioned = snapshot(
-      "2026-11-13T00:00:00Z",
-      [row(1001, "2026-10-01T00:00:00Z")],
-      null,
-    );
-    const oldV1 = snapshot("2026-11-13T12:00:00Z", [row(1002, "2026-10-02T00:00:00Z")], 1);
-    const newV2 = snapshot("2026-11-14T00:00:00Z", [row(2001, "2026-11-01T00:00:00Z")]);
-
-    const samples = extractStaleFrontierSamples([oldUnversioned, oldV1, newV2]);
-    expect(samples.map((s) => s.pr)).toEqual([2001]);
-
-    // 旧新混在で偽の速度 (31日/日など) が算出されないこと
-    const forecast = calculateStaleFrontierForecast(samples, Date.parse("2026-11-10T00:00:00Z"));
-    expect(forecast.observedSpeed).toBeNull();
-    expect(forecast.observedEtaDays).toBeNull();
-    expect(forecast.observedUnavailable).toBe("insufficient-window");
-  });
-
-  test("DepthsVersion=2 と 3 は優等生の底の定義が不変のため継続して両方抽出する", () => {
-    const v2 = snapshot("2026-11-15T00:00:00Z", [row(2001, "2026-11-01T00:00:00Z")], 2);
-    const v3 = snapshot("2026-11-16T00:00:00Z", [row(2002, "2026-11-02T00:00:00Z")], 3);
-    const samples = extractStaleFrontierSamples([v2, v3]);
-    expect(samples.map((s) => s.pr)).toEqual([2001, 2002]);
   });
 });
 
@@ -158,83 +105,6 @@ describe("Domain: extractFirstTimerFrontierSamples", () => {
     expect(samples.map((s) => s.pr)).toEqual([1001, 1002]);
     expect(samples[0].createdMs).toBe(Date.parse("2026-09-15T00:00:00Z"));
     expect(samples[1].createdMs).toBe(Date.parse("2026-09-20T00:00:00Z"));
-  });
-
-  test("extractSingleCommitFrontierSamples は DepthsVersion >= 5 の SingleCommitBottom[0].CreatedAt のみを抽出する", () => {
-    const v4 = snapshot("2026-11-01T00:00:00Z", [], 4);
-    v4.SingleCommitBottom = [row(2001, "2026-10-10T00:00:00Z", "2026-10-01T00:00:00Z")];
-    const v5 = snapshot("2026-11-02T00:00:00Z", [], 5);
-    v5.SingleCommitBottom = [row(2002, "2026-10-15T00:00:00Z", "2026-10-05T00:00:00Z")];
-
-    const samples = extractSingleCommitFrontierSamples([v4, v5]);
-    expect(samples.map((s) => s.pr)).toEqual([2002]);
-    expect(samples[0].createdMs).toBe(Date.parse("2026-10-05T00:00:00Z"));
-  });
-});
-
-describe("Domain: calculateStaleFrontierForecast", () => {
-  const target = T0 - 10 * DAY; // 基準 PR は先頭より 10 日新しい（先頭は 20 日前）
-
-  test("観測が無ければ算出不能", () => {
-    const result = calculateStaleFrontierForecast([], target);
-    expect(result.observedUnavailable).toBe("no-samples");
-    expect(result.steadyEtaDays).toBeNull();
-  });
-
-  test("基準 PR の更新時刻が不明なら先頭の遅れだけ返す", () => {
-    const result = calculateStaleFrontierForecast([sample(0, 20)], null);
-    expect(result.lagDays).toBe(20);
-    expect(result.observedUnavailable).toBe("no-target");
-    expect(result.steadyEtaDays).toBeNull();
-  });
-
-  test("定常待ち時間モデルは先頭と基準 PR の更新時刻の差を予想日数とする", () => {
-    const result = calculateStaleFrontierForecast([sample(0, 20)], target);
-    expect(result).toMatchObject({ lagDays: 20, gapDays: 10, steadyEtaDays: 10 });
-    expect(result.observedUnavailable).toBe("insufficient-window");
-  });
-
-  test.each([
-    // [観測列, 期待する速度, 期待する予想日数]
-    ["実時間と同じ速度（1 日/日）", [sample(0, 21), sample(24, 20)], 1, 10],
-    ["実時間の半分の速度", [sample(0, 20.5), sample(24, 20)], 0.5, 20],
-    ["実時間の 2 倍の速度", [sample(0, 22), sample(24, 20)], 2, 5],
-  ])("観測速度モデル: %s", (_name, samples, speed, eta) => {
-    const result = calculateStaleFrontierForecast(samples, target);
-    expect(result.observedSpeed).toBe(speed);
-    expect(result.observedEtaDays).toBe(eta);
-    expect(result.observedUnavailable).toBeNull();
-  });
-
-  test.each([
-    ["先頭が動いていない", [sample(0, 20, 5), sample(24, 20, 5)], 10],
-    ["先頭が後退した", [sample(0, 20), sample(24, 21)], 11],
-  ])("観測期間内に進みが無ければ観測速度モデルは算出不能（%s）", (_name, samples, steadyEta) => {
-    const result = calculateStaleFrontierForecast(samples, target);
-    expect(result.observedUnavailable).toBe("no-progress");
-    expect(result.observedEtaDays).toBeNull();
-    // 定常待ち時間モデルは速度に依存せず算出できる
-    expect(result.steadyEtaDays).toBe(steadyEta);
-  });
-
-  test("最小間隔（6 時間）未満の観測だけでは速度を測らない", () => {
-    const result = calculateStaleFrontierForecast([sample(0, 20.1), sample(5, 20)], target);
-    expect(result.observedUnavailable).toBe("insufficient-window");
-  });
-
-  test("速度を測る期間は windowHours 以内の最も古い観測を起点にする", () => {
-    // 100 時間前の観測は期間（72 時間）外。48 時間前を起点にする
-    const samples = [sample(0, 30), sample(52, 21), sample(100, 20)];
-    const result = calculateStaleFrontierForecast(samples, target, 72);
-    expect(result.windowHours).toBe(48);
-    expect(result.observedSpeed).toBe(0.5);
-  });
-
-  test("先頭が基準 PR に到達済みなら予想日数は 0", () => {
-    const result = calculateStaleFrontierForecast([sample(0, 11), sample(24, 9)], target);
-    expect(result.gapDays).toBe(-1);
-    expect(result.steadyEtaDays).toBe(0);
-    expect(result.observedEtaDays).toBe(0);
   });
 });
 

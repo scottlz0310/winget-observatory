@@ -196,8 +196,8 @@ describe("CLI: runRecordForecast", () => {
     expect(result.action).toBe("recorded");
     const [record] = lines();
     expect(record.Band).toBeDefined();
-    // 前線: 10-29 + 31日 = 11-29 (または staleBottom: 11-08 + 20日 = 11-28) -> 11-28
-    expect(record.Band.FrontDate.slice(0, 10)).toBe("2026-11-28");
+    // 前線: 10-29 + 31日 = 11-29 (first-timer:p50 のみに統一)
+    expect(record.Band.FrontDate.slice(0, 10)).toBe("2026-11-29");
     // 大底: 11-08 + (10-29 - 09-17 = 42日) = 12-20
     expect(record.Band.BottomDate.slice(0, 10)).toBe("2026-12-20");
     // 本命中央値バンドが記録されている

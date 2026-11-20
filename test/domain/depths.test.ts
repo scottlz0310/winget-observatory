@@ -13,7 +13,6 @@ import {
   getThirdPartyAssignees,
   isFirstTimerCandidate,
   isFirstTimerDepthsRow,
-  isStaleCandidate,
   summarizeAssigneeFrontier,
   truncateTitle,
 } from "../../src/domain/depths";
@@ -114,7 +113,6 @@ describe("Domain: depths logic", () => {
       targetPr: null,
       healthyBottom: [],
       absoluteBottom: [],
-      staleBottom: [],
       firstTimerBottom: [
         {
           PR: "#123",
@@ -218,14 +216,6 @@ describe("Domain: depths logic", () => {
 
       const multiCommitRow = formatGraphQLDepthsRow(sampleNodes[2]);
       expect(multiCommitRow.CommitCount).toBe(2);
-    });
-
-    test("isStaleCandidate は1コミット限定の健康体を判定する（常連含む）", () => {
-      expect(isStaleCandidate(sampleNodes[0])).toBe(true); // 1 commit, NONE
-      expect(isStaleCandidate(sampleNodes[1])).toBe(true); // 1 commit, CONTRIBUTOR（優等生の底は常連含む）
-      expect(isStaleCandidate(sampleNodes[2])).toBe(false); // 2 commits（1コミット限定のため除外）
-      expect(isStaleCandidate(sampleNodes[3])).toBe(true); // 1 commit, author null でも優等生としては許容
-      expect(isStaleCandidate(sampleNodes[4])).toBe(true);
     });
   });
 
@@ -401,8 +391,8 @@ describe("Domain: depths logic", () => {
       expect(isFirstTimerDepthsRow(row)).toBe(expected);
     });
 
-    test("CURRENT_DEPTHS_VERSION は 5 であり createDepthsSnapshot に v5 新フィールドが記録される", () => {
-      expect(CURRENT_DEPTHS_VERSION).toBe(5);
+    test("CURRENT_DEPTHS_VERSION は 6 であり createDepthsSnapshot に v6 フィールドが記録される（1コミット系は未出力）", () => {
+      expect(CURRENT_DEPTHS_VERSION).toBe(6);
       const dummyRow = formatDepthsRow({
         number: 1,
         title: "t",
@@ -416,16 +406,13 @@ describe("Domain: depths logic", () => {
         targetPr: null,
         healthyBottom: [dummyRow],
         absoluteBottom: [],
-        singleCommitBottom: [dummyRow],
-        firstTimerSingleCommitBottom: [dummyRow],
-        staleBottom: [dummyRow],
         firstTimerUnreviewedBottom: [dummyRow],
         firstTimerUnreviewedTruncated: true,
         expressLane: [],
       });
-      expect(snapshot.DepthsVersion).toBe(5);
-      expect(snapshot.SingleCommitBottom).toEqual([dummyRow]);
-      expect(snapshot.FirstTimerSingleCommitBottom).toEqual([dummyRow]);
+      expect(snapshot.DepthsVersion).toBe(6);
+      expect(snapshot.SingleCommitBottom).toBeUndefined();
+      expect(snapshot.StaleBottom).toBeUndefined();
       expect(snapshot.FirstTimerUnreviewedBottom).toEqual([dummyRow]);
       expect(snapshot.FirstTimerUnreviewedTruncated).toBe(true);
     });

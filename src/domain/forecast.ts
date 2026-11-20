@@ -7,32 +7,19 @@ import type { DepthsRow, DepthsSnapshot, PrInterventionSummary } from "../models
 import type {
   FirstReviewForecast,
   FirstTimerFrontierSample,
-  ForecastUnavailableReason,
   HealthyFrontierSample,
   LifetimeForecast,
   MainstreamFrontierSample,
-  SingleCommitFrontierSample,
-  StaleFrontierForecast,
-  StaleFrontierSample,
   UnreviewedFrontierSample,
 } from "../models/forecast";
-import { DAY_MS, HOUR_MS, round1 } from "./formatters";
+import { DAY_MS, round1 } from "./formatters";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "./intervention";
 
-/** 優等生の底・初回提出者の底の定義が現行と互換な最小バージョン（v2 以降で定義不変） */
-export const MIN_STALE_DEPTHS_VERSION = 2;
+/** 初回提出者の底の定義が現行と互換な最小バージョン（v2 以降で定義不変） */
+export const MIN_FIRST_TIMER_DEPTHS_VERSION = 2;
 
 /** 主戦場ライン（初回介入コホート中央値）の最小定義バージョン */
 export const MIN_MAINSTREAM_DEPTHS_VERSION = 4;
-
-/** マージ前線（1コミット完走組・起票日時順）の最小定義バージョン */
-export const MIN_SINGLE_COMMIT_DEPTHS_VERSION = 5;
-
-/** 速度を測るために必要な最小の観測間隔（これ未満は誤差が大きいため測らない） */
-export const MIN_WINDOW_HOURS = 6;
-
-/** 速度を測る観測期間の既定（更新停止最古の進みは断続的なため、長めに取る） */
-export const DEFAULT_WINDOW_HOURS = 72;
 
 /**
  * depths-history.jsonl（1 行 1 JSON、先頭に BOM があり得る）を DepthsSnapshot の配列にパースする。
@@ -81,30 +68,13 @@ function extractFrontierSamples<T extends { timestampMs: number }>(
 }
 
 /**
- * スナップショット列から、優等生の底の先頭（1コミット限定・更新が最古の健康な PR）の観測列を時刻昇順で取り出す。
- * 観測定義が異なる旧履歴（DepthsVersion 未設定・1）、優等生の底が空の観測、日時が不正な観測は除く。
- */
-export function extractStaleFrontierSamples(
-  snapshots: DepthsSnapshot[],
-  minDefinitionVersion = MIN_STALE_DEPTHS_VERSION,
-): StaleFrontierSample[] {
-  return extractFrontierSamples(
-    snapshots,
-    minDefinitionVersion,
-    (s) => s.StaleBottom?.[0],
-    (head) => head.UpdatedAt,
-    (timestampMs, pr, updatedMs) => ({ timestampMs, pr, updatedMs }),
-  );
-}
-
-/**
  * スナップショット列から、初回提出者の底の先頭（起票が最古の初回提出者 PR）の
  * 観測列を時刻昇順で取り出す。
  * 観測定義が異なる旧履歴（DepthsVersion 未設定・1）、未記録・空の観測、日時が不正な観測は除く。
  */
 export function extractFirstTimerFrontierSamples(
   snapshots: DepthsSnapshot[],
-  minDefinitionVersion = MIN_STALE_DEPTHS_VERSION,
+  minDefinitionVersion = MIN_FIRST_TIMER_DEPTHS_VERSION,
 ): FirstTimerFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
@@ -133,24 +103,7 @@ export function extractHealthyFrontierSamples(
 }
 
 /**
- * スナップショット列から、マージ前線（1コミット完走組・起票日時順）の先頭の
- * 観測列を時刻昇順で取り出す（v5 以降）。
- */
-export function extractSingleCommitFrontierSamples(
-  snapshots: DepthsSnapshot[],
-  minDefinitionVersion = MIN_SINGLE_COMMIT_DEPTHS_VERSION,
-): SingleCommitFrontierSample[] {
-  return extractFrontierSamples(
-    snapshots,
-    minDefinitionVersion,
-    (s) => s.SingleCommitBottom?.[0],
-    (head) => head.CreatedAt,
-    (timestampMs, pr, createdMs) => ({ timestampMs, pr, createdMs }),
-  );
-}
-
-/**
- * スナップショット列から、未レビュー（完全未着手）前線の先頭（人間レビュー・手動コメント・第三者アサインなし・起票が最古の健康な PR）の
+ * スナップショット列から、未レビュー（完全未着手）正常底の先頭（起票が最古の健康な PR）の
  * 観測列を時刻昇順で取り出す（v3 互換用）。
  */
 export function extractUnreviewedFrontierSamples(
@@ -194,139 +147,6 @@ export function extractMainstreamFrontierSamples(
     });
   }
   return samples.sort((a, b) => a.timestampMs - b.timestampMs);
-}
-
-interface FrontierVelocityMeasurement {
-  windowHours: number;
-  rawSpeed: number | null;
-  observedSpeed: number | null;
-  unavailableReason: ForecastUnavailableReason | null;
-}
-
-/**
- * 時刻昇順の前線サンプル列から、指定ウィンドウ内の先頭進行速度（日/日）を計測する共通ヘルパー。
- */
-function measureFrontierVelocity<T extends { timestampMs: number }>(
-  samples: T[],
-  getAnchorMs: (sample: T) => number,
-  windowHours: number,
-): FrontierVelocityMeasurement {
-  const latest = samples[samples.length - 1];
-  if (!latest) {
-    return {
-      windowHours: 0,
-      rawSpeed: null,
-      observedSpeed: null,
-      unavailableReason: "no-samples",
-    };
-  }
-
-  const windowStart = latest.timestampMs - windowHours * HOUR_MS;
-  const base = samples.find(
-    (s) =>
-      s.timestampMs >= windowStart &&
-      latest.timestampMs - s.timestampMs >= MIN_WINDOW_HOURS * HOUR_MS,
-  );
-
-  if (!base) {
-    return {
-      windowHours: 0,
-      rawSpeed: null,
-      observedSpeed: null,
-      unavailableReason: "insufficient-window",
-    };
-  }
-
-  const elapsedMs = latest.timestampMs - base.timestampMs;
-  const progressMs = getAnchorMs(latest) - getAnchorMs(base);
-  const measuredWindowHours = round1(elapsedMs / HOUR_MS);
-
-  if (progressMs <= 0) {
-    return {
-      windowHours: measuredWindowHours,
-      rawSpeed: null,
-      observedSpeed: null,
-      unavailableReason: "no-progress",
-    };
-  }
-
-  const rawSpeed = progressMs / elapsedMs;
-  return {
-    windowHours: measuredWindowHours,
-    rawSpeed,
-    observedSpeed: Math.round(rawSpeed * 100) / 100,
-    unavailableReason: null,
-  };
-}
-
-/**
- * 更新停止最古（Stale Bottom）の先頭の進みから、基準 PR が先頭に到達するまでの日数を予想する。
- *
- * - 定常待ち時間モデル: 先頭の遅れが一定（先頭の更新時刻が実時間と同じ速度で進む）と仮定する。
- * - 観測速度モデル: 履歴から先頭の更新時刻の進み（日/日）を実測して予想する。
- *
- * @param samples 先頭の観測列
- * @param targetUpdatedMs 基準 PR の最終更新時刻（UTC ミリ秒）。不明なら null
- * @param windowHours 速度を測る期間の上限（時間）
- */
-export function calculateStaleFrontierForecast(
-  samples: StaleFrontierSample[],
-  targetUpdatedMs: number | null,
-  windowHours = DEFAULT_WINDOW_HOURS,
-): StaleFrontierForecast {
-  const empty: StaleFrontierForecast = {
-    frontier: null,
-    lagDays: null,
-    gapDays: null,
-    steadyEtaDays: null,
-    observedSpeed: null,
-    observedEtaDays: null,
-    windowHours: 0,
-    observedUnavailable: "no-samples",
-  };
-
-  const latest = samples[samples.length - 1];
-  if (!latest) {
-    return empty;
-  }
-
-  const frontier = { pr: latest.pr, updatedMs: latest.updatedMs, observedMs: latest.timestampMs };
-  const lagDays = round1((latest.timestampMs - latest.updatedMs) / DAY_MS);
-
-  if (targetUpdatedMs === null || Number.isNaN(targetUpdatedMs)) {
-    return { ...empty, frontier, lagDays, observedUnavailable: "no-target" };
-  }
-
-  const gapMs = targetUpdatedMs - latest.updatedMs;
-  const gapDays = round1(gapMs / DAY_MS);
-  // 先頭が基準 PR に到達済みなら、予想日数は 0 とする
-  const steadyEtaDays = gapMs <= 0 ? 0 : round1(gapMs / DAY_MS);
-
-  const velocity = measureFrontierVelocity(samples, (s) => s.updatedMs, windowHours);
-
-  if (velocity.rawSpeed === null) {
-    return {
-      frontier,
-      lagDays,
-      gapDays,
-      steadyEtaDays,
-      observedSpeed: null,
-      observedEtaDays: null,
-      windowHours: velocity.windowHours,
-      observedUnavailable: velocity.unavailableReason,
-    };
-  }
-
-  return {
-    frontier,
-    lagDays,
-    gapDays,
-    steadyEtaDays,
-    observedSpeed: velocity.observedSpeed,
-    observedEtaDays: gapMs <= 0 ? 0 : round1(gapMs / DAY_MS / velocity.rawSpeed),
-    windowHours: velocity.windowHours,
-    observedUnavailable: null,
-  };
 }
 
 export interface FirstReviewForecastOptions {

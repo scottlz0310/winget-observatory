@@ -8,7 +8,6 @@ import type { ForecastComparison } from "./forecast-comparison";
 
 export type BandPointKey =
   | "first-timer:p50"
-  | "stale-bottom:steady"
   | "creation-order:median"
   | "first-timer:p75"
   | "rank-velocity"
@@ -68,9 +67,6 @@ export interface ForecastBandSnapshot {
   overallRange: ForecastBandRange | null;
   /** 現在の処理帯スナップショット */
   snapshot: {
-    staleBottomPr: number | null;
-    staleBottomCreatedMs: number | null;
-    staleBottomGapDays: number | null;
     healthyBottomPr: number | null;
     healthyBottomCreatedMs: number | null;
     healthyBottomGapDays: number | null;
