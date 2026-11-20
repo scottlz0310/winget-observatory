@@ -11,191 +11,31 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
 
-type Token =
-  | { type: "ident"; value: string }
-  | { type: "string"; value: string }
-  | { type: "punct"; value: string };
-
 const bunTranspiler = new Bun.Transpiler({ loader: "ts" });
 
 /**
- * TypeScript / JavaScript ソースを字句解析し、行コメント・ブロックコメント・正規表現リテラルを除外したトークン列を返す。
- * テンプレートリテラル補間 `${ ... }` はブレース深さスタック（templateDepthStack）によってメインループ内で再帰的にトークン化するため、
- * 補間内の文字列リテラル `"}"` やコメント内の `}` で補間が途中終了しない。
- */
-function tokenizeTypeScript(code: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-  const len = code.length;
-  let braceDepth = 0;
-  const templateDepthStack: number[] = [];
-
-  const canStartRegex = (): boolean => {
-    const prev = tokens[tokens.length - 1];
-    if (!prev) return true;
-    if (prev.type === "ident") {
-      return ["return", "throw", "case", "typeof", "void", "delete", "await", "yield"].includes(
-        prev.value,
-      );
-    }
-    if (prev.type === "punct") {
-      return ["(", "{", "[", "=", ":", ",", ";", "!", "&", "|", "?", "+", "-", "~", "^"].includes(
-        prev.value,
-      );
-    }
-    return false;
-  };
-
-  const scanTemplateChunk = (isStartOfTemplate: boolean): void => {
-    let value = "";
-    while (i < len) {
-      if (code[i] === "\\") {
-        value += code[i + 1] ?? "";
-        i += 2;
-        continue;
-      }
-      if (code[i] === "`") {
-        i++;
-        if (isStartOfTemplate) {
-          tokens.push({ type: "string", value });
-        }
-        return;
-      }
-      if (code[i] === "$" && code[i + 1] === "{") {
-        i += 2;
-        templateDepthStack.push(braceDepth);
-        tokens.push({ type: "punct", value: "${" });
-        return;
-      }
-      value += code[i];
-      i++;
-    }
-  };
-
-  while (i < len) {
-    const ch = code[i];
-
-    // 空白
-    if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") {
-      i++;
-      continue;
-    }
-
-    // 行コメント
-    if (ch === "/" && code[i + 1] === "/") {
-      i += 2;
-      while (i < len && code[i] !== "\n") i++;
-      continue;
-    }
-
-    // ブロックコメント
-    if (ch === "/" && code[i + 1] === "*") {
-      i += 2;
-      while (i < len && !(code[i] === "*" && code[i + 1] === "/")) i++;
-      i += 2;
-      continue;
-    }
-
-    // 正規表現リテラル
-    if (ch === "/" && canStartRegex()) {
-      i++;
-      let inCharClass = false;
-      while (i < len) {
-        if (code[i] === "\\") {
-          i += 2;
-          continue;
-        }
-        if (code[i] === "[") inCharClass = true;
-        else if (code[i] === "]") inCharClass = false;
-        else if (code[i] === "/" && !inCharClass) {
-          i++;
-          while (i < len && /[a-z]/i.test(code[i])) i++;
-          break;
-        } else if (code[i] === "\n") {
-          break;
-        }
-        i++;
-      }
-      tokens.push({ type: "punct", value: "/regex/" });
-      continue;
-    }
-
-    // シングルクォート / ダブルクォート文字列リテラル
-    if (ch === '"' || ch === "'") {
-      const quote = ch;
-      i++;
-      let value = "";
-      while (i < len && code[i] !== quote) {
-        if (code[i] === "\\") {
-          value += code[i + 1] ?? "";
-          i += 2;
-        } else {
-          value += code[i];
-          i++;
-        }
-      }
-      i++; // closing quote
-      tokens.push({ type: "string", value });
-      continue;
-    }
-
-    // テンプレートリテラル開始
-    if (ch === "`") {
-      i++;
-      scanTemplateChunk(true);
-      continue;
-    }
-
-    // ブレース深さ管理とテンプレート補間 `${ ... }` の終端復帰
-    if (ch === "{") {
-      braceDepth++;
-      tokens.push({ type: "punct", value: "{" });
-      i++;
-      continue;
-    }
-
-    if (ch === "}") {
-      if (
-        templateDepthStack.length > 0 &&
-        braceDepth === templateDepthStack[templateDepthStack.length - 1]
-      ) {
-        templateDepthStack.pop();
-        tokens.push({ type: "punct", value: "}" });
-        i++;
-        scanTemplateChunk(false);
-        continue;
-      }
-      if (braceDepth > 0) braceDepth--;
-      tokens.push({ type: "punct", value: "}" });
-      i++;
-      continue;
-    }
-
-    // 識別子 / キーワード
-    if (/[A-Za-z_$]/.test(ch)) {
-      let value = "";
-      while (i < len && /[A-Za-z0-9_$]/.test(code[i])) {
-        value += code[i];
-        i++;
-      }
-      tokens.push({ type: "ident", value });
-      continue;
-    }
-
-    // 記号・演算子
-    tokens.push({ type: "punct", value: ch });
-    i++;
-  }
-
-  return tokens;
-}
-
-/**
- * Bun.Transpiler.scanImports による AST スキャンと字句解析トークン列（import type / export type 含む）を併用し、
- * コメントや通常文字列リテラルを除外して静的 import / import type / export ... from / 動的 import("...") の指定子を抽出する。
+ * Bun.Transpiler.scanImports（Bun の TypeScript AST パーサ）のみを用いて依存モジュール指定子を抽出する。
+ * - 行コメント・ブロックコメント・文字列リテラル・制御ブロック直後の正規表現リテラル等はすべて Bun の構文解析によって除外される。
+ * - Bun.Transpiler が型消去で省略する `import type` / `export type` / `{ type ... }` については、
+ *   クォート種別と前後の構文境界を保ったまま `import "__type_probe_N__"` へ置換したコードを再度 `Bun.Transpiler.scanImports` に通し、
+ *   実際に AST 上で import/export 文として構文解析されたプローブのみを復元する（コメント・文字列・正規表現内の記述は AST 上で import 文にならないため無視される）。
  */
 function extractModuleSpecifiers(code: string): string[] {
-  const tokens = tokenizeTypeScript(code);
+  const probes = new Map<string, string>();
+  let probeSeq = 0;
+
+  const rewritten = code.replace(
+    /\b(import|export)\s+(type\s+(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|[A-Za-z_$][\w$]*|\{[\s\S]*?\})|\{[\s\S]*?\})\s+from\s+(["'])([^"'\r\n]+)\3/g,
+    (full, _kw: string, clause: string, quote: string, spec: string) => {
+      const hasTypeModifier =
+        /^type\b/.test(clause.trim()) || /[{,]\s*type\s+[A-Za-z_$]/.test(clause);
+      if (!hasTypeModifier) return full;
+      const id = `__type_probe_${probeSeq++}__`;
+      probes.set(id, spec);
+      return `import ${quote}${id}${quote}`;
+    },
+  );
+
   const specifiers: string[] = [];
   const seen = new Set<string>();
   const addSpecifier = (s: string): void => {
@@ -204,113 +44,16 @@ function extractModuleSpecifiers(code: string): string[] {
       specifiers.push(s);
     }
   };
-  const n = tokens.length;
-
-  const skipBraceBlock = (startIdx: number): number => {
-    if (tokens[startIdx]?.type !== "punct" || tokens[startIdx]?.value !== "{") {
-      return startIdx;
-    }
-    let depth = 1;
-    let idx = startIdx + 1;
-    while (idx < n && depth > 0) {
-      const t = tokens[idx];
-      if (t.type === "punct" && t.value === "{") depth++;
-      else if (t.type === "punct" && t.value === "}") depth--;
-      idx++;
-    }
-    return idx;
-  };
-
-  for (let i = 0; i < n; i++) {
-    const tok = tokens[i];
-    const prev = tokens[i - 1];
-    if (tok.type !== "ident") continue;
-    if (prev?.type === "punct" && prev.value === ".") continue;
-
-    if (tok.value === "import") {
-      const next = tokens[i + 1];
-      if (!next) continue;
-
-      // 1. 動的 import("specifier")
-      if (next.type === "punct" && next.value === "(") {
-        const arg = tokens[i + 2];
-        if (arg?.type === "string") {
-          addSpecifier(arg.value);
-        }
-        continue;
-      }
-
-      // 2. 副作用 import "specifier"
-      if (next.type === "string") {
-        addSpecifier(next.value);
-        continue;
-      }
-
-      // 3. 静的 import [type] <Clause> from "specifier"
-      let cursor = i + 1;
-      if (
-        tokens[cursor]?.type === "ident" &&
-        tokens[cursor]?.value === "type" &&
-        !(tokens[cursor + 1]?.type === "ident" && tokens[cursor + 1]?.value === "from") &&
-        !(tokens[cursor + 1]?.type === "punct" && tokens[cursor + 1]?.value === ",")
-      ) {
-        cursor++;
-      }
-
-      while (cursor < n) {
-        const c = tokens[cursor];
-        if (c.type === "punct" && c.value === "{") {
-          cursor = skipBraceBlock(cursor);
-          continue;
-        }
-        if (c.type === "ident" && c.value === "from" && tokens[cursor + 1]?.type === "string") {
-          addSpecifier((tokens[cursor + 1] as { type: "string"; value: string }).value);
-          break;
-        }
-        if (c.type === "punct" && (c.value === ";" || c.value === "=")) {
-          break;
-        }
-        cursor++;
-      }
-      continue;
-    }
-
-    if (tok.value === "export") {
-      let cursor = i + 1;
-      if (tokens[cursor]?.type === "ident" && tokens[cursor]?.value === "type") {
-        cursor++;
-      }
-
-      const clauseStart = tokens[cursor];
-      if (clauseStart?.type !== "punct") continue;
-
-      if (clauseStart.value === "{") {
-        cursor = skipBraceBlock(cursor);
-      } else if (clauseStart.value === "*") {
-        cursor++;
-        if (tokens[cursor]?.type === "ident" && tokens[cursor]?.value === "as") {
-          cursor += 2;
-        }
-      } else {
-        continue;
-      }
-
-      if (
-        tokens[cursor]?.type === "ident" &&
-        tokens[cursor]?.value === "from" &&
-        tokens[cursor + 1]?.type === "string"
-      ) {
-        addSpecifier((tokens[cursor + 1] as { type: "string"; value: string }).value);
-      }
-    }
-  }
 
   try {
+    for (const imp of bunTranspiler.scanImports(rewritten)) {
+      addSpecifier(probes.get(imp.path) ?? imp.path);
+    }
     for (const imp of bunTranspiler.scanImports(code)) {
       addSpecifier(imp.path);
     }
   } catch {
-    // 構文断片等で scanImports が失敗した場合はトークナイザ抽出結果を使用する
+    // 構文エラー時は空または抽出済み分を返す
   }
 
   return specifiers;
@@ -595,6 +338,15 @@ describe("Architecture Boundary Rules", () => {
       '{"}" + (await import("../scripts/b")).b}`;',
     ].join("");
     expect(findReverseScriptImports(interpolatedImportCode)).toEqual(["../scripts/b"]);
+
+    // 制御ブロック直後の正規表現リテラル (/import "..\/scripts\/b"/.exec(code)) を依存として誤検出しないこと
+    const regexAfterControlBlockCode = [
+      "export function matchImportPattern(code: string, enabled: boolean) {",
+      "  if (!enabled) { return null; }",
+      '  return /import "..\\/scripts\\/b"/.exec(code);',
+      "}",
+    ].join("\n");
+    expect(findReverseScriptImports(regexAfterControlBlockCode)).toEqual([]);
 
     const rootDir = resolve(".");
     const fileA = normalize(resolve(rootDir, "src/a.ts"));
