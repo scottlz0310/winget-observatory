@@ -590,9 +590,11 @@ describe("Architecture Boundary Rules", () => {
       "../scripts/b",
     ]);
     // テンプレート補間内の文字列に "}" が含まれていても補間が途中終了せず、後続の動的 import を検出できること
-    expect(
-      findReverseScriptImports('const s = `${"}" + (await import("../scripts/b")).b}`;'),
-    ).toEqual(["../scripts/b"]);
+    const interpolatedImportCode = [
+      "const s = `$",
+      '{"}" + (await import("../scripts/b")).b}`;',
+    ].join("");
+    expect(findReverseScriptImports(interpolatedImportCode)).toEqual(["../scripts/b"]);
 
     const rootDir = resolve(".");
     const fileA = normalize(resolve(rootDir, "src/a.ts"));
