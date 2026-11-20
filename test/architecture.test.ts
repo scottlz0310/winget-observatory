@@ -10,53 +10,53 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
+import { type Expression, parseSync, Visitor } from "oxc-parser";
 
-const bunTranspiler = new Bun.Transpiler({ loader: "ts" });
-
-/**
- * Bun.Transpiler.scanImports（Bun の TypeScript AST パーサ）のみを用いて依存モジュール指定子を抽出する。
- * - 行コメント・ブロックコメント・文字列リテラル・制御ブロック直後の正規表現リテラル等はすべて Bun の構文解析によって除外される。
- * - Bun.Transpiler が型消去で省略する `import type` / `export type` / `{ type ... }` については、
- *   クォート種別と前後の構文境界を保ったまま `import "__type_probe_N__"` へ置換したコードを再度 `Bun.Transpiler.scanImports` に通し、
- *   実際に AST 上で import/export 文として構文解析されたプローブのみを復元する（コメント・文字列・正規表現内の記述は AST 上で import 文にならないため無視される）。
- */
-function extractModuleSpecifiers(code: string): string[] {
-  const probes = new Map<string, string>();
-  let probeSeq = 0;
-
-  const rewritten = code.replace(
-    /\b(import|export)\s+(type\s+(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|[A-Za-z_$][\w$]*|\{[\s\S]*?\})|\{[\s\S]*?\})\s+from\s+(["'])([^"'\r\n]+)\3/g,
-    (full, _kw: string, clause: string, quote: string, spec: string) => {
-      const hasTypeModifier =
-        /^type\b/.test(clause.trim()) || /[{,]\s*type\s+[A-Za-z_$]/.test(clause);
-      if (!hasTypeModifier) return full;
-      const id = `__type_probe_${probeSeq++}__`;
-      probes.set(id, spec);
-      return `import ${quote}${id}${quote}`;
-    },
-  );
-
-  const specifiers: string[] = [];
-  const seen = new Set<string>();
-  const addSpecifier = (s: string): void => {
-    if (!seen.has(s)) {
-      seen.add(s);
-      specifiers.push(s);
-    }
-  };
-
-  try {
-    for (const imp of bunTranspiler.scanImports(rewritten)) {
-      addSpecifier(probes.get(imp.path) ?? imp.path);
-    }
-    for (const imp of bunTranspiler.scanImports(code)) {
-      addSpecifier(imp.path);
-    }
-  } catch {
-    // 構文エラー時は空または抽出済み分を返す
+function extractModuleSpecifiers(code: string, filename = "fixture.ts"): string[] {
+  const { program, errors } = parseSync(filename, code, { preserveParens: false });
+  if (errors.length > 0) {
+    const diagnostics = errors.map((error) => error.codeframe ?? error.message);
+    throw new Error(`依存関係を解析できません: ${filename}\n${diagnostics.join("\n")}`);
   }
 
-  return specifiers;
+  const specifiers = new Set<string>();
+  function addLiteralSpecifier(source: Expression): void {
+    if (source.type === "Literal" && typeof source.value === "string") {
+      specifiers.add(source.value);
+    } else if (source.type === "TemplateLiteral" && source.expressions.length === 0) {
+      const value = source.quasis[0]?.value.cooked;
+      if (typeof value === "string") specifiers.add(value);
+    }
+  }
+
+  new Visitor({
+    ImportDeclaration: ({ source }) => {
+      specifiers.add(source.value);
+    },
+    ExportNamedDeclaration: ({ source }) => {
+      if (source) specifiers.add(source.value);
+    },
+    ExportAllDeclaration: ({ source }) => {
+      specifiers.add(source.value);
+    },
+    ImportExpression: ({ source }) => addLiteralSpecifier(source),
+    TSExternalModuleReference: ({ expression }) => {
+      specifiers.add(expression.value);
+    },
+    CallExpression: ({ callee, arguments: args }) => {
+      const [source] = args;
+      if (
+        callee.type === "Identifier" &&
+        callee.name === "require" &&
+        source &&
+        source.type !== "SpreadElement"
+      ) {
+        addLiteralSpecifier(source);
+      }
+    },
+  }).visit(program);
+
+  return [...specifiers];
 }
 
 /**
@@ -140,7 +140,7 @@ function detectImportCycles(
   for (const file of allFiles) {
     const code = fileContents.get(file) ?? "";
     const deps = new Set<string>();
-    for (const specifier of extractModuleSpecifiers(code)) {
+    for (const specifier of extractModuleSpecifiers(code, file)) {
       const target = resolveImportTarget(file, specifier, fileSet, rootDir, allKnownFiles);
       if (target) {
         deps.add(target);
@@ -183,8 +183,10 @@ function detectImportCycles(
   return cycles;
 }
 
-function findReverseScriptImports(code: string): string[] {
-  return extractModuleSpecifiers(code).filter((spec) => /(?:^|\/)scripts(?:\/|$)/.test(spec));
+function findReverseScriptImports(code: string, filename?: string): string[] {
+  return extractModuleSpecifiers(code, filename).filter((spec) =>
+    /(?:^|\/)scripts(?:\/|$)/.test(spec),
+  );
 }
 
 describe("Architecture Boundary Rules", () => {
@@ -199,7 +201,7 @@ describe("Architecture Boundary Rules", () => {
       if (!file.endsWith(".ts")) continue;
       const code = readFileSync(join(domainDir, file), "utf-8");
 
-      for (const importPath of extractModuleSpecifiers(code)) {
+      for (const importPath of extractModuleSpecifiers(code, file)) {
         // ホワイトリスト: models への相対パス or 同一ドメイン内モジュールのみ許可
         const isAllowed =
           importPath.startsWith("../models") ||
@@ -228,7 +230,7 @@ describe("Architecture Boundary Rules", () => {
       const code = readFileSync(join(modelsDir, file), "utf-8");
 
       // domain, api, cli への参照を一切禁止
-      for (const spec of extractModuleSpecifiers(code)) {
+      for (const spec of extractModuleSpecifiers(code, file)) {
         expect(spec).not.toMatch(/(?:^|\/)(domain|api|cli)(?:\/|$)/);
       }
     }
@@ -278,7 +280,7 @@ describe("Architecture Boundary Rules", () => {
     const files = scanDir("src");
     for (const file of files) {
       const code = readFileSync(file, "utf-8");
-      expect(findReverseScriptImports(code)).toEqual([]);
+      expect(findReverseScriptImports(code, file)).toEqual([]);
     }
   });
 
@@ -307,6 +309,30 @@ describe("Architecture Boundary Rules", () => {
     }
 
     expect(detectImportCycles(fileContents, rootDir)).toEqual([]);
+  });
+
+  test.each([
+    'import type { 型 } from /* 型のみ参照 */ "../scripts/b";',
+    'export type { 型 } from /* 型のみ参照 */ "../scripts/b";',
+    'import { type 型 } from /* 型のみ参照 */ "../scripts/b";',
+    'export { type 型 } from /* 型のみ参照 */ "../scripts/b";',
+    'export type * from /* 型のみ参照 */ "../scripts/b";',
+  ])("型専用の逆参照を検出する: %s", (code) => {
+    expect(findReverseScriptImports(code)).toEqual(["../scripts/b"]);
+  });
+
+  test("shebang 付きのファイルでも動的 import と require を検出する", () => {
+    const code = [
+      "#!/usr/bin/env bun",
+      "const dynamic = import((`../scripts/dynamic`));",
+      'const required = require("../scripts/required");',
+      'import legacy = require("../scripts/legacy");',
+    ].join("\n");
+    expect(findReverseScriptImports(code)).toEqual([
+      "../scripts/dynamic",
+      "../scripts/required",
+      "../scripts/legacy",
+    ]);
   });
 
   test("extractModuleSpecifiers と detectImportCycles はコメント内の記述を無視し、動的 import および .js 拡張子指定の循環参照を検出する", () => {

@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `scripts/pages/sections/hero-and-kpi.ts`, `src/domain/forecast-band.ts`, `scripts/build-pages.ts`, `scripts/pages/types.ts`: ヒーローエリア 4 カード・全体レンジ表記・タイムラインマーカー・処理バンド内訳ラベル・統合時系列チャート右軸（マージ正常底・全体／初回＋初動正常底）を「前線／正常底」用語体系へ統一
   - `README.md`, `src/domain/forecast.ts`, `src/models/forecast.ts`: 残存していた旧称（「遭難の底」「優等生の底」「3 つの仮説」等）を 2×2 待機ライン体系へ統一
 
+### Fixed
+
+- アーキテクチャ境界テストで静的 import・export を構文木から抽出し、コメントを挟む型専用依存の見落としを修正（#134）。
+
 ## [0.6.0] - 2026-11-19
 
 ### Added
