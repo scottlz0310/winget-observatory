@@ -519,13 +519,29 @@ export function renderWaitlineMatrixSection(
 
   // ③ マージ前線（直近マージ実績: 全体は progress.Samples、初回提出者は FirstTimerSamples 優先）
   const mergedSamplesAll = progress?.Samples ?? [];
-  const mergedSamplesFt =
-    progress?.FirstTimerSamples !== undefined
-      ? progress.FirstTimerSamples
-      : mergedSamplesAll.filter((s) => s.IsFirstTimer === true);
   const hasRecordedProgress = progress !== null;
   const lookbackDays = progress?.LookbackDays ?? 30;
   const firstTimerLookbackDays = progress?.FirstTimerLookbackDays ?? lookbackDays;
+  let mergedSamplesFt: ProgressSnapshotSample[];
+  if (progress?.FirstTimerSamples !== undefined) {
+    mergedSamplesFt = progress.FirstTimerSamples;
+  } else {
+    const observedProgressMs = progress?.Timestamp ? Date.parse(progress.Timestamp) : Number.NaN;
+    if (Number.isFinite(observedProgressMs)) {
+      const ftWindowStartMs = observedProgressMs - firstTimerLookbackDays * DAY_MS;
+      mergedSamplesFt = mergedSamplesAll.filter((s) => {
+        if (s.IsFirstTimer !== true) return false;
+        const mergedMs = Date.parse(s.MergedAt);
+        return (
+          Number.isFinite(mergedMs) && mergedMs >= ftWindowStartMs && mergedMs <= observedProgressMs
+        );
+      });
+    } else if (firstTimerLookbackDays < lookbackDays) {
+      mergedSamplesFt = [];
+    } else {
+      mergedSamplesFt = mergedSamplesAll.filter((s) => s.IsFirstTimer === true);
+    }
+  }
 
   // ④ マージ正常底（健康的大底）
   const mergeBottomAll = depths?.HealthyBottom ?? [];

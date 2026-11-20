@@ -619,6 +619,45 @@ describe("generateDashboardHtml", () => {
       .split('data-matrix-view="first-timer"')[1];
     expect(legacyFt).toContain("過去 90 日・採用 1 件（一覧未保存）");
     expect(legacyFt).not.toContain("該当 0 件（過去 90 日）");
+
+    // 旧スナップショットで初回提出者窓（30日）が全体窓（90日）より短い場合、45日前の PR を期間外として除外し矛盾表示しない
+    const shorterFtWindowLegacyHtml = generateDashboardHtml({
+      progress: {
+        Timestamp: now.toISOString(),
+        LookbackDays: 90,
+        FirstTimerLookbackDays: 30,
+        SampleCount: 1,
+        FirstTimerSampleCount: 0,
+        TotalMedianDays: 35,
+        FirstTimerMedianDays: null,
+        Samples: [
+          {
+            Number: 445566,
+            Title: "New package: OlderWindow.FirstTimer version 1.0",
+            Relation: "older",
+            CommitCount: 1,
+            CreatedAt: created80DaysAgo,
+            LatestCommittedDate: created80DaysAgo,
+            ReadyAt: created80DaysAgo,
+            MergedAt: merged45DaysAgo,
+            TotalDays: 35,
+            TurnDays: 35,
+            ReadyDays: 35,
+            Author: "ft-45d",
+            IsFirstTimer: true,
+          },
+        ],
+      },
+      depths: null,
+      csvRows: [],
+    });
+    const shorterFtView = shorterFtWindowLegacyHtml
+      .split("🚀 マージ前線（直近マージ実績・早ければ）")[1]
+      .split("⚓ マージ正常底（健康的大底・遅くとも）")[0]
+      .split('data-matrix-view="first-timer"')[1];
+    expect(shorterFtView).toContain("該当 0 件（過去 30 日）");
+    expect(shorterFtView).not.toContain("#445566");
+    expect(shorterFtView).not.toContain("直近サンプル起票中央値:");
   });
 
   test("renderIntegratedForecastHero は TotalMedianDays 未算出でも最新マージサンプルがあればフォールバック表示する", () => {
