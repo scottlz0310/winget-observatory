@@ -15,6 +15,11 @@ import { generateDashboardHtml } from "../../scripts/pages/template";
 import { buildForecastBandSource, calculateForecastBand } from "../../src/domain/forecast-band";
 import { DAY_MS } from "../../src/domain/formatters";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "../../src/domain/intervention";
+import {
+  calculateProgressStats,
+  createProgressSnapshot,
+  partitionSamplesByWindow,
+} from "../../src/domain/progress";
 
 describe("scripts/pages/formatters", () => {
   test.each([
@@ -523,5 +528,130 @@ describe("generateDashboardHtml", () => {
       .split("</section>")[0];
     expect(singleSideSection).toContain("<svg ");
     expect(singleSideSection).toContain("🌱 マージ正常底（初回提出者のみ）起票経過");
+  });
+
+  test("マージ前線の初回提出者ビューは全体窓（30日）外・初回提出者窓（90日）内の採用例を FirstTimerSamples から描画し 0 件表示にならない", () => {
+    const now = new Date("2026-11-20T00:00:00Z");
+    const merged45DaysAgo = "2026-10-06T00:00:00Z";
+    const created80DaysAgo = "2026-09-01T00:00:00Z";
+    const partitioned = partitionSamplesByWindow({
+      samples: [
+        {
+          number: 445566,
+          title: "New package: OlderWindow.FirstTimer version 1.0",
+          createdAt: created80DaysAgo,
+          latestCommittedDate: created80DaysAgo,
+          commitCount: 1,
+          readyAt: created80DaysAgo,
+          mergedAt: merged45DaysAgo,
+          totalDays: 35,
+          turnDays: 35,
+          days: 35,
+          author: "ft-45d",
+          isFirstTimer: true,
+        },
+      ],
+      skippedCandidates: [],
+      now,
+      lookbackDays: 30,
+      firstTimerLookbackDays: 90,
+    });
+    const overallStats = calculateProgressStats(
+      partitioned.overallSamples,
+      partitioned.overallSkippedCount,
+    );
+    const ftStats = calculateProgressStats(partitioned.firstTimerSamples);
+    const progress = createProgressSnapshot({
+      now,
+      repository: "microsoft/winget-pkgs",
+      targetPr: 464302,
+      prTitle: "Target",
+      prUrl: "https://github.com/microsoft/winget-pkgs/pull/464302",
+      prState: "OPEN",
+      frontNumber: 430000,
+      frontCreatedAt: "2026-09-01 09:00",
+      activeAhead: 100,
+      totalAhead: 120,
+      behind: 10,
+      totalLifetimeDays: 20,
+      turnLatencyDays: 20,
+      waitDays: 20,
+      commitCount: 1,
+      stats: overallStats,
+      lookbackDays: 30,
+      skippedCount: partitioned.overallSkippedCount,
+      rivals: [],
+      samples: partitioned.overallSamples,
+      targetCreatedAt: new Date("2026-10-31T00:00:00Z"),
+      targetReadyAt: new Date("2026-10-31T00:00:00Z"),
+      firstTimerStats: ftStats,
+      firstTimerSampleCount: partitioned.firstTimerSamples.length,
+      firstTimerSamples: partitioned.firstTimerSamples,
+      firstTimerLookbackDays: 90,
+    });
+
+    expect(progress.Samples).toEqual([]);
+    expect(progress.FirstTimerSampleCount).toBe(1);
+    expect(progress.FirstTimerSamples?.map((s) => s.Number)).toEqual([445566]);
+
+    const html = generateDashboardHtml({ progress, depths: null, csvRows: [] });
+    const mergeFrontSection = html
+      .split("🚀 マージ前線（直近マージ実績・早ければ）")[1]
+      .split("⚓ マージ正常底（健康的大底・遅くとも）")[0];
+    const mergeFrontFt = mergeFrontSection.split('data-matrix-view="first-timer"')[1];
+
+    expect(mergeFrontFt).toContain("#445566");
+    expect(mergeFrontFt).toContain("直近 1 件表示（過去 90 日・採用 1 件）");
+    expect(mergeFrontFt).toContain("通算中央値: 35 日");
+    expect(mergeFrontFt).toContain("直近サンプル起票中央値: 2026-09-01 09:00");
+    expect(mergeFrontFt).not.toContain("該当 0 件（過去 90 日）");
+
+    // 旧スナップショット（FirstTimerSamples 未記録）でも採用件数 > 0 なら「該当 0 件」と矛盾表示しない
+    const legacyProgress = { ...progress, FirstTimerSamples: undefined };
+    const legacyHtml = generateDashboardHtml({
+      progress: legacyProgress,
+      depths: null,
+      csvRows: [],
+    });
+    const legacyFt = legacyHtml
+      .split("🚀 マージ前線（直近マージ実績・早ければ）")[1]
+      .split("⚓ マージ正常底（健康的大底・遅くとも）")[0]
+      .split('data-matrix-view="first-timer"')[1];
+    expect(legacyFt).toContain("過去 90 日・採用 1 件（一覧未保存）");
+    expect(legacyFt).not.toContain("該当 0 件（過去 90 日）");
+  });
+
+  test("renderIntegratedForecastHero は TotalMedianDays 未算出でも最新マージサンプルがあればフォールバック表示する", () => {
+    const band = calculateForecastBand(
+      buildForecastBandSource({ progress: null, depths: null, history: [] }),
+    );
+    const html = renderIntegratedForecastHero({
+      targetPrNum: 464302,
+      repo: "microsoft/winget-pkgs",
+      progress: {
+        LookbackDays: 30,
+        SampleCount: 1,
+        TotalMedianDays: null,
+        Samples: [
+          {
+            Number: 449999,
+            Title: "New package: Fallback.App version 1.0",
+            Relation: "older",
+            CommitCount: 1,
+            CreatedAt: "2026-10-01T00:00:00Z",
+            LatestCommittedDate: "2026-10-01T00:00:00Z",
+            ReadyAt: "2026-10-01T01:00:00Z",
+            MergedAt: "2026-11-18T00:00:00Z",
+            TotalDays: 48.0,
+            TurnDays: 48.0,
+            ReadyDays: 47.9,
+          },
+        ],
+      },
+      band,
+      timelineSvg: null,
+    });
+    expect(html).toContain("#449999");
+    expect(html).toContain("最新マージ（所要 48.0 日 / 採用 1 件）");
   });
 });

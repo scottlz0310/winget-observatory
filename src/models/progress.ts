@@ -264,6 +264,8 @@ export interface ProgressSnapshot {
   FirstTimerTurnP75Days?: number | null;
   /** 初回提出者サンプルの採用件数 */
   FirstTimerSampleCount?: number;
+  /** 初回提出者コホートの採用サンプル（マージ日時の新しい順、最大 30 件。初回提出者窓と整合） */
+  FirstTimerSamples?: ProgressSnapshotSample[];
 }
 
 export interface SearchPageInfo {

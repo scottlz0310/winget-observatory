@@ -395,12 +395,15 @@ function renderRecentMergedFrontierView(params: {
     badgeStyle,
   } = params;
   const items = samples.slice(0, RECENT_MERGED_FRONTIER_LIMIT);
+  const hasCountWithoutList = items.length === 0 && (sampleCount ?? 0) > 0;
   const badgeText =
     items.length > 0
       ? `直近 ${items.length} 件表示（過去 ${lookbackDays} 日・採用 ${sampleCount ?? items.length} 件）`
-      : hasRecordedProgress
-        ? `該当 0 件（過去 ${lookbackDays} 日）`
-        : "未観測";
+      : hasCountWithoutList
+        ? `過去 ${lookbackDays} 日・採用 ${sampleCount} 件（一覧未保存）`
+        : hasRecordedProgress
+          ? `該当 0 件（過去 ${lookbackDays} 日）`
+          : "未観測";
 
   const createdMsList = samples
     .map((s) => Date.parse(s.CreatedAt))
@@ -463,11 +466,13 @@ function renderRecentMergedFrontierView(params: {
           </table>
         </div>`
       : `<p style="color: var(--text-muted); font-size: 0.875rem;">${escapeHtml(
-          hasRecordedProgress
-            ? viewKey === "first-timer"
-              ? "直近マージ採用サンプル内に初回提出者の該当 PR はありません。"
-              : "直近マージ採用サンプルはありません。"
-            : "直近マージ実績のデータはまだありません。",
+          hasCountWithoutList
+            ? "旧スナップショットのため対象窓の専用サンプル一覧が未保存です（次回観測から表示されます）。"
+            : hasRecordedProgress
+              ? viewKey === "first-timer"
+                ? "直近マージ採用サンプル内に初回提出者の該当 PR はありません。"
+                : "直近マージ採用サンプルはありません。"
+              : "直近マージ実績のデータはまだありません。",
         )}</p>`;
 
   const hiddenStyle = viewKey === "first-timer" ? ' style="display: none;"' : "";
@@ -512,9 +517,12 @@ export function renderWaitlineMatrixSection(
     ? Boolean(depths?.FirstTimerUnreviewedTruncated)
     : Boolean(depths?.UnreviewedTruncated);
 
-  // ③ マージ前線（直近マージ実績: progress.Samples）
+  // ③ マージ前線（直近マージ実績: 全体は progress.Samples、初回提出者は FirstTimerSamples 優先）
   const mergedSamplesAll = progress?.Samples ?? [];
-  const mergedSamplesFt = mergedSamplesAll.filter((s) => s.IsFirstTimer === true);
+  const mergedSamplesFt =
+    progress?.FirstTimerSamples !== undefined
+      ? progress.FirstTimerSamples
+      : mergedSamplesAll.filter((s) => s.IsFirstTimer === true);
   const hasRecordedProgress = progress !== null;
   const lookbackDays = progress?.LookbackDays ?? 30;
   const firstTimerLookbackDays = progress?.FirstTimerLookbackDays ?? lookbackDays;
