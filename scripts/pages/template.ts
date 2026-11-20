@@ -22,7 +22,6 @@ import {
   renderExitBreakdownSection,
   renderForecastScoreSection,
   renderRecentHistorySection,
-  renderWaitlineMatrixSection,
 } from "./sections/depths-and-history";
 import {
   buildBandTimelineMarkers,
@@ -31,12 +30,15 @@ import {
   renderTriageFlowSection,
 } from "./sections/hero-and-kpi";
 import {
-  renderDurationStatsSection,
   renderFirstTimerFastestRankingSection,
+  renderSamplesSection,
+} from "./sections/samples-and-ranking";
+import {
+  renderDurationStatsSection,
   renderOvertakeSection,
   renderRivalsSection,
-  renderSamplesSection,
 } from "./sections/stats-and-samples";
+import { renderWaitlineMatrixSection } from "./sections/waitline-matrix";
 import { DASHBOARD_CSS } from "./styles";
 import type { DashboardRenderInput } from "./types";
 
