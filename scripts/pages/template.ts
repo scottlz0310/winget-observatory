@@ -18,12 +18,11 @@ import { scoreForecasts } from "../../src/domain/forecast-history";
 import { DAY_MS, formatHumanDays } from "../../src/domain/formatters";
 import { escapeHtml } from "./formatters";
 import {
-  renderBottomComparisonSection,
   renderBoundaryTableSection,
   renderExitBreakdownSection,
   renderForecastScoreSection,
-  renderInterventionFrontierComparisonSection,
   renderRecentHistorySection,
+  renderWaitlineMatrixSection,
 } from "./sections/depths-and-history";
 import {
   buildBandTimelineMarkers,
@@ -44,6 +43,28 @@ import type { DashboardRenderInput } from "./types";
 /** チャートに載せる観測の最大数（直近のものを使う） */
 const CHART_MAX_POINTS = 120;
 
+const CHART_FILTER_INLINE_SCRIPT = `<script>
+(() => {
+  for (const section of document.querySelectorAll("[data-chart-section]")) {
+    const buttons = section.querySelectorAll("[data-chart-filter]");
+    const views = section.querySelectorAll("[data-chart-view]");
+    for (const btn of buttons) {
+      btn.addEventListener("click", () => {
+        const mode = btn.getAttribute("data-chart-filter") || "all";
+        for (const b of buttons) {
+          const active = b === btn;
+          b.classList.toggle("is-active", active);
+          b.setAttribute("aria-pressed", active ? "true" : "false");
+        }
+        for (const v of views) {
+          v.style.display = v.getAttribute("data-chart-view") === mode ? "" : "none";
+        }
+      });
+    }
+  }
+})();
+</script>`;
+
 /** チャートを載せるカード。描画できるだけの観測が無いときは理由を示す */
 function renderChartCard(svg: string | null): string {
   return `<div class="card chart-card" style="margin-bottom: 1.5rem;">${
@@ -58,6 +79,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     depths,
     csvRows,
     forecastHistory = [],
+    healthyFrontierSamples = [],
     firstTimerFrontierSamples = [],
     mainstreamFrontierSamples = [],
     firstTimerFastestRanking,
@@ -91,7 +113,7 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
   const behindDeltaBadge = formatDeltaBadge(metrics.latestDelta.behindDelta);
 
   const chartRecords = historyRecords.slice(-CHART_MAX_POINTS);
-  const dualSeries: DualAxisSeries[] = [
+  const baseLeftSeries: DualAxisSeries[] = [
     {
       label: "実質待ち（更新順）",
       axis: "left",
@@ -109,37 +131,92 @@ export function generateDashboardHtml(input: DashboardRenderInput): string {
     },
   ];
 
-  if (firstTimerFrontierSamples.length > 0) {
-    dualSeries.push({
-      label: "🌱 初回提出者の底 起票からの経過",
-      axis: "right",
-      color: "var(--success)",
-      strokeWidth: 3,
-      points: firstTimerFrontierSamples
-        .slice(-CHART_MAX_POINTS)
-        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
-    });
-  }
+  const healthySeries: DualAxisSeries | null =
+    healthyFrontierSamples.length > 0
+      ? {
+          label: "⚓ マージ正常底（健康的大底）起票経過",
+          axis: "right",
+          color: "var(--warning)",
+          strokeWidth: 2.5,
+          points: healthyFrontierSamples
+            .slice(-CHART_MAX_POINTS)
+            .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
+        }
+      : null;
 
-  if (mainstreamFrontierSamples.length > 0) {
-    dualSeries.push({
-      label: "👀 主戦場ライン 起票経過（7日初回介入中央値）",
-      axis: "right",
-      color: "#0ea5e9",
-      strokeWidth: 2.5,
-      points: mainstreamFrontierSamples
-        .slice(-CHART_MAX_POINTS)
-        .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
-    });
-  }
+  const firstTimerSeries: DualAxisSeries | null =
+    firstTimerFrontierSamples.length > 0
+      ? {
+          label: "🌱 マージ正常底（初回提出者のみ）起票経過",
+          axis: "right",
+          color: "var(--success)",
+          strokeWidth: 2.5,
+          points: firstTimerFrontierSamples
+            .slice(-CHART_MAX_POINTS)
+            .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
+        }
+      : null;
 
-  const queueChart = renderDualAxisLineChartSvg({
-    title: "待ち件数と底の遅れの推移（統合時系列チャート）",
+  const mainstreamSeries: DualAxisSeries | null =
+    mainstreamFrontierSamples.length > 0
+      ? {
+          label: "👀 初動正常底（主戦場ライン・7日介入中央値）",
+          axis: "right",
+          color: "#0ea5e9",
+          strokeWidth: 2.5,
+          points: mainstreamFrontierSamples
+            .slice(-CHART_MAX_POINTS)
+            .map((s) => ({ x: s.timestampMs, y: (s.timestampMs - s.createdMs) / DAY_MS })),
+        }
+      : null;
+
+  const allChartSeries: DualAxisSeries[] = [
+    ...baseLeftSeries,
+    ...(healthySeries ? [healthySeries] : firstTimerSeries ? [firstTimerSeries] : []),
+    ...(mainstreamSeries ? [mainstreamSeries] : []),
+  ];
+  const firstTimerChartSeries: DualAxisSeries[] = [
+    ...baseLeftSeries,
+    ...(firstTimerSeries ? [firstTimerSeries] : []),
+    ...(mainstreamSeries ? [mainstreamSeries] : []),
+  ];
+
+  const queueChartAll = renderDualAxisLineChartSvg({
+    title: "待ち件数と正常底の推移（統合時系列チャート）",
     leftAxisLabel: "待ち件数",
-    rightAxisLabel: "先頭・主戦場の経過（日）",
-    series: dualSeries,
+    rightAxisLabel: "正常底の起票経過（日）",
+    series: allChartSeries,
     rightDecimals: 1,
   });
+  const queueChartFirstTimer =
+    healthySeries !== null && firstTimerSeries !== null
+      ? renderDualAxisLineChartSvg({
+          title: "待ち件数と正常底の推移（統合時系列チャート・初回提出者のみ）",
+          leftAxisLabel: "待ち件数",
+          rightAxisLabel: "正常底の起票経過（日）",
+          series: firstTimerChartSeries,
+          rightDecimals: 1,
+        })
+      : null;
+
+  const hasChartPopulationToggle = queueChartAll !== null && queueChartFirstTimer !== null;
+  const fallbackQueueChart =
+    queueChartAll ??
+    queueChartFirstTimer ??
+    (healthySeries !== null && firstTimerSeries !== null
+      ? renderDualAxisLineChartSvg({
+          title: "待ち件数と正常底の推移（統合時系列チャート）",
+          leftAxisLabel: "待ち件数",
+          rightAxisLabel: "正常底の起票経過（日）",
+          series: [
+            ...baseLeftSeries,
+            healthySeries,
+            firstTimerSeries,
+            ...(mainstreamSeries ? [mainstreamSeries] : []),
+          ],
+          rightDecimals: 1,
+        })
+      : null);
 
   const parsedTargetCreatedMs = depths?.TargetPr?.CreatedAt
     ? Date.parse(depths.TargetPr.CreatedAt)
@@ -215,11 +292,27 @@ ${DASHBOARD_CSS}
       behindDeltaBadge,
     })}
 
-    <h2 class="section-title">📉 待ち件数の推移（キュー推移と底の進行の統合時系列）</h2>
-    <p class="section-note">
-      左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は前線の起票経過日数（🌱 初回提出者の底＝起票からの経過、👀 主戦場ライン＝直近7日初回介入コホートの起票日時中央値）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
-    </p>
-    ${renderChartCard(queueChart)}
+    <section data-chart-section>
+      <h2 class="section-title">📉 待ち件数の推移（キュー推移と正常底の進行の統合時系列）</h2>
+      <p class="section-note">
+        左軸は基準 PR より前の待ち件数（実質待ち・累積待ち）、右軸は各正常底の起票経過日数（⚓ マージ正常底・全体 ／ 🌱 マージ正常底・初回提出者のみ、👀 初動正常底・直近7日初回介入中央値）です（直近最大 ${CHART_MAX_POINTS} 観測点を表示）。
+      </p>
+      ${
+        hasChartPopulationToggle
+          ? `<div class="sample-filter-bar" role="group" aria-label="統合時系列チャートの右軸母集団フィルタ">
+        <button type="button" class="sample-filter-btn is-active" data-chart-filter="all" aria-pressed="true">
+          ⚓ 全体（健康的大底）
+        </button>
+        <button type="button" class="sample-filter-btn" data-chart-filter="first-timer" aria-pressed="false">
+          🌱 初回提出者のみ
+        </button>
+      </div>
+      <div data-chart-view="all">${renderChartCard(queueChartAll)}</div>
+      <div data-chart-view="first-timer" style="display: none;">${renderChartCard(queueChartFirstTimer)}</div>
+      ${CHART_FILTER_INLINE_SCRIPT}`
+          : renderChartCard(fallbackQueueChart)
+      }
+    </section>
 
     ${renderExitBreakdownSection(exitBreakdown)}
 
@@ -237,11 +330,9 @@ ${DASHBOARD_CSS}
 
     ${renderRivalsSection(progress)}
 
+    ${renderWaitlineMatrixSection(depths)}
+
     ${renderBoundaryTableSection(depths)}
-
-    ${renderInterventionFrontierComparisonSection(depths)}
-
-    ${renderBottomComparisonSection(depths)}
 
     ${renderForecastScoreSection(forecastHistory, forecastScores)}
 

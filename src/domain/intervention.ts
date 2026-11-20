@@ -486,6 +486,7 @@ export interface FirstReviewCohortCandidate {
   author?: string;
   authorAssociation?: string;
   authorMergedCount?: number;
+  isFirstTimer?: boolean;
   commitCount?: number;
   createdAt: string;
   mergedAt?: string | null;
@@ -591,6 +592,7 @@ export function calculateFirstReviewMainstreamFrontier(
       ...(candidate.authorMergedCount !== undefined
         ? { AuthorMergedCount: candidate.authorMergedCount }
         : {}),
+      ...(candidate.isFirstTimer !== undefined ? { IsFirstTimer: candidate.isFirstTimer } : {}),
       ...(candidate.commitCount !== undefined ? { CommitCount: candidate.commitCount } : {}),
       CreatedAt: candidate.createdAt,
       FirstHumanInterventionAt: candidate.intervention.FirstHumanInterventionAt as string,

@@ -54,7 +54,7 @@ export function buildBandTimelineMarkers(
   }
   if (band.bottom) {
     markers.push({
-      label: `▼大底 ${formatMonthDay(band.bottom.dateMs)}`,
+      label: `▼正常底 ${formatMonthDay(band.bottom.dateMs)}`,
       dateMs: band.bottom.dateMs,
       color: "var(--warning)",
     });
@@ -127,23 +127,23 @@ function renderHeroStatusGrid(params: {
     mainstreamSubHtml = `${escapeHtml(formatTargetInterventionLabel(firstReview))}（主戦場ラインは未観測）`;
   }
 
-  // 2. 1コミット優等生の底
+  // 2. マージ前線（1コミット完走組）
   const staleHtml =
     band.snapshot.staleBottomCreatedMs !== null
       ? `<a href="https://github.com/${escapeHtml(repo)}/pull/${escapeHtml(band.snapshot.staleBottomPr)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(band.snapshot.staleBottomPr)}</a> ${escapeHtml(formatJstDate(band.snapshot.staleBottomCreatedMs))}`
       : `<span style="color: var(--text-muted);">-</span>`;
   const staleSubHtml =
     band.snapshot.staleBottomGapDays !== null
-      ? `自PRと差 ${band.snapshot.staleBottomGapDays} 日（1コミット健康体最古）`
-      : "優等生の底データ未観測";
+      ? `自PRと差 ${band.snapshot.staleBottomGapDays} 日（1コミット健康体・起票順最古）`
+      : "マージ前線データ未観測";
 
-  // 3. 実質待ち順位 / 健康的大底とのギャップ
+  // 3. 実質待ち順位 / マージ正常底（健康的大底）差
   const healthyPr = band.snapshot.healthyBottomPr;
   const healthyGap = band.snapshot.healthyBottomGapDays;
   const queueSubHtml =
     healthyGap !== null
-      ? `健康的大底（${healthyPr ? `#${escapeHtml(healthyPr)}` : "-"}）と差 ${healthyGap} 日`
-      : "健康的大底との日差は未算出";
+      ? `マージ正常底（${healthyPr ? `#${escapeHtml(healthyPr)}` : "-"}）と差 ${healthyGap} 日`
+      : "マージ正常底との日差は未算出";
 
   // 4. 初回提出者コホート実績サマリ
   const rawLifetime = progress?.TotalLifetimeDays ?? progress?.WaitDays ?? 0;
@@ -161,17 +161,17 @@ function renderHeroStatusGrid(params: {
   return `
     <div class="hero-status-grid" aria-label="現在の処理帯ステータス">
       <div class="hero-status-item">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">👀 メンテナー作業前線（7日介入中央値）</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">👀 初動正常底（主戦場ライン・7日介入中央値）</div>
         <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${mainstreamHeadHtml}</div>
         <div class="card-subtext">${mainstreamSubHtml}</div>
       </div>
       <div class="hero-status-item">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">🧗 1コミット優等生の底</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">🚀 マージ前線（1コミット完走組）</div>
         <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${staleHtml}</div>
         <div class="card-subtext">${escapeHtml(staleSubHtml)}</div>
       </div>
       <div class="hero-status-item">
-        <div style="font-size: 0.75rem; color: var(--text-muted);">⚓ 実質待ち順位 / 健康的大底差</div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">⚓ 実質待ち順位 / マージ正常底（健康的大底）差</div>
         <div style="font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem;">${formatNumber(progress?.ActiveAhead)} <span style="font-size: 0.85rem; font-weight: normal;">件</span></div>
         <div class="card-subtext">${escapeHtml(queueSubHtml)}</div>
       </div>
@@ -232,13 +232,13 @@ export function renderIntegratedForecastHero(params: {
     ? `前線: ${escapeHtml(formatMonthDay(front.dateMs))}（${formatEtaDays(front.etaDays)}）`
     : "前線: -";
   const bottomSummaryText = bottom
-    ? `大底: ${escapeHtml(formatMonthDay(bottom.dateMs))}（${formatEtaDays(bottom.etaDays)}）`
-    : "大底: -";
+    ? `正常底: ${escapeHtml(formatMonthDay(bottom.dateMs))}（${formatEtaDays(bottom.etaDays)}）`
+    : "正常底: -";
 
   const bandBreakdownRows = [
     ...(front ? [{ group: "前線（最短）", items: front.estimates }] : []),
     ...(mainstream ? [{ group: "本命（中央値）", items: mainstream.estimates }] : []),
-    ...(bottom ? [{ group: "大底（最長）", items: [bottom.estimate] }] : []),
+    ...(bottom ? [{ group: "正常底（最長）", items: [bottom.estimate] }] : []),
   ]
     .flatMap((g) =>
       g.items.map(
@@ -265,7 +265,7 @@ export function renderIntegratedForecastHero(params: {
           <div class="card-subtext">${mainstreamSub}</div>
         </div>
         <div class="hero-band-box">
-          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">全体レンジ（前線 〜 大底）</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">全体レンジ（前線 〜 正常底）</div>
           <div style="font-size: 1.25rem; font-weight: 700;">${overallHeadline}</div>
           <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0.15rem;">${escapeHtml(overallEta)}</div>
           <div class="card-subtext">${frontSummaryText} / ${bottomSummaryText}</div>

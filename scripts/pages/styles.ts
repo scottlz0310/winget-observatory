@@ -300,6 +300,25 @@ export const DASHBOARD_CSS = `    :root {
       font-weight: 600;
     }
     .section-note { font-size: 0.875rem; color: var(--text-muted); margin: -0.5rem 0 1rem; }
+    .matrix-phase-header {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text-color);
+      margin: 1.25rem 0 0.75rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 2px solid var(--border-color);
+    }
+    .matrix-phase-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    @media (max-width: 960px) {
+      .matrix-phase-grid {
+        grid-template-columns: 1fr;
+      }
+    }
     a { color: var(--primary); text-decoration: none; }
     a:hover { text-decoration: underline; }
     footer {
