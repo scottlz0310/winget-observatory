@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_METADATA_REFRESH_BUDGET,
+  DEFAULT_SAMPLE_CACHE_RETENTION_DAYS,
   extractFirstTimerFastestRanking,
+  FIRST_TIMER_FASTEST_RANKING_LIMIT,
+  FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS,
+  FIRST_TIMER_FASTEST_RANKING_MIN_VERSION,
+  FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS,
   fromCachedSample,
   indexSampleCache,
   parseSampleCache,
@@ -10,6 +16,18 @@ import {
   summarizeSampleCacheVersions,
   toCachedSample,
 } from "../../src/domain/sample-cache";
+import {
+  DEFAULT_METADATA_REFRESH_BUDGET as DIRECT_DEFAULT_METADATA_REFRESH_BUDGET,
+  DEFAULT_SAMPLE_CACHE_RETENTION_DAYS as DIRECT_DEFAULT_SAMPLE_CACHE_RETENTION_DAYS,
+  FIRST_TIMER_FASTEST_RANKING_LIMIT as DIRECT_FIRST_TIMER_FASTEST_RANKING_LIMIT,
+  FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS as DIRECT_FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS,
+  FIRST_TIMER_FASTEST_RANKING_MIN_VERSION as DIRECT_FIRST_TIMER_FASTEST_RANKING_MIN_VERSION,
+  FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS as DIRECT_FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS,
+  extractFirstTimerFastestRanking as directExtractFirstTimerFastestRanking,
+  pruneSampleCache as directPruneSampleCache,
+  selectMetadataRefreshCandidates as directSelectMetadataRefreshCandidates,
+  summarizeSampleCacheVersions as directSummarizeSampleCacheVersions,
+} from "../../src/domain/sample-cache-maintenance";
 import type { MergedCandidateSample } from "../../src/models/progress";
 import type { CachedSampleEntry, SampleCacheEntry } from "../../src/models/sample-cache";
 
@@ -685,5 +703,24 @@ describe("Domain: キャッシュ自己修復（pruneSampleCache / selectMetadat
       currentCount: 0,
       windowRefreshRemainingCount: 2,
     });
+  });
+
+  test("sample-cache-maintenance.ts のエクスポートと sample-cache.ts の互換 re-export が完全一致する", () => {
+    expect(FIRST_TIMER_FASTEST_RANKING_LIMIT).toBe(DIRECT_FIRST_TIMER_FASTEST_RANKING_LIMIT);
+    expect(FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS).toBe(
+      DIRECT_FIRST_TIMER_FASTEST_RANKING_WINDOW_DAYS,
+    );
+    expect(FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS).toBe(
+      DIRECT_FIRST_TIMER_FASTEST_RANKING_MIN_READY_DAYS,
+    );
+    expect(FIRST_TIMER_FASTEST_RANKING_MIN_VERSION).toBe(
+      DIRECT_FIRST_TIMER_FASTEST_RANKING_MIN_VERSION,
+    );
+    expect(DEFAULT_SAMPLE_CACHE_RETENTION_DAYS).toBe(DIRECT_DEFAULT_SAMPLE_CACHE_RETENTION_DAYS);
+    expect(DEFAULT_METADATA_REFRESH_BUDGET).toBe(DIRECT_DEFAULT_METADATA_REFRESH_BUDGET);
+    expect(extractFirstTimerFastestRanking).toBe(directExtractFirstTimerFastestRanking);
+    expect(pruneSampleCache).toBe(directPruneSampleCache);
+    expect(selectMetadataRefreshCandidates).toBe(directSelectMetadataRefreshCandidates);
+    expect(summarizeSampleCacheVersions).toBe(directSummarizeSampleCacheVersions);
   });
 });
