@@ -2149,23 +2149,31 @@ describe("API: GitHubApiClient", () => {
       }
     });
 
-    test("data フィールドが含まれていない場合に例外をスローする", async () => {
-      const mockFetch = async (): Promise<Response> => {
-        return new Response(JSON.stringify({}), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
+    test.each([200, 202])(
+      "data フィールドが含まれていない場合に実際の HTTP ステータス (%i) を保持した GitHubApiError をスローする",
+      async (status) => {
+        const mockFetch = async (): Promise<Response> => {
+          return new Response(JSON.stringify({}), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          });
+        };
+
+        const client = new GitHubApiClient({
+          token: "dummy-token",
+          fetch: mockFetch,
         });
-      };
 
-      const client = new GitHubApiClient({
-        token: "dummy-token",
-        fetch: mockFetch,
-      });
-
-      await expect(client.graphql("query { test }")).rejects.toThrow(
-        "data フィールドが含まれていません",
-      );
-    });
+        try {
+          await client.graphql("query { test }");
+          expect().fail("例外がスローされるべき");
+        } catch (err: unknown) {
+          expect(err).toBeInstanceOf(GitHubApiError);
+          expect((err as GitHubApiError).message).toContain("data フィールドが含まれていません");
+          expect((err as GitHubApiError).status).toBe(status);
+        }
+      },
+    );
   });
 
   describe("parseRepository", () => {

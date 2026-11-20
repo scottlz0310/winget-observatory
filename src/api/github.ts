@@ -752,7 +752,7 @@ export class GitHubApiClient {
       if (json.data === undefined) {
         throw new GitHubApiError(
           "GitHub GraphQL API の応答に data フィールドが含まれていません",
-          500,
+          res.status,
         );
       }
 
