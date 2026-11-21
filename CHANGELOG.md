@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `.github/workflows/observe.yml`: GitHub Pages デプロイが `No artifacts named "github-pages" were found` で稀に失敗する問題へ対処（#142）。`upload-pages-artifact` 直後はアーティファクトのメタデータが API へ反映される前に `deploy-pages` が走ることがあるため、デプロイを別ジョブ `deploy`（`needs: observe`）へ分離し、`deploy-pages` 直前に指数バックオフ（1→2→4→8→16→30 秒）でアーティファクト登録を待つ手順を追加（反映済みなら 1 回目で通過。タイムアウト時は artifact 一覧をログ出力）。デプロイのみ失敗した場合は「失敗したジョブのみ再実行」で収集をやり直さず復旧できる。`actions: read` はデプロイジョブにのみ付与
+- `.github/workflows/observe.yml`: GitHub Pages デプロイが `No artifacts named "github-pages" were found` で稀に失敗する問題へ対処（#142）。`upload-pages-artifact` 直後はアーティファクトのメタデータが API へ反映される前に `deploy-pages` が走ることがあるため、デプロイを別ジョブ `deploy`（`needs: observe`）へ分離し、`deploy-pages` 直前に指数バックオフ（1→2→4→8→16→30→60 秒。期限切れ artifact は数えない）でアーティファクト登録を待つ手順を追加（反映済みなら 1 回目で通過。タイムアウト時は artifact 一覧をログ出力）。デプロイのみ失敗した場合は「失敗したジョブのみ再実行」で収集をやり直さず復旧できる。`actions: read` はデプロイジョブにのみ付与
 - 肥大化していたテストファイル上位 5 本の関心事別分割および循環インポート検知テストの追加（#134 Step 4/4）:
   - `test/cli/progress.test.ts` を `test/cli/progress.test.ts`（CLI 引数・基本フロー・エラー伝播）、`test/cli/progress-rivals.test.ts`（ライバル PR・実績比較・初回コホート分離・日付窓スライス・1,000 件二分走査）、`test/cli/progress-samples.test.ts`（キャッシュ再評価・自己修復パイプライン）の 3 ファイルへ分割
   - `test/cli/explore-depths.test.ts` を `test/cli/explore-depths.test.ts`（CLI・主戦場ライン・互換 re-export）、`test/cli/explore-depths-bottoms.test.ts`（初回提出者の底・2×2 GraphQL 統一底走査）、`test/cli/explore-depths-intervention.test.ts`（未レビュー前線・介入済み前線 2 段階走査）の 3 ファイルへ分割

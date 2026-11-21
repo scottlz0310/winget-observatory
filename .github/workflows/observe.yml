@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   observe:
-    name: Collect Metrics, Save to Dropbox & Deploy Dashboard
+    name: Collect Metrics & Save to Dropbox
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -147,15 +147,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           url="repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=github-pages"
-          delays=(1 2 4 8 16 30)
+          delays=(1 2 4 8 16 30 60)
           for i in "${!delays[@]}"; do
-            count=$(gh api "$url" --jq '.total_count' || echo 0)
+            # 期限切れ (expired) のものは数えない
+            count=$(gh api "$url" --jq '[.artifacts[] | select(.expired | not)] | length' || echo 0)
             if [ "${count:-0}" -ge 1 ]; then
               echo "Artifact 'github-pages' registered (attempt $((i + 1)))."
               exit 0
             fi
-            echo "Artifact not registered yet (attempt $((i + 1))/${#delays[@]}); retrying in ${delays[$i]}s..."
-            sleep "${delays[$i]}"
+            # 最終試行の後は待っても確認が走らないため sleep しない
+            if [ "$i" -lt "$((${#delays[@]} - 1))" ]; then
+              echo "Artifact not registered yet (attempt $((i + 1))/${#delays[@]}); retrying in ${delays[$i]}s..."
+              sleep "${delays[$i]}"
+            fi
           done
           echo "::error::Artifact 'github-pages' was not registered within the wait window."
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
