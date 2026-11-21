@@ -24,17 +24,12 @@ concurrency:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   observe:
-    name: Collect Metrics, Save to Dropbox & Deploy Dashboard
+    name: Collect Metrics & Save to Dropbox
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -127,6 +122,49 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           path: site
+
+  # デプロイは別ジョブに分離する。デプロイだけ失敗した場合に、10分かかる収集を
+  # やり直さず「失敗したジョブのみ再実行」で復旧できるようにするため。
+  deploy:
+    name: Deploy Dashboard to GitHub Pages
+    needs: observe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+      actions: read # アーティファクト登録確認 (gh api) に必要
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # upload-pages-artifact 完了直後は、アーティファクトのメタデータが API に反映される前に
+      # deploy-pages が走り "No artifacts named github-pages were found" で失敗することがある (#142)。
+      # deploy-pages 側にはリトライがないため、直前で指数バックオフにより登録を待つ。
+      # 反映済みなら 1 回目で抜けるので、通常時の待ち時間は発生しない。
+      - name: Wait for Pages artifact registration
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          url="repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=github-pages"
+          delays=(1 2 4 8 16 30 60)
+          for i in "${!delays[@]}"; do
+            # 期限切れ (expired) のものは数えない
+            count=$(gh api "$url" --jq '[.artifacts[] | select(.expired | not)] | length' || echo 0)
+            if [ "${count:-0}" -ge 1 ]; then
+              echo "Artifact 'github-pages' registered (attempt $((i + 1)))."
+              exit 0
+            fi
+            # 最終試行の後は待っても確認が走らないため sleep しない
+            if [ "$i" -lt "$((${#delays[@]} - 1))" ]; then
+              echo "Artifact not registered yet (attempt $((i + 1))/${#delays[@]}); retrying in ${delays[$i]}s..."
+              sleep "${delays[$i]}"
+            fi
+          done
+          echo "::error::Artifact 'github-pages' was not registered within the wait window."
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | {name, id, expired, created_at}' || true
+          exit 1
 
       - name: Deploy to GitHub Pages
         id: deployment
