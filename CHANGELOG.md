@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `src/api/github.ts`, `src/api/retry.ts`: GitHub GraphQL の一時エラー（502/503/504/429 等）の既定リトライ回数を 3 回から 6 回へ引き上げ（初回含め計 7 回試行、待機は約 2→4→8→16→32→64 秒）。`explore-depths` の GraphQL が 502 を 4 回連続で返して Observe が失敗した事象（各リクエストが約 10 秒でゲートウェイタイムアウトし、待機合計が約 15 秒と短かった）への対処。既存の `maxRetryDelayMs`（180 秒）上限と Retry-After 優先の挙動は変更なし
 - `.github/workflows/observe.yml`: GitHub Pages デプロイが `No artifacts named "github-pages" were found` で稀に失敗する問題へ対処（#142）。`upload-pages-artifact` 直後はアーティファクトのメタデータが API へ反映される前に `deploy-pages` が走ることがあるため、デプロイを別ジョブ `deploy`（`needs: observe`）へ分離し、`deploy-pages` 直前に指数バックオフ（1→2→4→8→16→30→60 秒。期限切れ artifact は数えない）でアーティファクト登録を待つ手順を追加（反映済みなら 1 回目で通過。タイムアウト時は artifact 一覧をログ出力）。デプロイのみ失敗した場合は「失敗したジョブのみ再実行」で収集をやり直さず復旧できる。`actions: read` はデプロイジョブにのみ付与
 - 肥大化していたテストファイル上位 5 本の関心事別分割および循環インポート検知テストの追加（#134 Step 4/4）:
   - `test/cli/progress.test.ts` を `test/cli/progress.test.ts`（CLI 引数・基本フロー・エラー伝播）、`test/cli/progress-rivals.test.ts`（ライバル PR・実績比較・初回コホート分離・日付窓スライス・1,000 件二分走査）、`test/cli/progress-samples.test.ts`（キャッシュ再評価・自己修復パイプライン）の 3 ファイルへ分割

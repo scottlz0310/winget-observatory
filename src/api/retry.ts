@@ -121,7 +121,7 @@ export function parseRetryAfterMs(headerValue: string | null | undefined): numbe
 }
 
 export interface GraphQLRetryOptions {
-  /** 最大リトライ回数（既定: 3。初回含め計 4 回試行） */
+  /** 最大リトライ回数（既定: 6。初回含め計 7 回試行。待機は約 2→4→8→16→32→64 秒） */
   maxRetries?: number;
   /** 初回リトライのベース待機時間（ミリ秒、既定: 2000） */
   baseDelayMs?: number;
