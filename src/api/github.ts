@@ -172,7 +172,7 @@ export class GitHubApiClient {
     this.token = options.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? undefined;
     this.baseUrl = options.baseUrl ?? "https://api.github.com";
     this.fetchFn = options.fetch ?? globalThis.fetch;
-    this.maxRetries = options.retry?.maxRetries ?? 3;
+    this.maxRetries = options.retry?.maxRetries ?? 6;
     this.baseDelayMs = options.retry?.baseDelayMs ?? 2000;
     this.maxJitterMs = options.retry?.maxJitterMs ?? 500;
     this.secondaryRateLimitDelayMs =

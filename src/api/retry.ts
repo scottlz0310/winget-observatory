@@ -121,7 +121,14 @@ export function parseRetryAfterMs(headerValue: string | null | undefined): numbe
 }
 
 export interface GraphQLRetryOptions {
-  /** 最大リトライ回数（既定: 3。初回含め計 4 回試行） */
+  /**
+   * 最大リトライ回数（既定: 6。初回含め計 7 回試行）。
+   * 502/503/504 で Retry-After がない場合の待機は約 2→4→8→16→32→64 秒（ジッター付き）。
+   * 429・セカンダリレート制限・Retry-After 指定、maxRetryDelayMs 上限、適応的クールダウンにより実際の待機は変わる。
+   * ネットワークエラー・本文受信中の切断・JSON パース失敗など、すべてのリトライ経路に同じ回数が適用される。
+   * 呼び出し側はエラーを握りつぶさず再スローするため、リトライを使い切った最初の呼び出しで CLI は失敗終了する
+   * （障害時の最大待機は 1 プロセスあたり約 2〜3 分）。
+   */
   maxRetries?: number;
   /** 初回リトライのベース待機時間（ミリ秒、既定: 2000） */
   baseDelayMs?: number;

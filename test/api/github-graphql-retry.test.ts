@@ -175,9 +175,77 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
       expect(sleepDelays.length).toBe(2);
       expect(warnLogs.length).toBe(2);
       expect(warnLogs[0]).toContain("status: 502");
-      expect(warnLogs[0]).toContain("リトライ 1/3");
+      expect(warnLogs[0]).toContain("リトライ 1/6");
       expect(warnLogs[1]).toContain("status: 502");
-      expect(warnLogs[1]).toContain("リトライ 2/3");
+      expect(warnLogs[1]).toContain("リトライ 2/6");
+    });
+
+    test("既定では 502 が 6 回続いても 7 回目の試行で成功する（最大 6 回リトライ）", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        if (attempts <= 6) {
+          return new Response("Bad Gateway", { status: 502 });
+        }
+        return new Response(JSON.stringify({ data: { test: "success" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 10,
+          maxJitterMs: 0,
+          adaptiveCooldownMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: () => {},
+        },
+      });
+
+      const result = await client.graphql<{ test: string }>("query { test }");
+      expect(result).toEqual({ test: "success" });
+      expect(attempts).toBe(7);
+      expect(sleepDelays).toEqual([10, 20, 40, 80, 160, 320]);
+    });
+
+    test("既定のリトライ上限（最大6回、計7回試行）を超過した場合は最後のエラーをスローする", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        return new Response("Bad Gateway", { status: 502 });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 10,
+          maxJitterMs: 0,
+          adaptiveCooldownMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      await expect(client.graphql("query { test }")).rejects.toThrow("(502)");
+      expect(attempts).toBe(7);
+      expect(sleepDelays).toEqual([10, 20, 40, 80, 160, 320]);
+      expect(warnLogs.length).toBe(6);
+      expect(warnLogs[5]).toContain("リトライ 6/6");
     });
 
     test("502 が連続してリトライ上限（最大3回、計4回試行）を超過した場合はエラーをスローする", async () => {
@@ -595,7 +663,7 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
       expect(attempts).toBe(2);
       expect(sleepDelays).toEqual([5]);
       expect(warnLogs[0]).toContain("ECONNRESET in body stream");
-      expect(warnLogs[0]).toContain("リトライ 1/3");
+      expect(warnLogs[0]).toContain("リトライ 1/6");
     });
 
     test("200 応答の本文受信中の接続切断が上限超過した場合はエラーをスローする", async () => {
@@ -618,6 +686,7 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
         token: "dummy-token",
         fetch: mockFetch,
         retry: {
+          maxRetries: 3,
           baseDelayMs: 5,
           maxJitterMs: 0,
           sleep: async () => {},
@@ -679,7 +748,7 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
         expect(sleepDelays).toEqual([10]);
         expect(warnLogs.length).toBe(1);
         expect(warnLogs[0]).toContain("JSON パースに失敗しました");
-        expect(warnLogs[0]).toContain("リトライ 1/3");
+        expect(warnLogs[0]).toContain("リトライ 1/6");
       },
     );
 
@@ -700,6 +769,7 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
         token: "dummy-token",
         fetch: mockFetch,
         retry: {
+          maxRetries: 3,
           baseDelayMs: 5,
           maxJitterMs: 0,
           sleep: async (ms) => {
@@ -756,7 +826,7 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
       expect(sleepDelays).toEqual([5]);
       expect(warnLogs.length).toBe(1);
       expect(warnLogs[0]).toContain("connect ECONNRESET");
-      expect(warnLogs[0]).toContain("リトライ 1/3");
+      expect(warnLogs[0]).toContain("リトライ 1/6");
     });
 
     test("ネットワークエラーが継続して上限超過した場合は最後のエラーをスローする", async () => {
@@ -772,6 +842,7 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
         token: "dummy-token",
         fetch: mockFetch,
         retry: {
+          maxRetries: 3,
           baseDelayMs: 5,
           maxJitterMs: 0,
           sleep: async () => {},
