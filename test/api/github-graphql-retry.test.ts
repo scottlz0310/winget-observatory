@@ -215,6 +215,39 @@ describe("API: GitHubApiClient (graphql & retry)", () => {
       expect(sleepDelays).toEqual([10, 20, 40, 80, 160, 320]);
     });
 
+    test("既定のリトライ上限（最大6回、計7回試行）を超過した場合は最後のエラーをスローする", async () => {
+      let attempts = 0;
+      const sleepDelays: number[] = [];
+      const warnLogs: string[] = [];
+
+      const mockFetch = async (): Promise<Response> => {
+        attempts++;
+        return new Response("Bad Gateway", { status: 502 });
+      };
+
+      const client = new GitHubApiClient({
+        token: "dummy-token",
+        fetch: mockFetch,
+        retry: {
+          baseDelayMs: 10,
+          maxJitterMs: 0,
+          adaptiveCooldownMs: 0,
+          sleep: async (ms) => {
+            sleepDelays.push(ms);
+          },
+          warnLog: (msg) => {
+            warnLogs.push(msg);
+          },
+        },
+      });
+
+      await expect(client.graphql("query { test }")).rejects.toThrow("(502)");
+      expect(attempts).toBe(7);
+      expect(sleepDelays).toEqual([10, 20, 40, 80, 160, 320]);
+      expect(warnLogs.length).toBe(6);
+      expect(warnLogs[5]).toContain("リトライ 6/6");
+    });
+
     test("502 が連続してリトライ上限（最大3回、計4回試行）を超過した場合はエラーをスローする", async () => {
       let attempts = 0;
       const sleepDelays: number[] = [];
