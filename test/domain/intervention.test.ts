@@ -127,6 +127,16 @@ describe("Domain: intervention helpers", () => {
       expected: true,
     },
     {
+      name: "Markdown 引用行内のみに Automated message がある手動返信は自動コメント扱いしない",
+      body: "Please replace the URL; the prior check was stale.\n\n> (Automated message - build 1838)",
+      expected: false,
+    },
+    {
+      name: "Markdown 引用行内のみに Deterministic automation がある手動返信は自動コメント扱いしない",
+      body: "> Automatic Validation ended with:\n> (Deterministic automation - build 1838.)\n\nPlease fix the installer.",
+      expected: false,
+    },
+    {
       name: "人間の通常質問コメント",
       body: "Hi @user, Does this app have a privacy policy?",
       expected: false,
@@ -629,6 +639,55 @@ describe("Domain: classifyPrIntervention", () => {
       ManualCommentCount: 0,
     });
   });
+
+  test.each<{
+    name: string;
+    body: string;
+  }>([
+    {
+      name: "末尾で Automated message を引用した手動返信",
+      body: "Please replace the URL; the prior check was stale.\n\n> (Automated message - build 1838)",
+    },
+    {
+      name: "先頭で Deterministic automation を引用した手動返信",
+      body: "> Automatic Validation ended with:\n> (Deterministic automation - build 1838.)\n\nPlease update the download link.",
+    },
+  ])(
+    "メンテナが自動ログを Markdown 引用した手動コメントは介入済みとして扱う: $name",
+    ({ body }) => {
+      const summary = classifyPrIntervention({
+        author: { __typename: "User", login: "submitter" },
+        assignees: { nodes: [] },
+        reviews: { nodes: [] },
+        comments: {
+          nodes: [
+            {
+              author: { __typename: "User", login: "stephengillie" },
+              createdAt: "2026-11-24T01:00:00Z",
+              lastEditedAt: null,
+              editor: null,
+              body,
+            },
+          ],
+        },
+      });
+
+      expect(summary).toEqual({
+        Intervened: true,
+        ThirdPartyAssignees: [],
+        HumanReviewCount: 0,
+        ManualCommentCount: 1,
+        PrimaryBadge: {
+          Kind: "comment",
+          Actor: "stephengillie",
+          Label: "コメント済: stephengillie",
+        },
+        FirstHumanInterventionAt: "2026-11-24T01:00:00.000Z",
+        FirstInterventionKind: "comment",
+        FirstInterventionActor: "stephengillie",
+      });
+    },
+  );
 
   test("代表バッジの優先順は レビュー > コメント で、レビュー複数時は最新を優先する", () => {
     const summary = classifyPrIntervention({

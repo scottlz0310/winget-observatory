@@ -95,18 +95,36 @@ describe("Domain: extractFirstTimerFrontierSamples", () => {
     expect(samples[0].createdMs).toBe(Date.parse("2026-10-01T00:00:00Z"));
   });
 
-  test("extractHealthyFrontierSamples は旧条件の履歴を除外する", () => {
+  test("extractHealthyFrontierSamples と extractFirstTimerFrontierSamples は v6 以前を除外しつつ v7 と v8 の履歴を継続抽出する", () => {
     const legacy = snapshot("2026-11-01T00:00:00Z", [], null);
     legacy.HealthyBottom = [row(1001, "2026-10-20T00:00:00Z", "2026-09-15T00:00:00Z")];
-    const v5 = snapshot("2026-11-02T00:00:00Z", [], 5);
-    v5.HealthyBottom = [row(1002, "2026-10-25T00:00:00Z", "2026-09-20T00:00:00Z")];
+    legacy.FirstTimerBottom = [row(2001, "2026-10-20T00:00:00Z", "2026-09-16T00:00:00Z")];
 
-    const current = snapshot("2026-11-03T00:00:00Z", []);
-    current.HealthyBottom = [row(1003, "2026-10-26T00:00:00Z", "2026-09-21T00:00:00Z")];
+    const v6 = snapshot("2026-11-02T00:00:00Z", [], 6);
+    v6.HealthyBottom = [row(1002, "2026-10-25T00:00:00Z", "2026-09-20T00:00:00Z")];
+    v6.FirstTimerBottom = [row(2002, "2026-10-25T00:00:00Z", "2026-09-21T00:00:00Z")];
 
-    const samples = extractHealthyFrontierSamples([v5, current, legacy]);
-    expect(samples.map((s) => s.pr)).toEqual([1003]);
-    expect(samples[0].createdMs).toBe(Date.parse("2026-09-21T00:00:00Z"));
+    const v7 = snapshot("2026-11-03T00:00:00Z", [], 7);
+    v7.HealthyBottom = [row(1003, "2026-10-26T00:00:00Z", "2026-09-22T00:00:00Z")];
+    v7.FirstTimerBottom = [row(2003, "2026-10-26T00:00:00Z", "2026-09-23T00:00:00Z")];
+
+    const v8 = snapshot("2026-11-04T00:00:00Z", [], CURRENT_DEPTHS_VERSION);
+    v8.HealthyBottom = [row(1004, "2026-10-27T00:00:00Z", "2026-09-24T00:00:00Z")];
+    v8.FirstTimerBottom = [row(2004, "2026-10-27T00:00:00Z", "2026-09-25T00:00:00Z")];
+
+    const healthySamples = extractHealthyFrontierSamples([v8, v6, v7, legacy]);
+    expect(healthySamples.map((s) => s.pr)).toEqual([1003, 1004]);
+    expect(healthySamples.map((s) => s.createdMs)).toEqual([
+      Date.parse("2026-09-22T00:00:00Z"),
+      Date.parse("2026-09-24T00:00:00Z"),
+    ]);
+
+    const firstTimerSamples = extractFirstTimerFrontierSamples([v8, v6, v7, legacy]);
+    expect(firstTimerSamples.map((s) => s.pr)).toEqual([2003, 2004]);
+    expect(firstTimerSamples.map((s) => s.createdMs)).toEqual([
+      Date.parse("2026-09-23T00:00:00Z"),
+      Date.parse("2026-09-25T00:00:00Z"),
+    ]);
   });
 });
 

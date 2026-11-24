@@ -16,8 +16,11 @@ import { CURRENT_DEPTHS_VERSION } from "./depths";
 import { DAY_MS, round1 } from "./formatters";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "./intervention";
 
-/** 初回提出者の底の定義が現行と互換な最小バージョン */
-export const MIN_FIRST_TIMER_DEPTHS_VERSION = CURRENT_DEPTHS_VERSION;
+/** マージ正常底（健康的大底）の定義が現行と互換な最小バージョン（v7 以降不変） */
+export const MIN_HEALTHY_DEPTHS_VERSION = 7;
+
+/** 初回提出者の底の定義が現行と互換な最小バージョン（v7 以降不変） */
+export const MIN_FIRST_TIMER_DEPTHS_VERSION = 7;
 
 /** 主戦場ライン（初回介入コホート中央値）の最小定義バージョン */
 export const MIN_MAINSTREAM_DEPTHS_VERSION = CURRENT_DEPTHS_VERSION;
@@ -92,7 +95,7 @@ export function extractFirstTimerFrontierSamples(
  */
 export function extractHealthyFrontierSamples(
   snapshots: DepthsSnapshot[],
-  minDefinitionVersion = CURRENT_DEPTHS_VERSION,
+  minDefinitionVersion = MIN_HEALTHY_DEPTHS_VERSION,
 ): HealthyFrontierSample[] {
   return extractFrontierSamples(
     snapshots,

@@ -104,19 +104,38 @@ export function isBotActor(actor: PrInterventionActor | null | undefined): boole
 }
 
 /**
- * 自動検証パイプライン由来の決定的ログコメントかどうかを判定する。
+ * Markdown の引用行（`>` で始まる行）を除いた非引用行に指定マーカーが含まれるかを判定する。
+ * メンテナの手動コメントが自動生成ログを引用した場合に自動コメントとして誤除外しないために使用する。
+ */
+function hasUnquotedMarker(body: string | null | undefined, markers: readonly string[]): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  for (const rawLine of body.split(/\r?\n/)) {
+    const trimmed = rawLine.trimStart();
+    if (trimmed.startsWith(">")) {
+      continue;
+    }
+    if (markers.some((marker) => trimmed.includes(marker))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 自動検証パイプライン由来の決定的ログコメントかどうかを判定する（Markdown 引用行を除く）。
  */
 export function isDeterministicAutomationComment(body: string | null | undefined): boolean {
-  return typeof body === "string" && body.includes(DETERMINISTIC_AUTOMATION_MARKER);
+  return hasUnquotedMarker(body, [DETERMINISTIC_AUTOMATION_MARKER]);
 }
 
 /**
  * 個人アカウント権限で投稿される自動コメント（`(Deterministic automation` / `(Automated message` 等）かどうかを判定する。
+ * Markdown の引用行（`>` 開始）内のみに出現するマーカーは自動生成フッターとはみなさない。
  */
 export function isAutomationComment(body: string | null | undefined): boolean {
-  return (
-    typeof body === "string" && AUTOMATION_COMMENT_MARKERS.some((marker) => body.includes(marker))
-  );
+  return hasUnquotedMarker(body, AUTOMATION_COMMENT_MARKERS);
 }
 
 const CI_RERUN_COMMAND_PATTERN = /^@wingetbot\s+run$/i;
@@ -135,19 +154,31 @@ export function isCiRerunCommandComment(body: string | null | undefined): boolea
 
 const EXPLICIT_EDIT_LINE_PATTERN = /^(?:\*{1,2}|_{1,2})?edit\s*:/i;
 
-function findLastAutomationMarkerIndex(body: string): number {
+function findLastUnquotedAutomationMarkerIndex(body: string): number {
   let latestIdx = -1;
-  for (const marker of AUTOMATION_COMMENT_MARKERS) {
-    const idx = body.lastIndexOf(marker);
-    if (idx > latestIdx) {
-      latestIdx = idx;
+  let offset = 0;
+  for (const line of body.split(/\r?\n/)) {
+    const lineEnd = body.indexOf("\n", offset);
+    const nextOffset = lineEnd >= 0 ? lineEnd + 1 : body.length;
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith(">")) {
+      for (const marker of AUTOMATION_COMMENT_MARKERS) {
+        const localIdx = line.lastIndexOf(marker);
+        if (localIdx >= 0) {
+          const absIdx = offset + localIdx;
+          if (absIdx > latestIdx) {
+            latestIdx = absIdx;
+          }
+        }
+      }
     }
+    offset = nextOffset;
   }
   return latestIdx;
 }
 
 function hasManualAppendInDeterministicBody(body: string): boolean {
-  const markerIdx = findLastAutomationMarkerIndex(body);
+  const markerIdx = findLastUnquotedAutomationMarkerIndex(body);
   if (markerIdx >= 0) {
     const closeIdx = body.indexOf(")", markerIdx);
     if (closeIdx >= 0) {
@@ -234,8 +265,15 @@ export function hasDeterministicAutomationManualEdit(
   return hasEditedTimestampAfterCreation(comment);
 }
 
-function resolveCommentActor(comment: PrInterventionCommentInput): string {
-  if (isAutomationComment(comment.body)) {
+function resolveCommentActor(
+  comment: PrInterventionCommentInput,
+  prAuthorLogin?: string | null,
+): string {
+  if (
+    isAutomationComment(comment.body) ||
+    isBotActor(comment.author) ||
+    isSameActorLogin(comment.author?.login, prAuthorLogin)
+  ) {
     return comment.editor?.login?.trim() || comment.author?.login?.trim() || DELETED_ACTOR_LABEL;
   }
   return comment.author?.login?.trim() || DELETED_ACTOR_LABEL;
@@ -243,8 +281,14 @@ function resolveCommentActor(comment: PrInterventionCommentInput): string {
 
 function resolveCommentInterventionAt(
   comment: PrInterventionCommentInput,
+  prAuthorLogin?: string | null,
 ): string | null | undefined {
-  if (isAutomationComment(comment.body) && hasEditedTimestampAfterCreation(comment)) {
+  if (
+    (isAutomationComment(comment.body) ||
+      isBotActor(comment.author) ||
+      isSameActorLogin(comment.author?.login, prAuthorLogin)) &&
+    hasEditedTimestampAfterCreation(comment)
+  ) {
     return comment.lastEditedAt;
   }
   return comment.createdAt;
@@ -320,6 +364,8 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
     }
     if (!isBotActor(c.author) && !isSameActorLogin(c.author?.login, prAuthorLogin)) {
       manualComments.push(c);
+    } else if (isThirdPartyHumanEditedComment(c, prAuthorLogin)) {
+      manualComments.push(c);
     }
   }
 
@@ -349,7 +395,11 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
     );
   }
   for (const c of manualComments) {
-    considerInterventionTime(resolveCommentInterventionAt(c), "comment", resolveCommentActor(c));
+    considerInterventionTime(
+      resolveCommentInterventionAt(c, prAuthorLogin),
+      "comment",
+      resolveCommentActor(c, prAuthorLogin),
+    );
   }
 
   let primaryBadge: PrInterventionBadge | undefined;
@@ -365,7 +415,7 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
     };
   } else if (manualComments.length > 0) {
     const latestComment = manualComments[manualComments.length - 1];
-    const actor = resolveCommentActor(latestComment);
+    const actor = resolveCommentActor(latestComment, prAuthorLogin);
     primaryBadge = {
       Kind: "comment",
       Actor: actor,

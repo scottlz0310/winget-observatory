@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CURRENT_DEPTHS_VERSION } from "../../src/domain/depths";
 import { buildForecastBandSource, calculateForecastBand } from "../../src/domain/forecast-band";
 import { DAY_MS } from "../../src/domain/formatters";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "../../src/domain/intervention";
@@ -163,7 +164,7 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
       FirstTimerP75Days: 40,
     };
     const depths: Partial<DepthsSnapshot> = {
-      DepthsVersion: 4,
+      DepthsVersion: CURRENT_DEPTHS_VERSION,
       Timestamp: new Date(T0).toISOString(),
       TargetPr: {
         Number: 464302,
@@ -211,7 +212,7 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
       FirstTimerMedianDays: 30,
     };
     const depths: Partial<DepthsSnapshot> = {
-      DepthsVersion: 4,
+      DepthsVersion: CURRENT_DEPTHS_VERSION,
       Timestamp: new Date(T0).toISOString(),
       TargetPr: {
         Number: 464302,
@@ -346,5 +347,55 @@ describe("Domain: buildForecastBandSource & calculateForecastBand", () => {
 
     const band = calculateForecastBand(buildForecastBandSource({ progress, depths, history: [] }));
     expect(band.front).toBeNull();
+  });
+
+  test("v7 の旧スナップショット単独入力では旧定義の FirstReviewFrontier を復元せず、アサインのみの TargetPr.Intervention も未介入へ正規化する", () => {
+    const progress: Partial<ProgressSnapshot> = {
+      Timestamp: new Date(T0).toISOString(),
+      TargetPr: 464302,
+      TotalMedianDays: 38,
+    };
+    const legacyV7Depths: Partial<DepthsSnapshot> = {
+      DepthsVersion: 7,
+      Timestamp: new Date(T0).toISOString(),
+      TargetPr: {
+        Number: 464302,
+        Title: "Target",
+        Url: "https://example.com/464302",
+        CreatedAt: new Date(TARGET_CREATED).toISOString(),
+        CreatedAtJst: "2026-10-29 06:47",
+        UpdatedAt: new Date(T0).toISOString(),
+        ThirdPartyAssignees: ["stephengillie"],
+        Intervention: {
+          Intervened: true,
+          ThirdPartyAssignees: ["stephengillie"],
+          HumanReviewCount: 0,
+          ManualCommentCount: 0,
+          PrimaryBadge: {
+            Kind: "assignee",
+            Actor: "stephengillie",
+            Label: "アサイン済: stephengillie",
+          },
+        },
+      },
+      FirstReviewFrontier: {
+        Mode: FIRST_REVIEW_MAINSTREAM_MODE,
+        WindowDays: 7,
+        CohortCount: 30,
+        OpenCount: 15,
+        MergedCount: 15,
+        MedianCreatedAt: new Date(T0 - 45 * DAY_MS).toISOString(),
+        LagDays: 45,
+      },
+    };
+
+    const source = buildForecastBandSource({ progress, depths: legacyV7Depths, history: [] });
+    expect(source.mainstreamSamples).toEqual([]);
+    expect(source.targetIntervention?.Intervened).toBe(false);
+    expect(source.targetIntervention?.PrimaryBadge).toBeUndefined();
+
+    const band = calculateForecastBand(source);
+    expect(band.snapshot.firstReview.status).toBe("no-samples");
+    expect(band.snapshot.firstReview.frontier).toBeNull();
   });
 });
