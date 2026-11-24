@@ -493,8 +493,21 @@ describe("buildDashboard: 2×2 マトリクス・主戦場ライン・最速ラ�
         makeRow(440002, "2026-10-22T00:00:00Z", "2026-10-22T00:00:00Z", ["stephengillie"]),
       ],
       FirstTimerBottom: [
-        makeRow(440003, "2026-10-23T00:00:00Z", "2026-10-24T00:00:00Z", []),
-        makeRow(440004, "2026-10-24T00:00:00Z", "2026-10-25T00:00:00Z", ["stephengillie"]),
+        makeRow(440003, "2026-10-23T00:00:00Z", "2026-10-24T00:00:00Z", ["stephengillie"]),
+        {
+          ...makeRow(440004, "2026-10-24T00:00:00Z", "2026-10-25T00:00:00Z", ["stephengillie"]),
+          Intervention: {
+            Intervened: true,
+            ThirdPartyAssignees: ["stephengillie"],
+            HumanReviewCount: 0,
+            ManualCommentCount: 1,
+            PrimaryBadge: {
+              Kind: "comment",
+              Actor: "stephengillie",
+              Label: "コメント済: stephengillie",
+            },
+          },
+        },
       ],
       UnreviewedBottom: [makeRow(441002, "2026-10-27T00:00:00Z", "2026-10-27T00:00:00Z", [])],
       FirstReviewFrontier: {
@@ -593,11 +606,12 @@ describe("buildDashboard: 2×2 マトリクス・主戦場ライン・最速ラ�
       // 統合時系列チャートに初動前線系列
       expect(html).toContain("👀 初動前線（主戦場ライン・初回提出者 7日介入中央値）");
 
-      // 2×2 マトリクス内のマージ正常底で第三者アサイン済みバッジ
+      // 2×2 マトリクス内のマージ正常底で人間介入バッジを表示し、ThirdPartyAssignees のみの行にはアサイン済バッジを出さない
       const mergeBottomSection = html
         .split("⚓ マージ正常底（健康的大底・遅くとも）")[1]
         .split("🚧 例外・特殊境界（真の大底・特急レーン）")[0];
-      expect(mergeBottomSection).toContain("アサイン済: stephengillie");
+      expect(mergeBottomSection).toContain("コメント済: stephengillie");
+      expect(mergeBottomSection).not.toContain("アサイン済: stephengillie");
 
       // 2×2 マトリクス内の初動前線（主戦場ライン）・初動正常底（未レビュー最古）
       expect(html).toContain("🧭 待機ライン 2×2 マトリクス（フェーズ × レンジ）");

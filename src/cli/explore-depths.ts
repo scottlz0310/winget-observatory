@@ -112,14 +112,10 @@ export function parseArgs(argv: string[]): ExploreDepthsOptions {
 function printRowTable(
   rows: DepthsRow[],
   log = console.log,
-  options:
-    | { showCommitCount?: boolean; showThirdPartyAssignees?: boolean; showIntervention?: boolean }
-    | boolean = false,
+  options: { showCommitCount?: boolean; showIntervention?: boolean } | boolean = false,
 ): void {
   const showCommitCount =
     typeof options === "boolean" ? options : (options.showCommitCount ?? false);
-  const showThirdPartyAssignees =
-    typeof options === "boolean" ? false : (options.showThirdPartyAssignees ?? false);
   const showIntervention =
     typeof options === "boolean" ? false : (options.showIntervention ?? false);
   if (rows.length === 0) {
@@ -129,15 +125,9 @@ function printRowTable(
   for (const row of rows) {
     const commitCol = showCommitCount ? ` | ${String(row.CommitCount ?? "-").padStart(2)}c` : "";
     const badgeLabel = showIntervention ? row.Intervention?.PrimaryBadge?.Label : undefined;
-    const assigneeCol = badgeLabel
-      ? ` | [${badgeLabel}]`
-      : (showThirdPartyAssignees || showIntervention) &&
-          row.ThirdPartyAssignees &&
-          row.ThirdPartyAssignees.length > 0
-        ? ` | [${row.ThirdPartyAssignees.join(", ")}]`
-        : "";
+    const interventionCol = badgeLabel ? ` | [${badgeLabel}]` : "";
     log(
-      `  ${row.PR.padEnd(8)}${commitCol} | ${row.作成日時} | ${row.更新日時}${assigneeCol} | ${row.タイトル}`,
+      `  ${row.PR.padEnd(8)}${commitCol} | ${row.作成日時} | ${row.更新日時}${interventionCol} | ${row.タイトル}`,
     );
   }
 }
@@ -252,13 +242,13 @@ export async function runExploreDepths(
     log(
       "説明: 初回提出者（authorAssociation = NONE・生涯マージ 0 回）の健康なPR全体（手直し込み）の、起票日時(created)が最も古い先頭",
     );
-    printRowTable(firstTimerBottom, log, { showCommitCount: true, showThirdPartyAssignees: true });
+    printRowTable(firstTimerBottom, log, { showCommitCount: true, showIntervention: true });
     log("");
 
     log("【5A. 未レビュー（完全未着手）前線 (Unreviewed Frontier)】");
     const unreviewedTruncatedNote = unreviewedTruncated ? " [※走査上限到達のため一部未完了]" : "";
     log(
-      `説明: 人間レビュー・手動コメント・第三者 Assignees・Collaborator 以上の自動指摘がいずれも無い健康なPR（作成者本人・一般ボット除く）の起票順先頭 (上位 ${unreviewedSummary.count} 件 / 先頭: ${unreviewedSummary.head ? `${unreviewedSummary.head.PR} 起票 ${unreviewedSummary.head.作成日時}・経過 ${unreviewedSummary.headElapsedDays ?? "-"} 日` : unreviewedTruncated ? "走査上限到達・未確定" : "該当なし"})${unreviewedTruncatedNote}`,
+      `説明: 人間レビュー・手動コメントがいずれも無い健康なPR（作成者本人・ボット・未編集自動コメント・CI再実行コマンド単体除く）の起票順先頭 (上位 ${unreviewedSummary.count} 件 / 先頭: ${unreviewedSummary.head ? `${unreviewedSummary.head.PR} 起票 ${unreviewedSummary.head.作成日時}・経過 ${unreviewedSummary.headElapsedDays ?? "-"} 日` : unreviewedTruncated ? "走査上限到達・未確定" : "該当なし"})${unreviewedTruncatedNote}`,
     );
     if (unreviewedBottom.length === 0 && unreviewedTruncated) {
       log("  走査上限に到達し、未走査の PR が残っているため有無は未確定です");
@@ -276,12 +266,9 @@ export async function runExploreDepths(
     if (intervenedSummary.kindCounts.comment > 0) {
       kindParts.push(`コメント(${intervenedSummary.kindCounts.comment})`);
     }
-    if (intervenedSummary.kindCounts.assignee > 0) {
-      kindParts.push(`アサイン(${intervenedSummary.kindCounts.assignee})`);
-    }
     const intervenedBreakdown = kindParts.length > 0 ? ` / 内訳: ${kindParts.join(", ")}` : "";
     log(
-      `説明: 人間レビュー・手動コメント・第三者 Assignees のいずれかが付いている健康なPRの起票順先頭 (上位 ${intervenedSummary.count} 件 / 先頭: ${intervenedSummary.head ? `${intervenedSummary.head.PR} 起票 ${intervenedSummary.head.作成日時}・経過 ${intervenedSummary.headElapsedDays ?? "-"} 日` : intervenedTruncated ? "走査上限到達・未確定" : "該当なし"}${intervenedBreakdown})${intervenedTruncatedNote}`,
+      `説明: 人間レビューまたは手動コメントが付いている健康なPRの起票順先頭 (上位 ${intervenedSummary.count} 件 / 先頭: ${intervenedSummary.head ? `${intervenedSummary.head.PR} 起票 ${intervenedSummary.head.作成日時}・経過 ${intervenedSummary.headElapsedDays ?? "-"} 日` : intervenedTruncated ? "走査上限到達・未確定" : "該当なし"}${intervenedBreakdown})${intervenedTruncatedNote}`,
     );
     if (intervenedBottom.length === 0 && intervenedTruncated) {
       log("  走査上限に到達し、未走査の PR が残っているため有無は未確定です");

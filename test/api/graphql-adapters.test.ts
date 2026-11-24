@@ -206,40 +206,34 @@ describe("GraphQL Adapters", () => {
       });
     });
 
-    test("COLLABORATOR の Deterministic automation コメントを含む場合は Intervened=true かつ FirstHumanInterventionAt 未設定になる", () => {
+    test("未編集の自動コメントと第三者アサインのみの場合は Intervened=false かつ FirstHumanInterventionAt 未設定になる", () => {
       const node: GraphQLPullRequestNode = {
-        number: 439626,
-        title: "Deprecated manifest PR",
-        url: "https://github.com/repo/pull/439626",
-        createdAt: "2026-09-23T08:52:58Z",
-        updatedAt: "2026-10-30T12:47:07Z",
-        author: { __typename: "User", login: "rakleed" },
-        assignees: { nodes: [] },
+        number: 464302,
+        title: "Defender race condition PR",
+        url: "https://github.com/repo/pull/464302",
+        createdAt: "2026-10-28T21:47:38Z",
+        updatedAt: "2026-11-21T02:01:00Z",
+        author: { __typename: "User", login: "scottlz0310-user" },
+        assignees: { nodes: [{ __typename: "User", login: "stephengillie" }] },
         reviews: { nodes: [] },
         comments: {
           nodes: [
             {
               author: { __typename: "User", login: "stephengillie" },
-              authorAssociation: "COLLABORATOR",
-              createdAt: "2026-10-30T06:18:49Z",
-              body: "This manifest version has been depreciated. Please use version `1.28.0`. (Deterministic automation - build 1830.)",
+              createdAt: "2026-11-20T05:38:51Z",
+              body: "Automatic Validation ended with:\n> Defender race condition detected.\n\n(Deterministic automation - build 1838.)",
             },
           ],
         },
       };
 
       const result = adaptGraphQLToPrView(node);
+      expect(result.thirdPartyAssignees).toEqual(["stephengillie"]);
       expect(result.intervention).toEqual({
-        Intervened: true,
-        ThirdPartyAssignees: [],
+        Intervened: false,
+        ThirdPartyAssignees: ["stephengillie"],
         HumanReviewCount: 0,
         ManualCommentCount: 0,
-        PrivilegedAutomationCommentCount: 1,
-        PrimaryBadge: {
-          Kind: "comment",
-          Actor: "stephengillie",
-          Label: "自動指摘済: stephengillie",
-        },
       });
     });
   });

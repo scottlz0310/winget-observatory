@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- メンテナ初動介入・基準 PR 介入済み判定から CI 自動復旧ノイズおよびアサインのみ誤認を除外し、判定基準を人間レビュー・手動コメントのみに統一（#147）:
+  - `src/domain/intervention.ts`, `src/models/depths.ts`: Issue #121 で導入していた `PrivilegedAutomationCommentCount` による特権ロール自動コメント除外および第三者アサイン単体での介入判定を撤回し、`Intervened` / `PrimaryBadge` / `FirstHumanInterventionAt` を全指標で「実質的な人間アクション（ボット・作成者本人を除いた人間レビューまたは手動コメント）」に統一。あわせて未編集の `(Automated message` コメント（`isAutomationComment`）および `@wingetbot run` 単体コメント（`isCiRerunCommandComment`）を除外対象へ追加（`Edit:` 等による人間手動追記の検知は継続維持）
+  - `src/api/graphql-queries.ts`, `src/api/graphql-types.ts`, `src/api/intervention-paging.ts`: 不要となった `timelineItems(itemTypes: [ASSIGNED_EVENT])` およびコメントの `authorAssociation` 取得を整理
+  - `src/domain/depths.ts`, `src/domain/forecast.ts`, `src/domain/forecast-band.ts`, `scripts/pages/sections/`, `src/cli/explore-depths.ts`, `README.md`: `CURRENT_DEPTHS_VERSION` を `7` → `8` へ引き上げ（`extractUnreviewedFrontierSamples` の既定最小バージョンも `CURRENT_DEPTHS_VERSION` へ統一し、旧 v7 履歴との段差混在を防止）、`ThirdPartyAssignees` による介入フォールバック表示・予想ロジックと UI/CLI/README の説明文を整理
+
 - `New-Package` と `Validation-Completed` がある PR は `Azure-Pipeline-Passed` がなくてもキュー観測の対象に含める（#139）。比較条件の変更前後で差分や予測を計算せず、マージ済みサンプルの Ready 判定を段階的に再計測し、再計測待ちの旧値は当回の集計から除く。
 
 - アーキテクチャ境界テストで静的 import・export を構文木から抽出し、コメントを挟む型専用依存の見落としを修正（#134）。

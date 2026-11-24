@@ -33,8 +33,10 @@ export function getThirdPartyAssignees(
  * - 4: 主戦場ライン版（FirstReviewFrontier: 直近7日間初回人間介入コホートの createdAt 中央値・オープン＋マージ済み）
  * - 5: 2×2 待機ライン統一版（HealthyBottom GraphQL TOP 10、SingleCommitBottom / FirstTimerSingleCommitBottom / FirstTimerUnreviewedBottom、全象限作者メタデータ統一）
  * - 6: 1コミット限定廃止版（SingleCommitBottom / StaleBottom の新規収集を廃止し、マージ前線は progress.Samples の直近マージ実績へ統一）
+ * - 7: Validation-Completed 基準移行版（Azure-Pipeline-Passed 非依存で New-Package + Validation-Completed を観測対象化）
+ * - 8: 人間介入純化版（全指標で介入判定を人間レビュー・手動コメントのみに統一し、特権自動指摘・アサインのみ・(Automated message・@wingetbot run 単体を除外）
  */
-export const CURRENT_DEPTHS_VERSION = 7;
+export const CURRENT_DEPTHS_VERSION = 8;
 
 /**
  * タイトル文字列をコンソール/表示用に切り詰める（45文字超は先頭42文字 + "..."）。

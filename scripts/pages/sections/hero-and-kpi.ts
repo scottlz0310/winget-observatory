@@ -17,9 +17,6 @@ function formatTargetInterventionLabel(forecast: FirstReviewForecast): string {
   if (forecast.targetIntervention?.PrimaryBadge?.Label) {
     return forecast.targetIntervention.PrimaryBadge.Label;
   }
-  if (forecast.targetAssignees.length > 0) {
-    return `アサイン済: ${forecast.targetAssignees.join(", ")}`;
-  }
   return "介入あり";
 }
 

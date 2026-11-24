@@ -105,11 +105,11 @@ export function extractHealthyFrontierSamples(
 
 /**
  * スナップショット列から、未レビュー（完全未着手）正常底の先頭（起票が最古の健康な PR）の
- * 観測列を時刻昇順で取り出す（v3 互換用）。
+ * 観測列を時刻昇順で取り出す。
  */
 export function extractUnreviewedFrontierSamples(
   snapshots: DepthsSnapshot[],
-  minDefinitionVersion = 3,
+  minDefinitionVersion = CURRENT_DEPTHS_VERSION,
 ): UnreviewedFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
@@ -151,33 +151,14 @@ export function extractMainstreamFrontierSamples(
 }
 
 export interface FirstReviewForecastOptions {
-  /** 基準 PR 自身の介入判定結果（人間レビュー・手動コメント・第三者アサインの OR） */
+  /** 基準 PR 自身の介入判定結果（人間レビューまたは手動コメントの OR） */
   targetIntervention?: PrInterventionSummary | null;
-  /** 基準 PR 自身の第三者 Assignees（旧データ互換フォールバック用） */
-  targetThirdPartyAssignees?: readonly string[] | null;
 }
 
 function resolveTargetIntervention(
   options: FirstReviewForecastOptions,
 ): PrInterventionSummary | null {
-  if (options.targetIntervention) {
-    return options.targetIntervention;
-  }
-  const assignees = (options.targetThirdPartyAssignees ?? []).filter((a) => Boolean(a));
-  if (assignees.length === 0) {
-    return null;
-  }
-  return {
-    Intervened: true,
-    ThirdPartyAssignees: assignees,
-    HumanReviewCount: 0,
-    ManualCommentCount: 0,
-    PrimaryBadge: {
-      Kind: "assignee",
-      Actor: assignees[0],
-      Label: `アサイン済: ${assignees.join(", ")}`,
-    },
-  };
+  return options.targetIntervention ?? null;
 }
 
 /**

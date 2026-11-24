@@ -108,34 +108,12 @@ query GetPullRequestView($owner: String!, $name: String!, $number: Int!) {
             __typename
             login
           }
-          authorAssociation
           body
           createdAt
           lastEditedAt
           editor {
             __typename
             login
-          }
-        }
-      }
-      timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          __typename
-          ... on AssignedEvent {
-            createdAt
-            actor {
-              __typename
-              login
-            }
-            assignee {
-              ... on User {
-                login
-              }
-            }
           }
         }
       }
@@ -378,7 +356,6 @@ query GetPullRequestCommentsPage($owner: String!, $name: String!, $number: Int!,
             __typename
             login
           }
-          authorAssociation
           body
           createdAt
           lastEditedAt
@@ -415,7 +392,7 @@ query SearchInterventionLightCandidates($query: String!, $first: Int!, $after: S
 `;
 
 /**
- * 複数 PR の介入判定用メタデータ・reviews・comments・assignees・AssignedEvent を 1 リクエストで取得する alias クエリを構築する。
+ * 複数 PR の介入判定用メタデータ・reviews・comments・assignees を 1 リクエストで取得する alias クエリを構築する。
  */
 export function buildPullRequestBatchInterventionQuery(numbers: readonly number[]): string {
   const fields = numbers
@@ -473,34 +450,12 @@ export function buildPullRequestBatchInterventionQuery(numbers: readonly number[
             __typename
             login
           }
-          authorAssociation
           body
           createdAt
           lastEditedAt
           editor {
             __typename
             login
-          }
-        }
-      }
-      timelineItems(itemTypes: [ASSIGNED_EVENT], first: 10) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          __typename
-          ... on AssignedEvent {
-            createdAt
-            actor {
-              __typename
-              login
-            }
-            assignee {
-              ... on User {
-                login
-              }
-            }
           }
         }
       }

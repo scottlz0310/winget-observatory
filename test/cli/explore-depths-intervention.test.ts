@@ -416,13 +416,21 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
         number: 612,
         createdAt: "2026-10-02T00:00:00Z",
         author: "u2",
-        assignees: [{ login: "u2" }],
+        assignees: [{ login: "stephengillie" }],
       },
       {
         number: 613,
         createdAt: "2026-10-03T00:00:00Z",
         author: null,
         assignees: [{ login: "stephengillie" }],
+        comments: {
+          nodes: [
+            {
+              author: { __typename: "User", login: "stephengillie" },
+              body: "Please check installer URL.",
+            },
+          ],
+        },
       },
       { number: 614, createdAt: "2026-10-04T00:00:00Z", author: "u4" },
     ];
@@ -460,7 +468,9 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
         number: 703,
         createdAt: "2026-10-03T00:00:00Z",
         author: "u3",
-        assignees: [{ login: "stephengillie" }],
+        reviews: {
+          nodes: [{ author: { __typename: "User", login: "stephengillie" }, state: "COMMENTED" }],
+        },
       },
     ];
     const nodeMap = new Map(specs.map((s) => [s.number, createInterventionNode(s)]));
@@ -503,7 +513,9 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
         author: "u5",
         commits: 3,
         authorAssociation: "CONTRIBUTOR",
-        assignees: [{ login: "trenly" }],
+        comments: {
+          nodes: [{ author: { __typename: "User", login: "trenly" }, body: "Please check hash." }],
+        },
       },
     ];
     const nodeMap = new Map(specs.map((s) => [s.number, createInterventionNode(s)]));
@@ -613,7 +625,11 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       number: 761,
       createdAt: "2026-10-01T00:00:00Z",
       author: "u1",
-      assignees: [{ login: "stephengillie" }],
+      comments: {
+        nodes: [
+          { author: { __typename: "User", login: "stephengillie" }, body: "Please clarify." },
+        ],
+      },
     });
     const intervenedOnlyClient = {
       graphql: async <T>(query: string): Promise<T> => {
@@ -671,47 +687,50 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
     expect(r2.intervenedTruncated).toBe(true);
   });
 
-  test("COLLABORATOR の Deterministic automation コメント付き PR (#439626 相当) は未レビュー前線から除外され介入済み側へ分類される（Issue #121）", async () => {
-    const privAutoPr = createInterventionNode({
-      number: 439626,
-      createdAt: "2026-09-23T08:52:58Z",
+  test("未編集の自動コメント（Deterministic automation / Automated message）・@wingetbot run・第三者アサインのみの PR は未レビュー前線として扱う（Issue #147）", async () => {
+    const autoRecoveryPr = createInterventionNode({
+      number: 464302,
+      createdAt: "2026-10-06T08:52:58Z",
       author: "rakleed",
+      assignees: [{ login: "stephengillie" }],
       comments: {
         nodes: [
           {
             author: { __typename: "User", login: "stephengillie" },
-            authorAssociation: "COLLABORATOR",
             createdAt: "2026-10-30T06:18:49Z",
-            body: "This manifest version has been depreciated. Please use version `1.28.0`. (Deterministic automation - build 1830.)",
+            body: "Automatic Validation ended with:\n> Defender race condition detected.\n\n(Deterministic automation - build 1838.)",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-11-23T14:17:10Z",
+            body: "URL: https://example.com/app.zip\nStatus Code: 200\n\n(Automated message - build 1838)",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-11-23T17:20:36Z",
+            body: "@wingetbot run",
           },
         ],
       },
     });
-    const trueUnreviewedPr = createInterventionNode({
+    const manualReviewedPr = createInterventionNode({
       number: 448260,
       createdAt: "2026-10-07T15:34:01Z",
       author: "Aureliolo",
       comments: {
         nodes: [
           {
-            author: { __typename: "Bot", login: "microsoft-github-policy-service" },
-            authorAssociation: "CONTRIBUTOR",
-            createdAt: "2026-10-07T15:35:00Z",
-            body: "CLA check",
-          },
-          {
-            author: { __typename: "User", login: "Aureliolo" },
-            authorAssociation: "CONTRIBUTOR",
-            createdAt: "2026-10-07T15:36:00Z",
-            body: "@microsoft-github-policy-service agree",
+            author: { __typename: "User", login: "taras-janea" },
+            createdAt: "2026-11-19T13:01:49Z",
+            body: "Thank you for the contribution.",
           },
         ],
       },
     });
 
     const nodeMap = new Map([
-      [439626, privAutoPr],
-      [448260, trueUnreviewedPr],
+      [464302, autoRecoveryPr],
+      [448260, manualReviewedPr],
     ]);
     const mockClient = {
       graphql: async <T>(query: string): Promise<T> => {
@@ -719,7 +738,7 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
           return {
             search: {
               pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [{ number: 439626 }, { number: 448260 }],
+              nodes: [{ number: 464302 }, { number: 448260 }],
             },
           } as unknown as T;
         }
@@ -733,12 +752,14 @@ describe("CLI: explore-depths の未レビュー前線・介入済み前線（fe
       10,
       100,
     );
-    expect(result.unreviewedBottom.map((r) => r.Number)).toEqual([448260]);
-    expect(result.intervenedBottom.map((r) => r.Number)).toEqual([439626]);
+    expect(result.unreviewedBottom.map((r) => r.Number)).toEqual([464302]);
+    expect(result.unreviewedBottom[0]?.Intervention?.Intervened).toBe(false);
+    expect(result.unreviewedBottom[0]?.Intervention?.PrimaryBadge).toBeUndefined();
+    expect(result.unreviewedBottom[0]?.Intervention?.FirstHumanInterventionAt).toBeUndefined();
+    expect(result.intervenedBottom.map((r) => r.Number)).toEqual([448260]);
     expect(result.intervenedBottom[0]?.Intervention?.PrimaryBadge?.Label).toBe(
-      "自動指摘済: stephengillie",
+      "コメント済: taras-janea",
     );
-    expect(result.intervenedBottom[0]?.Intervention?.FirstHumanInterventionAt).toBeUndefined();
   });
 
   test("runExploreDepths は DepthsVersion=4 で FirstReviewFrontier / UnreviewedBottom / IntervenedBottom / TargetPr.Intervention を保存する", async () => {

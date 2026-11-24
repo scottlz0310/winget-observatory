@@ -46,7 +46,6 @@ export interface ForecastBandSource {
   healthyBottomCreatedMs: number | null;
   mainstreamSamples: MainstreamFrontierSample[];
   targetIntervention: PrInterventionSummary | null;
-  targetThirdPartyAssignees: string[];
 }
 
 /**
@@ -99,7 +98,6 @@ export function buildForecastBandSource(input: {
     healthyBottomCreatedMs,
     mainstreamSamples: samples,
     targetIntervention: depths?.TargetPr?.Intervention ?? null,
-    targetThirdPartyAssignees: depths?.TargetPr?.ThirdPartyAssignees ?? [],
   };
 }
 
@@ -142,7 +140,6 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
     Number.isFinite(targetCreatedMs) ? targetCreatedMs : null,
     {
       targetIntervention: source.targetIntervention,
-      targetThirdPartyAssignees: source.targetThirdPartyAssignees,
     },
   );
 

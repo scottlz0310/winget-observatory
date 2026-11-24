@@ -38,7 +38,6 @@ export interface GraphQLCommentNode {
     __typename?: string | null;
     login?: string | null;
   } | null;
-  authorAssociation?: string | null;
   body?: string | null;
   createdAt?: string | null;
   lastEditedAt?: string | null;
@@ -100,18 +99,6 @@ export type GraphQLTimelineItemNode =
   | {
       __typename: "ReadyForReviewEvent";
       createdAt: string;
-    }
-  | {
-      __typename: "AssignedEvent";
-      createdAt: string;
-      actor?: {
-        __typename?: string | null;
-        login?: string | null;
-      } | null;
-      assignee?: {
-        __typename?: string | null;
-        login?: string | null;
-      } | null;
     }
   | {
       __typename: string;

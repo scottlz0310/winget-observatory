@@ -27,7 +27,7 @@ interface BottomTableRenderOptions {
   showAuthor?: boolean;
   showCommitCount?: boolean;
   highlightFirstTimer?: boolean;
-  highlightThirdPartyAssignees?: boolean;
+  highlightInterventions?: boolean;
   elapsedBasis?: "updated" | "created";
 }
 
@@ -41,11 +41,7 @@ function renderInterventionBadge(item: DepthsRow): string {
   const badge = item.Intervention?.PrimaryBadge;
   if (badge) {
     const colorStyle = INTERVENTION_BADGE_COLORS[badge.Kind];
-    return `<span class="badge" style="${colorStyle} font-size: 0.7rem; margin-left: 0.35rem;" title="人間の介入（レビュー・手動コメント・第三者 Assignees）を検知">${escapeHtml(badge.Label)}</span>`;
-  }
-  const thirdPartyAssignees = item.ThirdPartyAssignees ?? [];
-  if (thirdPartyAssignees.length > 0) {
-    return `<span class="badge" style="${INTERVENTION_BADGE_COLORS.assignee} font-size: 0.7rem; margin-left: 0.35rem;" title="作成者以外の第三者 Assignees（${escapeHtml(thirdPartyAssignees.join(", "))}）が付与済み">アサイン済: ${escapeHtml(thirdPartyAssignees.join(", "))}</span>`;
+    return `<span class="badge" style="${colorStyle} font-size: 0.7rem; margin-left: 0.35rem;" title="人間の介入（レビュー・手動コメント）を検知">${escapeHtml(badge.Label)}</span>`;
   }
   return "";
 }
@@ -60,7 +56,7 @@ function renderBottomRowTable(
     showAuthor = false,
     showCommitCount = false,
     highlightFirstTimer = false,
-    highlightThirdPartyAssignees = true,
+    highlightInterventions = true,
     elapsedBasis = "created",
   } = options;
   const observedMs = Date.parse(timestampIso);
@@ -76,7 +72,7 @@ function renderBottomRowTable(
         highlightFirstTimer && isFirstTimerDepthsRow(item)
           ? `<span class="badge" style="background: #dcfce7; color: #15803d; font-size: 0.7rem; margin-left: 0.35rem;" title="初回提出者（authorAssociation = NONE・生涯マージ 0 回）">🌱 初回提出者</span>`
           : "";
-      const interventionBadge = highlightThirdPartyAssignees ? renderInterventionBadge(item) : "";
+      const interventionBadge = highlightInterventions ? renderInterventionBadge(item) : "";
       const authorCell = showAuthor ? `<td>${escapeHtml(item.Author ?? "-")}</td>` : "";
       const commitCountText = item.CommitCount !== undefined ? `${item.CommitCount}` : "-";
       const commitCountCell = showCommitCount ? `<td>${commitCountText}</td>` : "";
@@ -146,7 +142,7 @@ function renderMatrixRowListView(params: {
           showAuthor: params.showAuthor,
           showCommitCount: params.showCommitCount,
           highlightFirstTimer: params.highlightFirstTimer,
-          highlightThirdPartyAssignees: params.highlightInterventions,
+          highlightInterventions: params.highlightInterventions,
           elapsedBasis: "created",
         })}${
           params.truncated
@@ -526,7 +522,7 @@ export function renderWaitlineMatrixSection(
       <div class="card" style="padding: 1.25rem; border-top: 4px solid #64748b;">
         <h4 style="font-size: 1.05rem; font-weight: 600; color: #475569; margin-bottom: 0.4rem;">🟦 初動正常底（未レビュー最古・遅くとも）</h4>
         <p class="section-note" style="margin-bottom: 0.6rem;">
-          人間レビュー・手動コメント・第三者 Assignees・特権ロール自動指摘がいずれも無い完全未着手キュー（複数コミット込み・起票日時古い順 TOP 10）。これより古い健康 PR には原則メンテナの手が入っています。
+          人間レビュー・手動コメントがいずれも無い完全未着手キュー（複数コミット込み・起票日時古い順 TOP 10。未編集の自動コメント・CI 再実行コマンド単体・アサインのみは未着手扱い）。これより古い健康 PR には原則メンテナの手が入っています。
         </p>
         ${renderMatrixRowListView({
           viewKey: "all",

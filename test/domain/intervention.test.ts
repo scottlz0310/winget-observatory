@@ -8,7 +8,9 @@ import {
   FIRST_REVIEW_MAINSTREAM_MODE,
   type FirstReviewCohortCandidate,
   hasDeterministicAutomationManualEdit,
+  isAutomationComment,
   isBotActor,
+  isCiRerunCommandComment,
   isDeterministicAutomationComment,
   isSameActorLogin,
   summarizeInterventionFrontier,
@@ -107,6 +109,67 @@ describe("Domain: intervention helpers", () => {
     },
   ])("isDeterministicAutomationComment: $name -> $expected", ({ body, expected }) => {
     expect(isDeterministicAutomationComment(body)).toBe(expected);
+  });
+
+  test.each<{
+    name: string;
+    body: string | null | undefined;
+    expected: boolean;
+  }>([
+    {
+      name: "Deterministic automation ログを含む",
+      body: "Defender race condition detected.\n\n(Deterministic automation - build 1838.)",
+      expected: true,
+    },
+    {
+      name: "Automated message ログを含む（#487178 実例相当）",
+      body: "URL: [https:]//example.com/app.zip \nStatus Code: 200\n\n(Automated message - build 1838)",
+      expected: true,
+    },
+    {
+      name: "人間の通常質問コメント",
+      body: "Hi @user, Does this app have a privacy policy?",
+      expected: false,
+    },
+    {
+      name: "null / undefined",
+      body: undefined,
+      expected: false,
+    },
+  ])("isAutomationComment: $name -> $expected", ({ body, expected }) => {
+    expect(isAutomationComment(body)).toBe(expected);
+  });
+
+  test.each<{
+    name: string;
+    body: string | null | undefined;
+    expected: boolean;
+  }>([
+    { name: "@wingetbot run 単体", body: "@wingetbot run", expected: true },
+    { name: "前後空白・改行・大文字混在", body: "  @WinGetBot   RUN \r\n", expected: true },
+    {
+      name: "HTML コメント付き @wingetbot run 単体",
+      body: "@wingetbot run <!-- retry -->",
+      expected: true,
+    },
+    {
+      name: "Waiver コマンドは除外しない",
+      body: "@wingetbot waivers Add Policy-Test-1.2",
+      expected: false,
+    },
+    {
+      name: "説明文併記の @wingetbot run は人間コメント扱い",
+      body: "@wingetbot run\nThanks for fixing the URL!",
+      expected: false,
+    },
+    {
+      name: "通常コメント内の言及は除外しない",
+      body: "Please trigger @wingetbot run",
+      expected: false,
+    },
+    { name: "null / undefined", body: null, expected: false },
+  ])("isCiRerunCommandComment: $name -> $expected", ({ body, expected }) => {
+    expect(isCiRerunCommandComment(body)).toBe(expected);
   });
 
   test.each<{
@@ -266,6 +329,30 @@ describe("Domain: intervention helpers", () => {
       },
       prAuthor: "kachakaran6",
       expected: false,
+    },
+    {
+      name: "Automated message の未編集コメントは除外（#487178 実例相当）",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-11-23T14:17:10Z",
+        lastEditedAt: null,
+        editor: null,
+        body: "URL: [https:]//example.com/app.zip \nStatus Code: 200\n\n(Automated message - build 1838)",
+      },
+      prAuthor: "submitter",
+      expected: false,
+    },
+    {
+      name: "Automated message に人間が Edit: を手動追記した場合は人間介入として検知",
+      comment: {
+        author: { __typename: "User", login: "stephengillie" },
+        createdAt: "2026-11-23T14:17:10Z",
+        lastEditedAt: "2026-11-23T14:25:00Z",
+        editor: { __typename: "User", login: "stephengillie" },
+        body: "URL: [https:]//example.com/app.zip \nStatus Code: 200\n\n(Automated message - build 1838)\n\nEdit: Verified upstream release.",
+      },
+      prAuthor: "submitter",
+      expected: true,
     },
   ])(
     "hasDeterministicAutomationManualEdit: $name -> $expected",
@@ -498,7 +585,52 @@ describe("Domain: classifyPrIntervention", () => {
     });
   });
 
-  test("代表バッジの優先順は レビュー > コメント > アサイン で、レビュー複数時は最新を優先する", () => {
+  test("CI 自動復旧コメント（Defender race condition）・Automated message・@wingetbot run 単体・第三者アサインのみの場合は未着手（Intervened=false, #464302/#487178/#483527 相当）", () => {
+    const summary = classifyPrIntervention({
+      author: { __typename: "User", login: "scottlz0310-user" },
+      assignees: {
+        nodes: [
+          { __typename: "User", login: "scottlz0310-user" },
+          { __typename: "User", login: "stephengillie" },
+        ],
+      },
+      reviews: { nodes: [] },
+      comments: {
+        nodes: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-11-20T05:38:51Z",
+            lastEditedAt: null,
+            editor: null,
+            body: "Automatic Validation ended with: \n> Start: MpScan(MP_FEATURE_SUPPORTED)\n> ERROR: Another scan already in progress\n> \nDefender race condition detected.\n\n(Deterministic automation - build 1838.)",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-11-23T14:17:10Z",
+            lastEditedAt: null,
+            editor: null,
+            body: "URL: [https:]//example.com/app.zip \nStatus Code: 200\n\n(Automated message - build 1838)",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            createdAt: "2026-11-23T17:20:36Z",
+            lastEditedAt: null,
+            editor: null,
+            body: "@wingetbot run",
+          },
+        ],
+      },
+    });
+
+    expect(summary).toEqual({
+      Intervened: false,
+      ThirdPartyAssignees: ["stephengillie"],
+      HumanReviewCount: 0,
+      ManualCommentCount: 0,
+    });
+  });
+
+  test("代表バッジの優先順は レビュー > コメント で、レビュー複数時は最新を優先する", () => {
     const summary = classifyPrIntervention({
       author: { __typename: "User", login: "submitter" },
       assignees: { nodes: [{ login: "trenly" }] },
@@ -619,7 +751,7 @@ describe("Domain: summarizeInterventionFrontier", () => {
 describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFrontier", () => {
   const NOW = "2026-11-17T00:00:00Z";
 
-  test("ボット・本人コメント・自動検証ログを除外し、レビュー/手動コメント/第三者アサインの中から最古の介入日時を特定する", () => {
+  test("ボット・本人コメント・自動コメント・CI再実行コマンド・第三者アサインを除外し、レビューと手動コメントの中から最古の介入日時を特定する", () => {
     const summary = classifyPrIntervention({
       author: { __typename: "User", login: "submitter" },
       assignees: {
@@ -656,27 +788,28 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
           },
           {
             author: { __typename: "User", login: "stephengillie" },
+            body: "URL: https://example.com/a.zip\nStatus Code: 200\n\n(Automated message - build 1838)",
+            createdAt: "2026-11-08T00:00:00Z",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            body: "@wingetbot run",
+            createdAt: "2026-11-10T00:00:00Z",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
             body: "Hi, please fix installer URL.",
             createdAt: "2026-11-12T06:00:00Z",
-          },
-        ],
-      },
-      timelineItems: {
-        nodes: [
-          {
-            __typename: "AssignedEvent",
-            createdAt: "2026-11-11T03:00:00Z",
-            actor: { __typename: "User", login: "reviewerA" },
-            assignee: { __typename: "User", login: "reviewerA" },
           },
         ],
       },
     });
 
     expect(summary.Intervened).toBe(true);
-    expect(summary.FirstHumanInterventionAt).toBe("2026-11-11T03:00:00.000Z");
-    expect(summary.FirstInterventionKind).toBe("assignee");
-    expect(summary.FirstInterventionActor).toBe("reviewerA");
+    expect(summary.ThirdPartyAssignees).toEqual(["reviewerA"]);
+    expect(summary.FirstHumanInterventionAt).toBe("2026-11-12T06:00:00.000Z");
+    expect(summary.FirstInterventionKind).toBe("comment");
+    expect(summary.FirstInterventionActor).toBe("stephengillie");
   });
 
   const makeCandidate = (
@@ -771,31 +904,23 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
     expect(frontier.LagDays).toBe(37);
   });
 
-  test("第三者 AssignedEvent の後にアサイン解除され現在 Intervened=false でも、FirstHumanInterventionAt が窓内ならコホートに含める", () => {
+  test("第三者 Assignees が付与されているだけでレビューも手動コメントも無い PR は未介入かつ主戦場コホート対象外となる", () => {
     const intervention = classifyPrIntervention({
       author: { __typename: "User", login: "submitter" },
-      assignees: { nodes: [] },
+      assignees: { nodes: [{ __typename: "User", login: "stephengillie" }] },
       reviews: { nodes: [] },
       comments: { nodes: [] },
-      timelineItems: {
-        nodes: [
-          {
-            __typename: "AssignedEvent",
-            createdAt: "2026-11-15T00:00:00Z",
-            actor: { __typename: "User", login: "stephengillie" },
-            assignee: { __typename: "User", login: "stephengillie" },
-          },
-        ],
-      },
     });
     expect(intervention.Intervened).toBe(false);
-    expect(intervention.FirstHumanInterventionAt).toBe("2026-11-15T00:00:00.000Z");
+    expect(intervention.ThirdPartyAssignees).toEqual(["stephengillie"]);
+    expect(intervention.PrimaryBadge).toBeUndefined();
+    expect(intervention.FirstHumanInterventionAt).toBeUndefined();
 
     const frontier = calculateFirstReviewMainstreamFrontier(
       [
         {
           number: 31,
-          title: "Unassigned after human assign event",
+          title: "Assignee only PR",
           url: "https://github.com/microsoft/winget-pkgs/pull/31",
           state: "OPEN",
           author: "submitter",
@@ -806,107 +931,64 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
       ],
       NOW,
     );
-    expect(frontier.CohortCount).toBe(1);
-    expect(frontier.MedianCreatedAt).toBe("2026-10-08T00:00:00.000Z");
-    expect(frontier.Items?.[0].InterventionKind).toBe("assignee");
+    expect(frontier.CohortCount).toBe(0);
+    expect(frontier.MedianCreatedAt).toBeNull();
   });
 
   test.each<{
     name: string;
-    authorAssociation: string | null | undefined;
-    author?: { __typename?: string | null; login?: string | null };
-    expectedIntervened: boolean;
-    expectedPrivCount?: number;
-    expectedBadgeLabel?: string;
+    author: { __typename?: string | null; login?: string | null };
+    body: string;
   }>([
     {
-      name: "COLLABORATOR (stephengillie, #439626 相当) の Deterministic automation は反応ありとして Unreviewed から除外",
-      authorAssociation: "COLLABORATOR",
+      name: "メンテナ (stephengillie) の未編集 Deterministic automation（非推奨マニフェスト指摘）",
       author: { __typename: "User", login: "stephengillie" },
-      expectedIntervened: true,
-      expectedPrivCount: 1,
-      expectedBadgeLabel: "自動指摘済: stephengillie",
+      body: "This manifest version has been depreciated. Please use version `1.28.0`. (Deterministic automation - build 1830.)",
     },
     {
-      name: "MEMBER の Deterministic automation も反応あり",
-      authorAssociation: "MEMBER",
-      author: { __typename: "User", login: "denelon" },
-      expectedIntervened: true,
-      expectedPrivCount: 1,
-      expectedBadgeLabel: "自動指摘済: denelon",
+      name: "メンテナ (stephengillie) の未編集 Deterministic automation（Defender race condition）",
+      author: { __typename: "User", login: "stephengillie" },
+      body: "Automatic Validation ended with:\n> ERROR: Another scan already in progress\nDefender race condition detected.\n\n(Deterministic automation - build 1838.)",
     },
     {
-      name: "OWNER の Deterministic automation も反応あり",
-      authorAssociation: "OWNER",
-      author: { __typename: "User", login: "owner-user" },
-      expectedIntervened: true,
-      expectedPrivCount: 1,
-      expectedBadgeLabel: "自動指摘済: owner-user",
+      name: "メンテナ (stephengillie) の未編集 Automated message（URL チェック）",
+      author: { __typename: "User", login: "stephengillie" },
+      body: "URL: [https:]//example.com/a.zip\nStatus Code: 200\n\n(Automated message - build 1838)",
     },
     {
-      name: "小文字 collaborator も正規化して反応あり",
-      authorAssociation: "collaborator",
-      author: { __typename: "User", login: "collab-user" },
-      expectedIntervened: true,
-      expectedPrivCount: 1,
-      expectedBadgeLabel: "自動指摘済: collab-user",
+      name: "メンテナによる @wingetbot run 単体コメント",
+      author: { __typename: "User", login: "stephengillie" },
+      body: "@wingetbot run",
     },
     {
-      name: "一般ユーザー (CONTRIBUTOR / NONE / 未設定) の未編集 Deterministic automation は従来どおり未着手",
-      authorAssociation: "CONTRIBUTOR",
-      author: { __typename: "User", login: "random-user" },
-      expectedIntervened: false,
-    },
-    {
-      name: "PR 作成者本人が COLLABORATOR で Deterministic automation を投稿した場合は本人扱いで未着手",
-      authorAssociation: "COLLABORATOR",
-      author: { __typename: "User", login: "submitter" },
-      expectedIntervened: false,
-    },
-    {
-      name: "純粋 Bot (wingetbot / [bot]) が COLLABORATOR 相当で Deterministic automation を投稿しても除外",
-      authorAssociation: "COLLABORATOR",
+      name: "純粋 Bot (wingetbot) の自動コメント",
       author: { __typename: "User", login: "wingetbot" },
-      expectedIntervened: false,
+      body: "This manifest version has been depreciated. (Deterministic automation - build 1830.)",
     },
-  ])(
-    "Deterministic automation 特権ロール判定: $name",
-    ({ authorAssociation, author, expectedIntervened, expectedPrivCount, expectedBadgeLabel }) => {
-      const summary = classifyPrIntervention({
-        author: { __typename: "User", login: "submitter" },
-        assignees: { nodes: [] },
-        reviews: { nodes: [] },
-        comments: {
-          nodes: [
-            {
-              author,
-              authorAssociation,
-              createdAt: "2026-10-30T06:18:49Z",
-              body: "This manifest version has been depreciated. Please use version `1.28.0`. (Deterministic automation - build 1830.)",
-            },
-          ],
-        },
-      });
+  ])("自動コメント・CI再実行ノイズの統一除外: $name", ({ author, body }) => {
+    const summary = classifyPrIntervention({
+      author: { __typename: "User", login: "submitter" },
+      assignees: { nodes: [] },
+      reviews: { nodes: [] },
+      comments: {
+        nodes: [
+          {
+            author,
+            createdAt: "2026-10-30T06:18:49Z",
+            body,
+          },
+        ],
+      },
+    });
 
-      expect(summary.Intervened).toBe(expectedIntervened);
-      expect(summary.PrivilegedAutomationCommentCount).toBe(expectedPrivCount);
-      expect(summary.ManualCommentCount).toBe(0);
-      expect(summary.HumanReviewCount).toBe(0);
-      // 主戦場ライン（FirstHumanInterventionAt）には未編集の自動ログ日時を算入しない
-      expect(summary.FirstHumanInterventionAt).toBeUndefined();
-      if (expectedBadgeLabel) {
-        expect(summary.PrimaryBadge).toEqual({
-          Kind: "comment",
-          Actor: author?.login ?? "",
-          Label: expectedBadgeLabel,
-        });
-      } else {
-        expect(summary.PrimaryBadge).toBeUndefined();
-      }
-    },
-  );
+    expect(summary.Intervened).toBe(false);
+    expect(summary.ManualCommentCount).toBe(0);
+    expect(summary.HumanReviewCount).toBe(0);
+    expect(summary.FirstHumanInterventionAt).toBeUndefined();
+    expect(summary.PrimaryBadge).toBeUndefined();
+  });
 
-  test("10/30 に COLLABORATOR の自動指摘があっても、11/18 にレビュー承認された PR の主戦場ライン初回人間介入日時は 11/18 のまま維持される（#440856 相当）", () => {
+  test("10/30 に自動指摘があっても、11/18 にレビュー承認された PR の主戦場ライン初回人間介入日時は 11/18 のまま維持される（#440856 相当）", () => {
     const intervention = classifyPrIntervention({
       author: { __typename: "User", login: "rodolphobrock" },
       assignees: { nodes: [] },
@@ -923,7 +1005,6 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
         nodes: [
           {
             author: { __typename: "User", login: "stephengillie" },
-            authorAssociation: "COLLABORATOR",
             createdAt: "2026-10-30T06:42:36Z",
             body: "This manifest version has been depreciated. (Deterministic automation - build 1830.)",
           },
@@ -932,7 +1013,8 @@ describe("Domain: FirstHumanInterventionAt & calculateFirstReviewMainstreamFront
     });
 
     expect(intervention.Intervened).toBe(true);
-    expect(intervention.PrivilegedAutomationCommentCount).toBe(1);
+    expect(intervention.HumanReviewCount).toBe(1);
+    expect(intervention.ManualCommentCount).toBe(0);
     expect(intervention.FirstHumanInterventionAt).toBe("2026-11-18T17:50:15.000Z");
     expect(intervention.FirstInterventionKind).toBe("review");
 
