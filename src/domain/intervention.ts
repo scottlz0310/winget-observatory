@@ -2,14 +2,12 @@ import type {
   DepthsRow,
   InterventionKind,
   PrInterventionActor,
-  PrInterventionAssignedEventInput,
   PrInterventionBadge,
   PrInterventionCommentInput,
   PrInterventionInput,
   PrInterventionReviewInput,
   PrInterventionSummary,
 } from "../models/depths";
-import { isPrivilegedAuthorAssociation } from "./first-timer";
 import { DAY_MS, round1 } from "./formatters";
 
 export type { FirstReviewCohortCandidate } from "./mainstream-cohort";
@@ -25,6 +23,19 @@ export {
  * アカウント全体ではなく該当本文のみを自動ログとして除外するために使用する。
  */
 export const DETERMINISTIC_AUTOMATION_MARKER = "(Deterministic automation";
+
+/**
+ * 個人アカウント経由で投稿される自動メッセージ（URL ステータス確認等）の識別マーカー。
+ */
+export const AUTOMATED_MESSAGE_MARKER = "(Automated message";
+
+/**
+ * 未編集時に人間介入から除外する自動生成コメントの識別マーカー一覧（SSoT）。
+ */
+export const AUTOMATION_COMMENT_MARKERS: readonly string[] = [
+  DETERMINISTIC_AUTOMATION_MARKER,
+  AUTOMATED_MESSAGE_MARKER,
+];
 
 /**
  * GraphQL 上 `__typename === "User"` だが純粋ボットとして除外する既知アカウント群（小文字正規化済み）。
@@ -93,16 +104,81 @@ export function isBotActor(actor: PrInterventionActor | null | undefined): boole
 }
 
 /**
- * 自動検証パイプライン由来の決定的ログコメントかどうかを判定する。
+ * Markdown の引用行（`>` で始まる行）を除いた非引用行に指定マーカーが含まれるかを判定する。
+ * メンテナの手動コメントが自動生成ログを引用した場合に自動コメントとして誤除外しないために使用する。
+ */
+function hasUnquotedMarker(body: string | null | undefined, markers: readonly string[]): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  for (const rawLine of body.split(/\r?\n/)) {
+    const trimmed = rawLine.trimStart();
+    if (trimmed.startsWith(">")) {
+      continue;
+    }
+    if (markers.some((marker) => trimmed.includes(marker))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 自動検証パイプライン由来の決定的ログコメントかどうかを判定する（Markdown 引用行を除く）。
  */
 export function isDeterministicAutomationComment(body: string | null | undefined): boolean {
-  return typeof body === "string" && body.includes(DETERMINISTIC_AUTOMATION_MARKER);
+  return hasUnquotedMarker(body, [DETERMINISTIC_AUTOMATION_MARKER]);
+}
+
+/**
+ * 個人アカウント権限で投稿される自動コメント（`(Deterministic automation` / `(Automated message` 等）かどうかを判定する。
+ * Markdown の引用行（`>` 開始）内のみに出現するマーカーは自動生成フッターとはみなさない。
+ */
+export function isAutomationComment(body: string | null | undefined): boolean {
+  return hasUnquotedMarker(body, AUTOMATION_COMMENT_MARKERS);
+}
+
+const CI_RERUN_COMMAND_PATTERN = /^@wingetbot\s+run$/i;
+
+/**
+ * CI の機械的な再実行のみを指示する単体コマンドコメント（`@wingetbot run`）かどうかを判定する。
+ * 説明文が併記されている場合や `@wingetbot waivers ...` 等の人間判断コマンドは false を返す。
+ */
+export function isCiRerunCommandComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+  return CI_RERUN_COMMAND_PATTERN.test(normalized);
 }
 
 const EXPLICIT_EDIT_LINE_PATTERN = /^(?:\*{1,2}|_{1,2})?edit\s*:/i;
 
+function findLastUnquotedAutomationMarkerIndex(body: string): number {
+  let latestIdx = -1;
+  let offset = 0;
+  for (const line of body.split(/\r?\n/)) {
+    const lineEnd = body.indexOf("\n", offset);
+    const nextOffset = lineEnd >= 0 ? lineEnd + 1 : body.length;
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith(">")) {
+      for (const marker of AUTOMATION_COMMENT_MARKERS) {
+        const localIdx = line.lastIndexOf(marker);
+        if (localIdx >= 0) {
+          const absIdx = offset + localIdx;
+          if (absIdx > latestIdx) {
+            latestIdx = absIdx;
+          }
+        }
+      }
+    }
+    offset = nextOffset;
+  }
+  return latestIdx;
+}
+
 function hasManualAppendInDeterministicBody(body: string): boolean {
-  const markerIdx = body.lastIndexOf(DETERMINISTIC_AUTOMATION_MARKER);
+  const markerIdx = findLastUnquotedAutomationMarkerIndex(body);
   if (markerIdx >= 0) {
     const closeIdx = body.indexOf(")", markerIdx);
     if (closeIdx >= 0) {
@@ -145,7 +221,7 @@ function hasEditedTimestampAfterCreation(comment: PrInterventionCommentInput): b
 }
 
 /**
- * 自動検証ログ（`(Deterministic automation`）を含むコメントが、
+ * 自動コメント（`(Deterministic automation` / `(Automated message`）が、
  * 投稿後に第三者の人間によって編集された（`lastEditedAt` かつ `editor` がボット・作成者本人でない）かを判定する。
  */
 function isThirdPartyHumanEditedComment(
@@ -162,7 +238,7 @@ function isThirdPartyHumanEditedComment(
 }
 
 /**
- * 自動検証ログ（`(Deterministic automation`）を含むコメントに、
+ * 自動コメント（`(Deterministic automation` / `(Automated message`）に、
  * ボット・作成者本人以外の人間による手動追記または編集形跡が含まれるかを判定する。
  * - `editor` がボットまたは作成者本人の場合は自動編集／本人編集として除外（false）する。
  * - 元投稿者（`author`）がボットまたは作成者本人の場合は、第三者の人間 `editor` による投稿後の編集のみを検知し、
@@ -174,7 +250,7 @@ export function hasDeterministicAutomationManualEdit(
   comment: PrInterventionCommentInput,
   prAuthorLogin?: string | null,
 ): boolean {
-  if (!isDeterministicAutomationComment(comment.body)) {
+  if (!isAutomationComment(comment.body)) {
     return false;
   }
   if (isBotActor(comment.editor) || isSameActorLogin(comment.editor?.login, prAuthorLogin)) {
@@ -189,8 +265,15 @@ export function hasDeterministicAutomationManualEdit(
   return hasEditedTimestampAfterCreation(comment);
 }
 
-function resolveCommentActor(comment: PrInterventionCommentInput): string {
-  if (isDeterministicAutomationComment(comment.body)) {
+function resolveCommentActor(
+  comment: PrInterventionCommentInput,
+  prAuthorLogin?: string | null,
+): string {
+  if (
+    isAutomationComment(comment.body) ||
+    isBotActor(comment.author) ||
+    isSameActorLogin(comment.author?.login, prAuthorLogin)
+  ) {
     return comment.editor?.login?.trim() || comment.author?.login?.trim() || DELETED_ACTOR_LABEL;
   }
   return comment.author?.login?.trim() || DELETED_ACTOR_LABEL;
@@ -198,8 +281,14 @@ function resolveCommentActor(comment: PrInterventionCommentInput): string {
 
 function resolveCommentInterventionAt(
   comment: PrInterventionCommentInput,
+  prAuthorLogin?: string | null,
 ): string | null | undefined {
-  if (isDeterministicAutomationComment(comment.body) && hasEditedTimestampAfterCreation(comment)) {
+  if (
+    (isAutomationComment(comment.body) ||
+      isBotActor(comment.author) ||
+      isSameActorLogin(comment.author?.login, prAuthorLogin)) &&
+    hasEditedTimestampAfterCreation(comment)
+  ) {
     return comment.lastEditedAt;
   }
   return comment.createdAt;
@@ -243,34 +332,14 @@ export function extractThirdPartyAssignees(
   return result;
 }
 
-function isEligibleThirdPartyAssignedEvent(
-  event: PrInterventionAssignedEventInput,
-  prAuthorLogin: string | null,
-): boolean {
-  if (event.__typename && event.__typename !== "AssignedEvent") {
-    return false;
-  }
-  if (!event.createdAt || !Number.isFinite(Date.parse(event.createdAt))) {
-    return false;
-  }
-  if (isBotActor(event.actor) || isBotActor(event.assignee)) {
-    return false;
-  }
-  if (!event.assignee?.login?.trim()) {
-    return false;
-  }
-  return !isSameActorLogin(event.assignee.login, prAuthorLogin);
-}
-
 /**
- * PR の reviews / comments / assignees / timelineItems を統合評価し、
+ * PR の reviews / comments を統合評価し、
  * 「未レビュー（完全未着手）」と「レビュー・介入済み」の判定結果・代表バッジ・最初の人間介入日時を生成する。
  *
- * - `Deterministic automation` を含むコメントでも、発言者が特権ロール（COLLABORATOR / MEMBER / OWNER）
- *   かつ非ボット・非作成者である場合は「トリアージ反応あり（`PrivilegedAutomationCommentCount`）」として
- *   `Intervened = true`（未レビュー前線から除外）とする。
- * - 一方、`FirstHumanInterventionAt`（主戦場ライン用）には一斉バッチ（build 1830 等）や自動検証投稿による
- *   時刻逆戻りを防ぐため、人間の手動レビュー・手動コメント・第三者アサインのみを算入する。
+ * - 実質的な人間アクション（ボット・作成者本人を除いた人間レビュー、または手動コメント）のみを介入とみなす。
+ * - `(Deterministic automation` / `(Automated message` を含む未編集コメント、CI 再実行コマンド単体（`@wingetbot run`）、
+ *   および第三者 Assignees の付与単体はいずれも介入判定・`FirstHumanInterventionAt` から除外する。
+ * - 自動コメントでも、第三者の人間による手動追記（`Edit:` 等）または投稿後編集がある場合は人間コメントとして検知する。
  */
 export function classifyPrIntervention(input: PrInterventionInput): PrInterventionSummary {
   const prAuthorLogin = input.author?.login ?? null;
@@ -283,28 +352,22 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
 
   const comments = unwrapNodes<PrInterventionCommentInput>(input.comments);
   const manualComments: PrInterventionCommentInput[] = [];
-  const privilegedAutomationComments: PrInterventionCommentInput[] = [];
   for (const c of comments) {
-    if (isDeterministicAutomationComment(c.body)) {
+    if (isAutomationComment(c.body)) {
       if (hasDeterministicAutomationManualEdit(c, prAuthorLogin)) {
         manualComments.push(c);
-      } else if (
-        !isBotActor(c.author) &&
-        !isSameActorLogin(c.author?.login, prAuthorLogin) &&
-        isPrivilegedAuthorAssociation(c.authorAssociation)
-      ) {
-        privilegedAutomationComments.push(c);
       }
+      continue;
+    }
+    if (isCiRerunCommandComment(c.body)) {
       continue;
     }
     if (!isBotActor(c.author) && !isSameActorLogin(c.author?.login, prAuthorLogin)) {
       manualComments.push(c);
+    } else if (isThirdPartyHumanEditedComment(c, prAuthorLogin)) {
+      manualComments.push(c);
     }
   }
-
-  const assignedEvents = unwrapNodes<PrInterventionAssignedEventInput>(input.timelineItems).filter(
-    (e) => isEligibleThirdPartyAssignedEvent(e, prAuthorLogin),
-  );
 
   let earliestIntervention: {
     ms: number;
@@ -332,13 +395,10 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
     );
   }
   for (const c of manualComments) {
-    considerInterventionTime(resolveCommentInterventionAt(c), "comment", resolveCommentActor(c));
-  }
-  for (const e of assignedEvents) {
     considerInterventionTime(
-      e.createdAt,
-      "assignee",
-      e.assignee?.login?.trim() || e.actor?.login?.trim() || DELETED_ACTOR_LABEL,
+      resolveCommentInterventionAt(c, prAuthorLogin),
+      "comment",
+      resolveCommentActor(c, prAuthorLogin),
     );
   }
 
@@ -355,40 +415,19 @@ export function classifyPrIntervention(input: PrInterventionInput): PrInterventi
     };
   } else if (manualComments.length > 0) {
     const latestComment = manualComments[manualComments.length - 1];
-    const actor = resolveCommentActor(latestComment);
+    const actor = resolveCommentActor(latestComment, prAuthorLogin);
     primaryBadge = {
       Kind: "comment",
       Actor: actor,
       Label: `コメント済: ${actor}`,
     };
-  } else if (thirdPartyAssignees.length > 0) {
-    primaryBadge = {
-      Kind: "assignee",
-      Actor: thirdPartyAssignees[0],
-      Label: `アサイン済: ${thirdPartyAssignees.join(", ")}`,
-    };
-  } else if (privilegedAutomationComments.length > 0) {
-    const latestPrivAuto = privilegedAutomationComments[privilegedAutomationComments.length - 1];
-    const actor = resolveCommentActor(latestPrivAuto);
-    primaryBadge = {
-      Kind: "comment",
-      Actor: actor,
-      Label: `自動指摘済: ${actor}`,
-    };
   }
 
   return {
-    Intervened:
-      humanReviews.length > 0 ||
-      manualComments.length > 0 ||
-      thirdPartyAssignees.length > 0 ||
-      privilegedAutomationComments.length > 0,
+    Intervened: humanReviews.length > 0 || manualComments.length > 0,
     ThirdPartyAssignees: thirdPartyAssignees,
     HumanReviewCount: humanReviews.length,
     ManualCommentCount: manualComments.length,
-    ...(privilegedAutomationComments.length > 0
-      ? { PrivilegedAutomationCommentCount: privilegedAutomationComments.length }
-      : {}),
     ...(primaryBadge ? { PrimaryBadge: primaryBadge } : {}),
     ...(earliestIntervention
       ? {
@@ -448,16 +487,6 @@ export function summarizeInterventionFrontier(
       kindCounts[badge.Kind]++;
       if (badge.Actor) {
         actorMap.set(badge.Actor, (actorMap.get(badge.Actor) ?? 0) + 1);
-      }
-      continue;
-    }
-
-    // PrimaryBadge 未付与の行へのフォールバック（ThirdPartyAssignees のみ記録時）
-    const assignees = row.ThirdPartyAssignees ?? [];
-    if (assignees.length > 0) {
-      kindCounts.assignee++;
-      for (const login of assignees) {
-        actorMap.set(login, (actorMap.get(login) ?? 0) + 1);
       }
     }
   }

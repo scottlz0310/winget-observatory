@@ -81,8 +81,8 @@ async function fetchRemainingInterventionConnection<TNode>(params: {
 }
 
 /**
- * 1 回目の PR 取得ノード（reviews/comments 20件）で未介入、または特権ロールの自動指摘・アサインのみで
- * `FirstHumanInterventionAt` が未確定のまま後続ページが残っている場合は、
+ * 1 回目の PR 取得ノード（reviews/comments 20件）で未介入、または
+ * 既知の `FirstHumanInterventionAt` より早い介入が後続ページに残っている可能性がある場合は、
  * 追加ページを取得して介入有無と初回人間介入日時を確定させる。
  * 上限到達やカーソル欠落により走査を完了できない場合は「未介入」や欠落のまま誤確定せず例外をスローする。
  */
@@ -103,7 +103,6 @@ export async function resolvePrInterventionWithPaging<TNode extends GraphQLPullR
       assignees: prNode.assignees,
       reviews: reviewNodes,
       comments: commentNodes,
-      timelineItems: prNode.timelineItems as PrInterventionInput["timelineItems"],
     });
     return currentSummary;
   };
@@ -114,9 +113,7 @@ export async function resolvePrInterventionWithPaging<TNode extends GraphQLPullR
       ? Date.parse(currentSummary.FirstHumanInterventionAt)
       : Number.NaN;
     if (!Number.isFinite(firstMs)) {
-      // 特権ロールの自動指摘やタイムスタンプ無しアサインのみで Intervened=true の場合は、
-      // 後続ページに存在する人間レビュー／手動コメントの FirstHumanInterventionAt を取りこぼさないよう探索を続ける。
-      // （日時省略モックで HumanReviewCount > 0 || ManualCommentCount > 0 が判明済みの場合のみ打ち切る）
+      // 日時省略モック等で HumanReviewCount > 0 || ManualCommentCount > 0 が判明済みの場合のみ打ち切る
       return currentSummary.HumanReviewCount > 0 || currentSummary.ManualCommentCount > 0;
     }
     const lastMs = lastTs ? Date.parse(lastTs) : Number.NaN;

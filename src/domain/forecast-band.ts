@@ -17,7 +17,7 @@ import type {
 } from "../models/forecast-band";
 import type { ProgressSnapshot } from "../models/progress";
 import { parseTimestampToMs } from "./dashboard";
-import { calculateFirstReviewForecast } from "./forecast";
+import { calculateFirstReviewForecast, MIN_MAINSTREAM_DEPTHS_VERSION } from "./forecast";
 import { buildForecastSource, calculateForecastComparison } from "./forecast-comparison";
 import { calculateNumericMedian, DAY_MS, round1 } from "./formatters";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "./intervention";
@@ -46,7 +46,6 @@ export interface ForecastBandSource {
   healthyBottomCreatedMs: number | null;
   mainstreamSamples: MainstreamFrontierSample[];
   targetIntervention: PrInterventionSummary | null;
-  targetThirdPartyAssignees: string[];
 }
 
 /**
@@ -66,8 +65,16 @@ export function buildForecastBandSource(input: {
   const healthyBottomCreatedMs =
     parseIsoOrJstMs(healthyHead?.CreatedAt) ?? parseIsoOrJstMs(progress?.FrontCreatedAt);
 
+  const hasCompatibleInterventionVersion =
+    (depths?.DepthsVersion ?? 0) >= MIN_MAINSTREAM_DEPTHS_VERSION;
+
   let samples = mainstreamFrontierSamples ?? [];
-  if (samples.length === 0 && depths?.FirstReviewFrontier && depths.Timestamp) {
+  if (
+    samples.length === 0 &&
+    hasCompatibleInterventionVersion &&
+    depths?.FirstReviewFrontier &&
+    depths.Timestamp
+  ) {
     const frontier = depths.FirstReviewFrontier;
     const tsMs = Date.parse(depths.Timestamp);
     const createdMs = frontier.MedianCreatedAt ? Date.parse(frontier.MedianCreatedAt) : Number.NaN;
@@ -90,6 +97,21 @@ export function buildForecastBandSource(input: {
     }
   }
 
+  const rawTargetIntervention = depths?.TargetPr?.Intervention ?? null;
+  let targetIntervention: PrInterventionSummary | null = rawTargetIntervention;
+  if (rawTargetIntervention && !hasCompatibleInterventionVersion) {
+    // 旧世代（v7 以前）のスナップショットでアサインのみ・特権自動指摘のみで Intervened=true になっていた場合は未介入へ正規化する
+    const hasHumanAction =
+      rawTargetIntervention.HumanReviewCount > 0 || rawTargetIntervention.ManualCommentCount > 0;
+    if (!hasHumanAction) {
+      const { PrimaryBadge: _droppedBadge, ...rest } = rawTargetIntervention;
+      targetIntervention = {
+        ...rest,
+        Intervened: false,
+      };
+    }
+  }
+
   return {
     ...base,
     firstTimerMedianDays: progress?.FirstTimerMedianDays,
@@ -98,8 +120,7 @@ export function buildForecastBandSource(input: {
       healthyHead?.Number ?? (progress?.FrontNumber ? Number(progress.FrontNumber) : null),
     healthyBottomCreatedMs,
     mainstreamSamples: samples,
-    targetIntervention: depths?.TargetPr?.Intervention ?? null,
-    targetThirdPartyAssignees: depths?.TargetPr?.ThirdPartyAssignees ?? [],
+    targetIntervention,
   };
 }
 
@@ -142,7 +163,6 @@ export function calculateForecastBand(source: ForecastBandSource): ForecastBandS
     Number.isFinite(targetCreatedMs) ? targetCreatedMs : null,
     {
       targetIntervention: source.targetIntervention,
-      targetThirdPartyAssignees: source.targetThirdPartyAssignees,
     },
   );
 

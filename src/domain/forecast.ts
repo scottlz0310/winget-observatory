@@ -16,8 +16,11 @@ import { CURRENT_DEPTHS_VERSION } from "./depths";
 import { DAY_MS, round1 } from "./formatters";
 import { FIRST_REVIEW_MAINSTREAM_MODE } from "./intervention";
 
-/** 初回提出者の底の定義が現行と互換な最小バージョン */
-export const MIN_FIRST_TIMER_DEPTHS_VERSION = CURRENT_DEPTHS_VERSION;
+/** マージ正常底（健康的大底）の定義が現行と互換な最小バージョン（v7 以降不変） */
+export const MIN_HEALTHY_DEPTHS_VERSION = 7;
+
+/** 初回提出者の底の定義が現行と互換な最小バージョン（v7 以降不変） */
+export const MIN_FIRST_TIMER_DEPTHS_VERSION = 7;
 
 /** 主戦場ライン（初回介入コホート中央値）の最小定義バージョン */
 export const MIN_MAINSTREAM_DEPTHS_VERSION = CURRENT_DEPTHS_VERSION;
@@ -92,7 +95,7 @@ export function extractFirstTimerFrontierSamples(
  */
 export function extractHealthyFrontierSamples(
   snapshots: DepthsSnapshot[],
-  minDefinitionVersion = CURRENT_DEPTHS_VERSION,
+  minDefinitionVersion = MIN_HEALTHY_DEPTHS_VERSION,
 ): HealthyFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
@@ -105,11 +108,11 @@ export function extractHealthyFrontierSamples(
 
 /**
  * スナップショット列から、未レビュー（完全未着手）正常底の先頭（起票が最古の健康な PR）の
- * 観測列を時刻昇順で取り出す（v3 互換用）。
+ * 観測列を時刻昇順で取り出す。
  */
 export function extractUnreviewedFrontierSamples(
   snapshots: DepthsSnapshot[],
-  minDefinitionVersion = 3,
+  minDefinitionVersion = CURRENT_DEPTHS_VERSION,
 ): UnreviewedFrontierSample[] {
   return extractFrontierSamples(
     snapshots,
@@ -151,33 +154,14 @@ export function extractMainstreamFrontierSamples(
 }
 
 export interface FirstReviewForecastOptions {
-  /** 基準 PR 自身の介入判定結果（人間レビュー・手動コメント・第三者アサインの OR） */
+  /** 基準 PR 自身の介入判定結果（人間レビューまたは手動コメントの OR） */
   targetIntervention?: PrInterventionSummary | null;
-  /** 基準 PR 自身の第三者 Assignees（旧データ互換フォールバック用） */
-  targetThirdPartyAssignees?: readonly string[] | null;
 }
 
 function resolveTargetIntervention(
   options: FirstReviewForecastOptions,
 ): PrInterventionSummary | null {
-  if (options.targetIntervention) {
-    return options.targetIntervention;
-  }
-  const assignees = (options.targetThirdPartyAssignees ?? []).filter((a) => Boolean(a));
-  if (assignees.length === 0) {
-    return null;
-  }
-  return {
-    Intervened: true,
-    ThirdPartyAssignees: assignees,
-    HumanReviewCount: 0,
-    ManualCommentCount: 0,
-    PrimaryBadge: {
-      Kind: "assignee",
-      Actor: assignees[0],
-      Label: `アサイン済: ${assignees.join(", ")}`,
-    },
-  };
+  return options.targetIntervention ?? null;
 }
 
 /**

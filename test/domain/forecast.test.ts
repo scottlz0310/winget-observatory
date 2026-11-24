@@ -95,18 +95,36 @@ describe("Domain: extractFirstTimerFrontierSamples", () => {
     expect(samples[0].createdMs).toBe(Date.parse("2026-10-01T00:00:00Z"));
   });
 
-  test("extractHealthyFrontierSamples は旧条件の履歴を除外する", () => {
+  test("extractHealthyFrontierSamples と extractFirstTimerFrontierSamples は v6 以前を除外しつつ v7 と v8 の履歴を継続抽出する", () => {
     const legacy = snapshot("2026-11-01T00:00:00Z", [], null);
     legacy.HealthyBottom = [row(1001, "2026-10-20T00:00:00Z", "2026-09-15T00:00:00Z")];
-    const v5 = snapshot("2026-11-02T00:00:00Z", [], 5);
-    v5.HealthyBottom = [row(1002, "2026-10-25T00:00:00Z", "2026-09-20T00:00:00Z")];
+    legacy.FirstTimerBottom = [row(2001, "2026-10-20T00:00:00Z", "2026-09-16T00:00:00Z")];
 
-    const current = snapshot("2026-11-03T00:00:00Z", []);
-    current.HealthyBottom = [row(1003, "2026-10-26T00:00:00Z", "2026-09-21T00:00:00Z")];
+    const v6 = snapshot("2026-11-02T00:00:00Z", [], 6);
+    v6.HealthyBottom = [row(1002, "2026-10-25T00:00:00Z", "2026-09-20T00:00:00Z")];
+    v6.FirstTimerBottom = [row(2002, "2026-10-25T00:00:00Z", "2026-09-21T00:00:00Z")];
 
-    const samples = extractHealthyFrontierSamples([v5, current, legacy]);
-    expect(samples.map((s) => s.pr)).toEqual([1003]);
-    expect(samples[0].createdMs).toBe(Date.parse("2026-09-21T00:00:00Z"));
+    const v7 = snapshot("2026-11-03T00:00:00Z", [], 7);
+    v7.HealthyBottom = [row(1003, "2026-10-26T00:00:00Z", "2026-09-22T00:00:00Z")];
+    v7.FirstTimerBottom = [row(2003, "2026-10-26T00:00:00Z", "2026-09-23T00:00:00Z")];
+
+    const v8 = snapshot("2026-11-04T00:00:00Z", [], CURRENT_DEPTHS_VERSION);
+    v8.HealthyBottom = [row(1004, "2026-10-27T00:00:00Z", "2026-09-24T00:00:00Z")];
+    v8.FirstTimerBottom = [row(2004, "2026-10-27T00:00:00Z", "2026-09-25T00:00:00Z")];
+
+    const healthySamples = extractHealthyFrontierSamples([v8, v6, v7, legacy]);
+    expect(healthySamples.map((s) => s.pr)).toEqual([1003, 1004]);
+    expect(healthySamples.map((s) => s.createdMs)).toEqual([
+      Date.parse("2026-09-22T00:00:00Z"),
+      Date.parse("2026-09-24T00:00:00Z"),
+    ]);
+
+    const firstTimerSamples = extractFirstTimerFrontierSamples([v8, v6, v7, legacy]);
+    expect(firstTimerSamples.map((s) => s.pr)).toEqual([2003, 2004]);
+    expect(firstTimerSamples.map((s) => s.createdMs)).toEqual([
+      Date.parse("2026-09-23T00:00:00Z"),
+      Date.parse("2026-09-25T00:00:00Z"),
+    ]);
   });
 });
 
@@ -154,11 +172,11 @@ describe("Domain: calculateLifetimeForecast", () => {
 });
 
 describe("Domain: extractUnreviewedFrontierSamples", () => {
-  test("DepthsVersion=3 かつ UnreviewedBottom を持つスナップショットのみから CreatedAt 基準の観測列を時刻昇順で抽出し、v2/UnassignedBottom を混ぜない", () => {
-    const legacyV3WithoutUnreviewed = snapshot("2026-11-01T00:00:00Z", []);
-    const oldV2WithUnassigned = snapshot("2026-11-01T02:00:00Z", [], 2);
-    oldV2WithUnassigned.UnassignedBottom = [
-      row(100, "2026-10-15T00:00:00Z", "2026-10-01T00:00:00Z"),
+  test("現行 DepthsVersion かつ UnreviewedBottom を持つスナップショットのみから CreatedAt 基準の観測列を時刻昇順で抽出し、旧バージョン（v7 以前）を混ぜない", () => {
+    const legacyWithoutUnreviewed = snapshot("2026-11-01T00:00:00Z", []);
+    const oldV7WithUnreviewed = snapshot("2026-11-01T02:00:00Z", [], CURRENT_DEPTHS_VERSION - 1);
+    oldV7WithUnreviewed.UnreviewedBottom = [
+      row(100, "2026-10-15T00:00:00Z", "2026-10-07T00:00:00Z"),
     ];
 
     const s2 = snapshot("2026-11-02T08:00:00Z", []);
@@ -167,8 +185,8 @@ describe("Domain: extractUnreviewedFrontierSamples", () => {
     s1.UnreviewedBottom = [row(150, "2026-10-20T00:00:00Z", "2026-10-09T00:00:00Z")];
 
     const samples = extractUnreviewedFrontierSamples([
-      legacyV3WithoutUnreviewed,
-      oldV2WithUnassigned,
+      legacyWithoutUnreviewed,
+      oldV7WithUnreviewed,
       s2,
       s1,
     ]);
@@ -292,7 +310,7 @@ describe("Domain: calculateFirstReviewForecast", () => {
     expect(result.steadyDateMs).toBe(T0 + 24 * HOUR);
   });
 
-  test("基準 PR 自身が介入済み（コメント/レビュー/第三者アサイン）の場合は target-intervened を返す", () => {
+  test("基準 PR 自身が介入済み（レビュー/手動コメント）の場合は target-intervened を返し、アサインのみ未介入は steady のまま扱う", () => {
     const resultByComment = calculateFirstReviewForecast(
       [mainstreamSample(0, 21), mainstreamSample(24, 20)],
       targetCreated,
@@ -317,11 +335,20 @@ describe("Domain: calculateFirstReviewForecast", () => {
     expect(resultByComment.steadyEtaDays).toBe(0);
     expect(resultByComment.steadyDateMs).toBe(T0 + 24 * HOUR);
 
-    const noSamplesAssignedFallback = calculateFirstReviewForecast([], targetCreated, {
-      targetThirdPartyAssignees: ["stephengillie"],
-    });
-    expect(noSamplesAssignedFallback.status).toBe("target-intervened");
-    expect(noSamplesAssignedFallback.targetAssignees).toEqual(["stephengillie"]);
-    expect(noSamplesAssignedFallback.steadyEtaDays).toBe(0);
+    const assigneeOnlyUnintervened = calculateFirstReviewForecast(
+      [mainstreamSample(0, 21), mainstreamSample(24, 20)],
+      targetCreated,
+      {
+        targetIntervention: {
+          Intervened: false,
+          ThirdPartyAssignees: ["stephengillie"],
+          HumanReviewCount: 0,
+          ManualCommentCount: 0,
+        },
+      },
+    );
+    expect(assigneeOnlyUnintervened.status).toBe("steady");
+    expect(assigneeOnlyUnintervened.targetAssignees).toEqual(["stephengillie"]);
+    expect(assigneeOnlyUnintervened.steadyEtaDays).toBe(10);
   });
 });

@@ -621,12 +621,12 @@ describe("CLI: explore-depths の主戦場ライン（fetchFirstReviewMainstream
         if (query.includes("GetPullRequestInterventionBatch")) {
           batchedQueries.push(query);
           if (query.includes("number: 960")) {
-            // 11/15 に人間 AssignedEvent があるが現在は assignees: [] に解除されているオープン PR
+            // 11/15 にメンテナによる手動コメントがあるオープン PR（自動コメント・@wingetbot run は無視される）
             return {
               repository: {
                 pr0: {
                   number: 960,
-                  title: "Unassigned After Event 960",
+                  title: "Manually Commented Open FT 960",
                   url: "https://github.com/microsoft/winget-pkgs/pull/960",
                   state: "OPEN",
                   createdAt: "2026-10-08T00:00:00Z",
@@ -636,14 +636,22 @@ describe("CLI: explore-depths の主戦場ライン（fetchFirstReviewMainstream
                   commits: { totalCount: 1 },
                   assignees: { nodes: [] },
                   reviews: { nodes: [] },
-                  comments: { nodes: [] },
-                  timelineItems: {
+                  comments: {
                     nodes: [
                       {
-                        __typename: "AssignedEvent",
+                        author: { __typename: "User", login: "stephengillie" },
+                        body: "URL: https://example.com/app.zip\nStatus Code: 200\n\n(Automated message - build 1838)",
+                        createdAt: "2026-11-01T00:00:00Z",
+                      },
+                      {
+                        author: { __typename: "User", login: "stephengillie" },
+                        body: "@wingetbot run",
+                        createdAt: "2026-11-05T00:00:00Z",
+                      },
+                      {
+                        author: { __typename: "User", login: "stephengillie" },
+                        body: "Please verify the installer license.",
                         createdAt: "2026-11-15T00:00:00Z",
-                        actor: { __typename: "User", login: "stephengillie" },
-                        assignee: { __typename: "User", login: "stephengillie" },
                       },
                     ],
                   },

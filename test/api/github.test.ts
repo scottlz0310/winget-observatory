@@ -410,7 +410,6 @@ describe("API: GitHubApiClient", () => {
       extraCommentNodes: [
         {
           author: { login: "reviewer-b" },
-          authorAssociation: "MEMBER",
           body: "Looks good, please fix typo",
           createdAt: "2026-11-18T12:00:00Z",
           lastEditedAt: null,
@@ -439,7 +438,7 @@ describe("API: GitHubApiClient", () => {
       expectedBadgeLabel: "レビュー済: winget-maintainer (APPROVED)",
     },
   ])(
-    "resolvePrInterventionWithPaging は特権ロールの自動指摘のみで Intervened=true になっても $name",
+    "resolvePrInterventionWithPaging は未編集の自動コメントとアサインのみで未介入のまま後続ページを走査し $name",
     async ({
       reviewsHasNext,
       commentsHasNext,
@@ -454,7 +453,7 @@ describe("API: GitHubApiClient", () => {
       const initialNode: Parameters<typeof resolvePrInterventionWithPaging>[3] = {
         number: 439626,
         author: { login: "contributor-a" },
-        assignees: { nodes: [] },
+        assignees: { nodes: [{ __typename: "User", login: "stephengillie" }] },
         reviews: {
           pageInfo: { hasNextPage: reviewsHasNext, endCursor: reviewsHasNext ? "r1" : null },
           nodes: [
@@ -470,14 +469,12 @@ describe("API: GitHubApiClient", () => {
           nodes: [
             {
               author: { __typename: "User", login: "stephengillie" },
-              authorAssociation: "COLLABORATOR",
               body: "This PR cannot be merged.\n\n(Deterministic automation)",
               createdAt: "2026-10-30T06:18:49Z",
               lastEditedAt: null,
             },
           ],
         },
-        timelineItems: { nodes: [] },
       };
 
       const { summary } = await resolvePrInterventionWithPaging(
@@ -508,7 +505,7 @@ describe("API: GitHubApiClient", () => {
 
       expect(pageCalls).toBe(1);
       expect(summary.Intervened).toBe(true);
-      expect(summary.PrivilegedAutomationCommentCount).toBe(1);
+      expect(summary.ThirdPartyAssignees).toEqual(["stephengillie"]);
       expect(summary.HumanReviewCount).toBe(expectedHumanReviews);
       expect(summary.ManualCommentCount).toBe(expectedManualComments);
       expect(summary.FirstHumanInterventionAt).toBe(expectedFirstHumanAt);

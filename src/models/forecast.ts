@@ -53,7 +53,7 @@ export interface MainstreamFrontierSample {
 export type FirstReviewForecastStatus =
   | "no-samples"
   | "no-target"
-  /** 基準 PR 自身に人間レビュー・手動コメント・第三者 Assignees のいずれかが付与済み（初回レビュー・介入到達済み） */
+  /** 基準 PR 自身に人間レビューまたは手動コメントが付与済み（初回レビュー・介入到達済み） */
   | "target-intervened"
   /** 主戦場ライン（起票日時中央値）が基準 PR の起票時刻に到達済み */
   | "reached"

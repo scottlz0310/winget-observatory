@@ -25,19 +25,17 @@ export interface PrInterventionBadge {
 }
 
 /**
- * PR に対する人間レビュー・手動コメント・第三者 Assignees の統合判定結果
+ * PR に対する人間レビュー・手動コメントの統合判定結果
  */
 export interface PrInterventionSummary {
-  /** 人間レビュー・手動コメント・第三者 Assignees・特権ロールによる自動指摘のいずれかが存在すれば true */
+  /** 人間レビューまたは手動コメントのいずれかが存在すれば true */
   Intervened: boolean;
-  /** PR 作成者を除いた第三者 Assignees */
+  /** PR 作成者を除いた第三者 Assignees（補助メタデータ。介入判定には使用しない） */
   ThirdPartyAssignees: string[];
   /** ボット・作成者本人を除いた人間レビュー数 */
   HumanReviewCount: number;
-  /** ボット・作成者本人・未編集自動検証ログを除いた手動コメント数 */
+  /** ボット・作成者本人・未編集自動コメント・CI 再実行コマンド単体を除いた手動コメント数 */
   ManualCommentCount: number;
-  /** Deterministic automation を含むが発言者が COLLABORATOR / MEMBER / OWNER である自動指摘コメント数 */
-  PrivilegedAutomationCommentCount?: number;
   /** 最も強い介入種別に基づく代表バッジ（未介入時は undefined） */
   PrimaryBadge?: PrInterventionBadge;
   /** 最初の人間介入日時（ISO 8601, UTC。タイムスタンプ付き介入が観測できた場合のみ） */
@@ -71,21 +69,10 @@ export interface PrInterventionReviewInput {
  */
 export interface PrInterventionCommentInput {
   author?: PrInterventionActor | null;
-  authorAssociation?: string | null;
   body?: string | null;
   createdAt?: string | null;
   lastEditedAt?: string | null;
   editor?: PrInterventionActor | null;
-}
-
-/**
- * 介入判定の入力となる第三者アサインイベント項目（AssignedEvent）
- */
-export interface PrInterventionAssignedEventInput {
-  __typename?: string | null;
-  createdAt?: string | null;
-  actor?: PrInterventionActor | null;
-  assignee?: PrInterventionActor | null;
 }
 
 /**
@@ -104,10 +91,6 @@ export interface PrInterventionInput {
   comments?:
     | ReadonlyArray<PrInterventionCommentInput | null | undefined>
     | { nodes?: ReadonlyArray<PrInterventionCommentInput | null> | null }
-    | null;
-  timelineItems?:
-    | ReadonlyArray<PrInterventionAssignedEventInput | null | undefined>
-    | { nodes?: ReadonlyArray<PrInterventionAssignedEventInput | null> | null }
     | null;
 }
 
@@ -196,13 +179,6 @@ export interface GraphQLPrNode {
       editor?: PrInterventionActor | null;
     } | null> | null;
   } | null;
-  timelineItems?: {
-    pageInfo?: {
-      hasNextPage: boolean;
-      endCursor: string | null;
-    } | null;
-    nodes?: Array<PrInterventionAssignedEventInput | null> | null;
-  } | null;
 }
 
 /**
@@ -286,6 +262,8 @@ export interface DepthsSnapshot {
    * - 4: 主戦場ライン版（FirstReviewFrontier: 直近7日間初回人間介入コホートの createdAt 中央値・オープン＋マージ済み）
    * - 5: 2×2 待機ライン統一版（HealthyBottom GraphQL TOP 10、SingleCommitBottom / FirstTimerSingleCommitBottom / FirstTimerUnreviewedBottom、全象限作者メタデータ統一）
    * - 6: 1コミット限定廃止版（SingleCommitBottom / StaleBottom の新規収集を廃止し、マージ前線は progress.Samples の直近マージ実績へ統一）
+   * - 7: Validation-Completed 基準移行版（Azure-Pipeline-Passed 非依存で New-Package + Validation-Completed を観測対象化）
+   * - 8: 人間介入純化版（全指標で介入判定を人間レビュー・手動コメントのみに統一し、特権自動指摘・アサインのみ・(Automated message・@wingetbot run 単体を除外）
    */
   DepthsVersion?: number;
   Timestamp: string;
@@ -308,7 +286,7 @@ export interface DepthsSnapshot {
   FirstTimerBottom?: DepthsRow[];
   /** 初回提出者の底の探索が走査上限到達により途中で打ち切られた場合 true */
   FirstTimerBottomTruncated?: boolean;
-  /** 未レビュー（完全未着手）前線・全体（健康な待機 PR のうち人間レビュー・手動コメント・第三者アサイン・特権自動指摘すべて無し・起票日時順） */
+  /** 未レビュー（完全未着手）正常底・全体（健康な待機 PR のうち人間レビュー・手動コメントがいずれも無い PR・起票日時順） */
   UnreviewedBottom?: DepthsRow[];
   /** 未レビュー（完全未着手）前線・初回提出者のみ（起票日時順 TOP 10、v5 以降） */
   FirstTimerUnreviewedBottom?: DepthsRow[];
