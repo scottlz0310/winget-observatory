@@ -7,12 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-11-27
-
 ### Added
 
 - `@scottlz0310/winget-verify-gate` の npm パッケージ公開・GitHub Releases 単体実行バイナリ配布および導入導線を整備:
-  - `packages/verify-gate/scripts/build.ts`, `src/bin.ts`, `src/embedded-assets.ts`, `packages/verify-gate/package.json`: `Bun.YAML.parse` を `yaml` へ置換して Node.js 20+ / Bun 両対応化し、`SKILL.md`・`docs/winget-pkgs-submission-guide.md`・`docs/templates/winget-pkgs-pr-template.md` およびルート `package.json` のバージョンをビルド時にインライン埋め込みする npm バンドル（`dist/cli.mjs`）と単体バイナリ（`windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64`）の統合ビルドを追加、`verify-gate --version` オプションとバージョン SSoT（`resolveVerifyGateVersion`）を実装
+  - `packages/verify-gate/scripts/build.ts`, `src/bin.ts`, `src/embedded-assets.ts`, `packages/verify-gate/package.json`: `Bun.YAML.parse` を `yaml` へ置換して Node.js 26.13.1 以上 / Bun 両対応化し、`SKILL.md`・`docs/winget-pkgs-submission-guide.md`・`docs/templates/winget-pkgs-pr-template.md` およびルート `package.json` のバージョンをビルド時にインライン埋め込みする npm バンドル（`dist/cli.mjs`）と単体バイナリ（`windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64`）の統合ビルドを追加、`verify-gate --version` オプションとバージョン SSoT（`resolveVerifyGateVersion`）を実装
   - `.github/workflows/ci.yml`, `.github/workflows/release.yml`: CI での配布バンドルビルド＆Node.js スモーク検証を追加し、リリース時は `draft` → 単体バイナリ 4 環境＋`SHA256SUMS.txt` アップロード → npm OIDC Trusted Publishing（`--provenance --access public`）→ レジストリ tarball バイト照合 → `finalize` で公開するパイプラインを整備
   - `README.md`, `packages/verify-gate/README.md`: `bunx` / `npx`・GitHub Releases 単体バイナリ・ローカル実行の導入方法、MCP サーバー登録 JSON 例、`io.modelcontextprotocol/skills` / `skill export`・Windows Sandbox 検証導線を整備
 - `verify-gate` に Windows Sandbox 実機検証連携（.wsb / PowerShell 生成・ARP 自動ダンプ突き合わせ・CLI 終了コード実測評価）を追加（#155 PR 2/2）:
@@ -408,8 +406,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.7.0...HEAD
-[0.7.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...v0.7.0
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.3.0...v0.4.0
