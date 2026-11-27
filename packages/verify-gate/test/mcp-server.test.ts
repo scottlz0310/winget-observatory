@@ -34,6 +34,16 @@ describe("MCP STDIO server (io.modelcontextprotocol/skills) & CLI", () => {
       directoryRead: true,
     });
     expect(initResult.serverInfo.name).toBe("winget-verify-gate");
+    expect(initResult.serverInfo.version).toMatch(/^\d+\.\d+\.\d+/);
+
+    // CLI --version / -v が MCP_SERVER_VERSION と一致するバージョンを返すこと
+    const verOut: string[] = [];
+    expect(
+      await runCli(["--version"], {
+        io: { stdout: (t) => verOut.push(t), stderr: () => {} },
+      }),
+    ).toBe(0);
+    expect(verOut[0]).toBe(`winget-verify-gate ${initResult.serverInfo.version}`);
 
     // 通知には応答しない
     const notifRes = await handleJsonRpcMessage({

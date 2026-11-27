@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { resolveVerifyGateVersion } from "./embedded-assets";
 import {
   type GateRunnerDeps,
   runBinaryGate,
@@ -10,7 +11,7 @@ import { SkillCatalog } from "./skill-catalog";
 import type { PeArchitecture } from "./types";
 
 export const MCP_SERVER_NAME = "winget-verify-gate";
-export const MCP_SERVER_VERSION = "0.2.0";
+export const MCP_SERVER_VERSION = resolveVerifyGateVersion();
 export const MCP_DEFAULT_PROTOCOL_VERSION = "2025-11-25";
 export const MCP_SKILLS_EXTENSION_ID = "io.modelcontextprotocol/skills";
 

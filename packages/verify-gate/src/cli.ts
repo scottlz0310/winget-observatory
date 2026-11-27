@@ -8,7 +8,7 @@ import {
   runSandboxEval,
   runSandboxPrepare,
 } from "./gate-runner";
-import { runStdioMcpServer } from "./mcp-server";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION, runStdioMcpServer } from "./mcp-server";
 import { SkillCatalog } from "./skill-catalog";
 import type { PeArchitecture } from "./types";
 
@@ -29,6 +29,7 @@ Usage:
   verify-gate mcp
   verify-gate skill list [--json]
   verify-gate skill export --out <dir> [--json]
+  verify-gate --version
 `;
 
 function takeValue(argv: readonly string[], index: number, flag: string): string {
@@ -52,6 +53,11 @@ export async function runCli(
 
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     io.stdout(HELP_TEXT.trimEnd());
+    return 0;
+  }
+
+  if (argv[0] === "--version" || argv[0] === "-v") {
+    io.stdout(`${MCP_SERVER_NAME} ${MCP_SERVER_VERSION}`);
     return 0;
   }
 

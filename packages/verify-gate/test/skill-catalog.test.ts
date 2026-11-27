@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveVerifyGateVersion } from "../src/embedded-assets";
 import { parseSkillFrontmatter, SkillCatalog } from "../src/skill-catalog";
 
 describe("SkillCatalog (SSoT & Skills over MCP resources)", () => {
@@ -82,5 +83,35 @@ describe("SkillCatalog (SSoT & Skills over MCP resources)", () => {
   test("frontmatter が不正な SKILL.md を明示的に拒否する", () => {
     expect(() => parseSkillFrontmatter("# no frontmatter")).toThrow("frontmatter");
     expect(() => parseSkillFrontmatter("---\nname: only-name\n---\nbody")).toThrow("description");
+  });
+
+  test("埋め込みアセットから SkillCatalog とバージョンを解決できる", () => {
+    const embedded = {
+      version: "9.9.9",
+      skillMd: [
+        "---",
+        "name: winget-verify-gate",
+        "description: Embedded test skill description for standalone bundle.",
+        "license: MIT",
+        "---",
+        "# Embedded Skill",
+      ].join("\n"),
+      submissionGuide: "# Embedded Guide",
+      prTemplate: "# Embedded Template",
+    };
+    expect(resolveVerifyGateVersion("/nonexistent/dir", embedded)).toBe("9.9.9");
+
+    // 明示パス不在時はエラー（fail-closed）
+    expect(
+      () =>
+        new SkillCatalog(
+          {
+            skillMdPath: "/nonexistent/SKILL.md",
+            submissionGuidePath: "/nonexistent/guide.md",
+            prTemplatePath: "/nonexistent/template.md",
+          },
+          embedded,
+        ),
+    ).toThrow("スキルリソースが見つかりません");
   });
 });

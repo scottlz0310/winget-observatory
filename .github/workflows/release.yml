@@ -1,24 +1,254 @@
 name: Release
 
 # prepare-release.yml が作る `chore(release): vX.Y.Z` PR のマージ（main への push）で起動する。
-# tag と GitHub Release の作成・公開を行う。
+# draft（tag と draft Release 作成）
+# → build-binaries（4 環境向け単体バイナリ + SHA256SUMS をビルド・スモーク検証し Draft Release へ添付）
+# → publish-npm（@scottlz0310/winget-verify-gate をビルド・検証して npm へ OIDC Trusted Publishing）
+# → verify-package（npm レジストリ公開物と provenance をバイト一致照合）
+# → finalize（全検証通過後に Draft Release を正式公開）
+# npm の Trusted Publisher は repo とこの workflow ファイル名（release.yml）に紐づくため、名前を変えない。
 
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  draft:
     if: startsWith(github.event.head_commit.message, 'chore(release):')
     uses: scottlz0310/release-automate/.github/workflows/reusable-publish-release.yml@b155081b04cae981e8ae3beeb37aa1c024866ea2 # v3.3.0
     permissions:
       contents: write
     with:
-      draft: false
+      draft: true
+
+  build-binaries:
+    needs: draft
+    if: needs.draft.outputs.release_state == 'draft'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.draft.outputs.target_sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify root version matches tag
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          PKG_VERSION="$(bun -e "console.log(JSON.parse(await Bun.file('package.json').text()).version)")"
+          if [ "$PKG_VERSION" != "${TAG#v}" ]; then
+            echo "::error::Version mismatch: tag=${TAG#v} package.json=$PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Build standalone verify-gate binaries
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p release-assets
+          bun run packages/verify-gate/scripts/build.ts --compile --target bun-windows-x64 --version "$VERSION" --outfile release-assets/winget-verify-gate-windows-x64.exe
+          bun run packages/verify-gate/scripts/build.ts --compile --target bun-windows-arm64 --version "$VERSION" --outfile release-assets/winget-verify-gate-windows-arm64.exe
+          bun run packages/verify-gate/scripts/build.ts --compile --target bun-linux-x64 --version "$VERSION" --outfile release-assets/winget-verify-gate-linux-x64
+          bun run packages/verify-gate/scripts/build.ts --compile --target bun-darwin-arm64 --version "$VERSION" --outfile release-assets/winget-verify-gate-darwin-arm64
+          chmod +x release-assets/winget-verify-gate-linux-x64 release-assets/winget-verify-gate-darwin-arm64
+
+      - name: Smoke test Linux standalone binary outside repository
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          TMPDIR="$(mktemp -d)"
+          trap 'rm -rf "$TMPDIR"' EXIT
+          cp release-assets/winget-verify-gate-linux-x64 "$TMPDIR/winget-verify-gate"
+          chmod +x "$TMPDIR/winget-verify-gate"
+          OUT_VER="$("$TMPDIR/winget-verify-gate" --version)"
+          test "$OUT_VER" = "winget-verify-gate $VERSION"
+          "$TMPDIR/winget-verify-gate" skill list --json | jq -e '.skills | length == 1 and (.[0].resources | length == 3)'
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}' \
+            | "$TMPDIR/winget-verify-gate" mcp \
+            | jq -e --arg ver "$VERSION" '.result.serverInfo.version == $ver and .result.capabilities.extensions["io.modelcontextprotocol/skills"].directoryRead == true'
+
+      - name: Generate SHA256SUMS and upload to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          (
+            cd release-assets
+            sha256sum \
+              winget-verify-gate-windows-x64.exe \
+              winget-verify-gate-windows-arm64.exe \
+              winget-verify-gate-linux-x64 \
+              winget-verify-gate-darwin-arm64 > SHA256SUMS.txt
+          )
+          cat release-assets/SHA256SUMS.txt
+          gh release upload "$TAG" \
+            release-assets/winget-verify-gate-windows-x64.exe \
+            release-assets/winget-verify-gate-windows-arm64.exe \
+            release-assets/winget-verify-gate-linux-x64 \
+            release-assets/winget-verify-gate-darwin-arm64 \
+            release-assets/SHA256SUMS.txt \
+            --clobber
+
+  publish-npm:
+    needs: draft
+    if: needs.draft.outputs.release_state == 'draft'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: npm-publish-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.draft.outputs.target_sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "26.13.1"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify version and sync verify-gate package.json
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          ROOT_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$ROOT_VERSION" != "$VERSION" ]; then
+            echo "::error::Version mismatch: tag=$VERSION package.json=$ROOT_VERSION"
+            exit 1
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const p = "packages/verify-gate/package.json";
+            const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+            pkg.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n", "utf8");
+          ' "$VERSION"
+
+      - name: Build verify-gate npm bundle
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: bun run packages/verify-gate/scripts/build.ts --version "${TAG#v}"
+
+      - name: Pack and smoke test tarball outside repository
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p package-output
+          (cd packages/verify-gate && npm pack --pack-destination ../../package-output)
+          packages=(package-output/*.tgz)
+          test "${#packages[@]}" = 1
+          tar -tzf "${packages[0]}" > package-files.txt
+          cat package-files.txt
+          grep -qx 'package/dist/cli.mjs' package-files.txt
+          grep -qx 'package/README.md' package-files.txt
+          grep -qx 'package/LICENSE' package-files.txt
+
+          TMPDIR="$(mktemp -d)"
+          trap 'rm -rf "$TMPDIR"' EXIT
+          tar -xzf "${packages[0]}" -C "$TMPDIR"
+          OUT_VER="$(node "$TMPDIR/package/dist/cli.mjs" --version)"
+          test "$OUT_VER" = "winget-verify-gate $VERSION"
+          node "$TMPDIR/package/dist/cli.mjs" skill list --json | jq -e '.skills | length == 1 and (.[0].resources | length == 3)'
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}' \
+            | node "$TMPDIR/package/dist/cli.mjs" mcp \
+            | jq -e --arg ver "$VERSION" '.result.serverInfo.version == $ver and .result.capabilities.extensions["io.modelcontextprotocol/skills"].directoryRead == true'
+
+      - name: Upload npm payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-payload
+          path: package-output/*.tgz
+          if-no-files-found: error
+
+      - name: Publish to npm
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN
+          unset NPM_CONFIG_USERCONFIG
+
+          version="${TAG#v}"
+          args=(--provenance --access public)
+          if [[ "${version%%+*}" == *-* ]]; then args+=(--tag next); fi
+          packages=(./package-output/*.tgz)
+          test "${#packages[@]}" = 1
+          npm publish "${packages[0]}" "${args[@]}"
+
+  verify-package:
+    needs: [draft, publish-npm]
+    if: needs.draft.outputs.release_state == 'draft'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download expected tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: npm-payload
+          path: expected
+
+      - name: Verify registry tarball and provenance
+        env:
+          TAG: ${{ needs.draft.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          timeout 60 npm view "@scottlz0310/winget-verify-gate@${TAG#v}" --json > metadata.json
+          tarball=$(jq -er '.dist.tarball' metadata.json)
+          jq -er '.dist.attestations.url' metadata.json
+          curl -fSL --connect-timeout 10 --max-time 60 "$tarball" -o registry.tgz
+          packages=(expected/*.tgz)
+          test "${#packages[@]}" = 1
+          cmp "${packages[0]}" registry.tgz
+
+  finalize:
+    needs: [draft, build-binaries, publish-npm, verify-package]
+    if: needs.draft.outputs.release_state == 'draft'
+    uses: scottlz0310/release-automate/.github/workflows/reusable-finalize-release.yml@b155081b04cae981e8ae3beeb37aa1c024866ea2 # v3.3.0
+    permissions:
+      contents: write
+    with:
+      tag_name: ${{ needs.draft.outputs.tag_name }}
+      target_sha: ${{ needs.draft.outputs.target_sha }}
+      append_release_evidence: true
+      verification_results: ${{ toJSON(needs) }}

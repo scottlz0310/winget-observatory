@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
+import { EMBEDDED_SKILL_ASSETS, type EmbeddedSkillAssets } from "./embedded-assets";
 
 export interface SkillResourceManifestEntry {
   uri: string;
@@ -70,7 +73,7 @@ export function parseSkillFrontmatter(markdown: string): SkillFrontmatter {
   if (!match) {
     throw new Error("SKILL.md に YAML frontmatter が見つかりません");
   }
-  const parsed = Bun.YAML.parse(match[1]);
+  const parsed = parseYaml(match[1]);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("SKILL.md の frontmatter は YAML オブジェクトである必要があります");
   }
@@ -96,7 +99,7 @@ export function parseSkillFrontmatter(markdown: string): SkillFrontmatter {
 }
 
 export function resolveDefaultSkillCatalogPaths(
-  moduleDir: string = import.meta.dir,
+  moduleDir: string = dirname(fileURLToPath(import.meta.url)),
 ): SkillCatalogPaths {
   const packageRoot = resolve(moduleDir, "..");
   const repoRoot = resolve(packageRoot, "..", "..");
@@ -104,6 +107,26 @@ export function resolveDefaultSkillCatalogPaths(
     skillMdPath: join(packageRoot, "skills", "winget-verify-gate", "SKILL.md"),
     submissionGuidePath: join(repoRoot, "docs", "winget-pkgs-submission-guide.md"),
     prTemplatePath: join(repoRoot, "docs", "templates", "winget-pkgs-pr-template.md"),
+  };
+}
+
+function buildTextResource(
+  raw: Uint8Array,
+  relativePath: string,
+  name: string,
+  description: string,
+  mimeType = "text/markdown",
+): InternalResource {
+  const text = Buffer.from(raw).toString("utf8");
+  return {
+    uri: `${SKILL_SCHEME_PREFIX}${relativePath}`,
+    relativePath,
+    name,
+    description,
+    mimeType,
+    text,
+    size: raw.byteLength,
+    digest: sha256Digest(raw),
   };
 }
 
@@ -118,17 +141,15 @@ function loadTextResource(
     throw new Error(`スキルリソースが見つかりません: ${filePath}`);
   }
   const raw = readFileSync(filePath);
-  const text = raw.toString("utf8");
-  return {
-    uri: `${SKILL_SCHEME_PREFIX}${relativePath}`,
-    relativePath,
-    name,
-    description,
-    mimeType,
-    text,
-    size: raw.byteLength,
-    digest: sha256Digest(raw),
-  };
+  return buildTextResource(raw, relativePath, name, description, mimeType);
+}
+
+function allPathsExist(paths: SkillCatalogPaths): boolean {
+  return (
+    existsSync(paths.skillMdPath) &&
+    existsSync(paths.submissionGuidePath) &&
+    existsSync(paths.prTemplatePath)
+  );
 }
 
 export class SkillCatalog {
@@ -136,26 +157,54 @@ export class SkillCatalog {
   private readonly resourcesByUri: Map<string, InternalResource>;
   private readonly allResources: InternalResource[];
 
-  constructor(paths: SkillCatalogPaths = resolveDefaultSkillCatalogPaths()) {
-    const skillMd = loadTextResource(
-      paths.skillMdPath,
-      "SKILL.md",
-      "SKILL.md",
-      "WinGet pre-submission verification gate workflow instructions",
-    );
+  constructor(
+    paths?: SkillCatalogPaths,
+    embeddedAssets: EmbeddedSkillAssets | null = EMBEDDED_SKILL_ASSETS,
+  ) {
+    const resolvedPaths = paths ?? resolveDefaultSkillCatalogPaths();
+    const useEmbedded =
+      paths === undefined && !allPathsExist(resolvedPaths) && embeddedAssets !== null;
+
+    const skillMd = useEmbedded
+      ? buildTextResource(
+          Buffer.from(embeddedAssets.skillMd, "utf8"),
+          "SKILL.md",
+          "SKILL.md",
+          "WinGet pre-submission verification gate workflow instructions",
+        )
+      : loadTextResource(
+          resolvedPaths.skillMdPath,
+          "SKILL.md",
+          "SKILL.md",
+          "WinGet pre-submission verification gate workflow instructions",
+        );
     const frontmatter = parseSkillFrontmatter(skillMd.text);
-    const guide = loadTextResource(
-      paths.submissionGuidePath,
-      "references/submission-guide.md",
-      "submission-guide.md",
-      "Distribution x app-type checklist and real PR evidence guide",
-    );
-    const template = loadTextResource(
-      paths.prTemplatePath,
-      "templates/pr-template.md",
-      "pr-template.md",
-      "Proactive PR body template for microsoft/winget-pkgs",
-    );
+    const guide = useEmbedded
+      ? buildTextResource(
+          Buffer.from(embeddedAssets.submissionGuide, "utf8"),
+          "references/submission-guide.md",
+          "submission-guide.md",
+          "Distribution x app-type checklist and real PR evidence guide",
+        )
+      : loadTextResource(
+          resolvedPaths.submissionGuidePath,
+          "references/submission-guide.md",
+          "submission-guide.md",
+          "Distribution x app-type checklist and real PR evidence guide",
+        );
+    const template = useEmbedded
+      ? buildTextResource(
+          Buffer.from(embeddedAssets.prTemplate, "utf8"),
+          "templates/pr-template.md",
+          "pr-template.md",
+          "Proactive PR body template for microsoft/winget-pkgs",
+        )
+      : loadTextResource(
+          resolvedPaths.prTemplatePath,
+          "templates/pr-template.md",
+          "pr-template.md",
+          "Proactive PR body template for microsoft/winget-pkgs",
+        );
 
     this.allResources = [skillMd, guide, template];
     this.resourcesByUri = new Map(this.allResources.map((r) => [r.uri, r]));

@@ -100,11 +100,65 @@ bun run collect:feedback --states merged,open,closed --lookback-days 60
 
 **主なオプション:** `--repo` / `--repository` / `--lookback-days`（既定 90）/ `--states`（`merged` / `open` / `closed` のカンマ区切り、既定 `merged`）/ `--fetch-budget`（既定 200、`0` でキャッシュ再集計のみ）/ `--fetch-limit`（既定 2000）/ `--reclassify`（API ゼロで既存コーパスを最新ルールへ再分類）/ `--blocking-only`（非ブロッキング助言のみの PR を除外）/ `--installer-type` / `--nested-installer-type` / `--portable-only` / `--privileged-only`（`MEMBER`・`COLLABORATOR`・`OWNER` のみ限定）/ `--first-timer-only` / `--output-path`（既定 `data/review-feedback.jsonl`）/ `--report-path`（既定 `data/review-feedback-report.md`）/ `--no-report` / `--no-write` / `--as-json`
 
-**収集コーパスに基づく初回提出ガイド・テンプレート・提出前関門 (`verify-gate`):**
+**収集コーパスに基づく初回提出ガイド・テンプレート:**
 
 - [docs/winget-pkgs-submission-guide.md](docs/winget-pkgs-submission-guide.md) — 90 日窓 3,603 件（`MERGED` 1,462 + `CLOSED` 2,141）の分析に基づく配布形式 × アプリ種別チェックリスト・実 PR 事例付き実践ガイド
 - [docs/templates/winget-pkgs-pr-template.md](docs/templates/winget-pkgs-pr-template.md) — メンテナとの質問往復ゼロを狙う「先回り PR 本文テンプレート」（CLI 引数なし終了コード、通信・プライバシー開示、ビルド来歴・署名、Policy-Test 誤検知事前説明）
-- `packages/verify-gate/`（`bun run verify:gate`）— マニフェスト静的検証・URL/SHA-256 検証・PE バイナリ（`VCRUNTIME140.dll` 等）診断・Windows Sandbox 検証テンプレート生成＆ARP/CLI 実測突き合わせを担うローカル `stdio` CLI 核 ＋ `io.modelcontextprotocol/skills`（SEP-2640）対応 STDIO MCP サーバー（`check` / `binary` / `sandbox prepare|eval` / `mcp` / `skill list|export`）
+
+### 4. `@scottlz0310/winget-verify-gate`（`microsoft/winget-pkgs` 提出前関門 CLI & MCP サーバー）
+
+`packages/verify-gate/` で提供するローカル `stdio` CLI 核 ＋ `io.modelcontextprotocol/skills`（SEP-2640）対応 STDIO MCP サーバーです。マニフェスト静的検証・URL/SHA-256 検証・PE バイナリ（`VCRUNTIME140.dll` 等）診断・Windows Sandbox 検証テンプレート生成＆ARP/CLI 実測突き合わせを単体パッケージで実行できます（詳細は [packages/verify-gate/README.md](packages/verify-gate/README.md) 参照）。
+
+#### 導入方法
+
+1. **`bunx` / `npx` で即時実行（Node.js 20+ または Bun）**:
+
+   ```bash
+   bunx @scottlz0310/winget-verify-gate check <manifest-dir>
+   # Node.js 環境の場合:
+   npx -y @scottlz0310/winget-verify-gate check <manifest-dir>
+   ```
+2. **GitHub Releases 単体バイナリ（ランタイム不要）**:
+   - [Releases](https://github.com/scottlz0310/winget-observatory/releases) から `winget-verify-gate-windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64`（および `SHA256SUMS.txt`）を取得して直接実行できます。
+3. **本リポジトリからのローカル実行**:
+
+   ```bash
+   bun run verify:gate check <manifest-dir>
+   ```
+
+#### MCP サーバー登録例（STDIO + Skills over MCP）
+
+```json
+{
+  "mcpServers": {
+    "winget-verify-gate": {
+      "command": "bunx",
+      "args": ["@scottlz0310/winget-verify-gate", "mcp"]
+    }
+  }
+}
+```
+
+- Node.js 環境では `"command": "npx"`, `"args": ["-y", "@scottlz0310/winget-verify-gate", "mcp"]`、単体バイナリでは `"command": "C:\\Tools\\winget-verify-gate-windows-x64.exe"`, `"args": ["mcp"]` を指定できます。
+- `io.modelcontextprotocol/skills` 非対応の AI クライアント向けには、同梱スキル・ガイド・PR テンプレートを書き出すフォールバックコマンドを用意しています:
+
+  ```bash
+  bunx @scottlz0310/winget-verify-gate skill export --out ./.agent/skills
+  ```
+
+#### 主な CLI コマンド
+
+```bash
+# マニフェスト診断（--verify-sha256 で実ダウンロード照合、--binary で PE 解析併用）
+bunx @scottlz0310/winget-verify-gate check <manifest-dir> [--binary <path>] [--sandbox-result <path>] [--verify-sha256] [--json]
+
+# PE バイナリ単体検査（アーキテクチャ / 未同梱 CRT DLL / Authenticode 署名）
+bunx @scottlz0310/winget-verify-gate binary <pe-path> [--arch x64|x86|arm64] [--json]
+
+# Windows Sandbox 検証一式（.wsb / WinGet 自動導入 / 4ハイブ ARP ダンプ / CLI 実測）生成と評価
+bunx @scottlz0310/winget-verify-gate sandbox prepare <manifest-dir> --out <dir>
+bunx @scottlz0310/winget-verify-gate sandbox eval <manifest-dir> --result <sandbox-result.json> [--json]
+```
 
 ---
 

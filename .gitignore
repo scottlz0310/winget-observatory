@@ -3,6 +3,8 @@ node_modules/
 bun.lockb
 site/
 coverage/
+packages/verify-gate/dist/
+packages/verify-gate/LICENSE
 
 # Playwright MCP server artifacts
 .playwright-mcp/

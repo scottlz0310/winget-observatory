@@ -1,15 +1,47 @@
 {
   "name": "@scottlz0310/winget-verify-gate",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.6.0",
   "description": "Pre-submission verification gate (STDIO CLI + MCP server with io.modelcontextprotocol/skills) for microsoft/winget-pkgs",
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scottlz0310/winget-observatory.git",
+    "directory": "packages/verify-gate"
+  },
+  "homepage": "https://github.com/scottlz0310/winget-observatory/tree/main/packages/verify-gate#readme",
+  "bugs": {
+    "url": "https://github.com/scottlz0310/winget-observatory/issues"
+  },
+  "keywords": [
+    "winget",
+    "winget-pkgs",
+    "mcp",
+    "model-context-protocol",
+    "skills",
+    "cli",
+    "windows",
+    "windows-sandbox"
+  ],
   "bin": {
-    "verify-gate": "./src/cli.ts"
+    "winget-verify-gate": "./dist/cli.mjs",
+    "verify-gate": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist/cli.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "start": "bun run src/cli.ts",
     "mcp": "bun run src/cli.ts mcp",
+    "build": "bun run scripts/build.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test test"
   }
