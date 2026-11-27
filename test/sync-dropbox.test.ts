@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { downloadMetricsFiles, parseArgs } from "../scripts/sync-dropbox";
+import {
+  downloadMetricsFiles,
+  FEEDBACK_TARGET_FILES,
+  OBSERVE_TARGET_FILES,
+  parseArgs,
+  resolveTargetFiles,
+} from "../scripts/sync-dropbox";
 
 describe("sync-dropbox CLI credentials validation", () => {
   const scriptPath = resolve(__dirname, "../scripts/sync-dropbox.ts");
@@ -95,13 +101,26 @@ describe("downloadMetricsFiles", () => {
 
 describe("sync-dropbox parseArgs", () => {
   test.each([
-    [["--direction", "upload"], { direction: "upload", dryRun: false, allowSkip: false }],
     [
-      ["--direction", "download", "--dry-run", "--allow-skip"],
-      { direction: "download", dryRun: true, allowSkip: true },
+      ["--direction", "upload"],
+      { direction: "upload", dryRun: false, allowSkip: false, scope: "observe" },
+    ],
+    [
+      ["--direction", "download", "--dry-run", "--allow-skip", "--scope", "feedback"],
+      { direction: "download", dryRun: true, allowSkip: true, scope: "feedback" },
+    ],
+    [
+      ["--direction", "download", "--scope", "all"],
+      { direction: "download", dryRun: false, allowSkip: false, scope: "all" },
     ],
   ])("正しい引数 %j を解釈する", (args, expected) => {
     expect(parseArgs(args, "/work")).toMatchObject(expected);
+  });
+
+  test("resolveTargetFiles はスコープごとに対象ファイル一覧を分離する", () => {
+    expect(resolveTargetFiles("observe")).toEqual([...OBSERVE_TARGET_FILES]);
+    expect(resolveTargetFiles("feedback")).toEqual([...FEEDBACK_TARGET_FILES]);
+    expect(resolveTargetFiles("all")).toEqual([...OBSERVE_TARGET_FILES, ...FEEDBACK_TARGET_FILES]);
   });
 
   test("--data-dir は cwd 基準で解決する", () => {
@@ -115,6 +134,8 @@ describe("sync-dropbox parseArgs", () => {
     [["--direction"], "--direction オプションには値が必要です"],
     [["--direction", "--dry-run"], "--direction オプションには値が必要です"],
     [["--direction", "sync"], "無効な direction: sync"],
+    [["--direction", "upload", "--scope"], "--scope オプションには値が必要です"],
+    [["--direction", "upload", "--scope", "invalid"], "無効な scope: invalid"],
     [["--direction", "upload", "--data-dir"], "--data-dir オプションには値が必要です"],
     [["--direction", "upload", "--unknown"], "未知のオプションです: --unknown"],
   ])("不正な引数 %j は暗黙の upload にせず拒否する", (args, message) => {

@@ -83,6 +83,23 @@ bun run explore:depths --output-path "data/latest-depths.json"
   - **真の大底 (Absolute Bottom)**: 状態やエラーを問わず、未クローズの New-Package で最も古い PR
   - **特急レーン・追い越し (Express Lane)**: 基準 PR 起票日以降に起票され、すでにマージされた PR
 
+### 3. `src/cli/collect-review-feedback.ts`（初回提出 PR 差し戻し指摘クローラー）
+
+`New package:` で始まる初回提出 PR から、差し戻し履歴（`Needs-Author-Feedback` / `Changes-Requested` ラベル履歴、または人間による `CHANGES_REQUESTED` レビュー）を持つ PR の指摘コメント・インラインレビューコメント・作成者修正返信・`.installer.yaml` 種別を GraphQL のみで収集・自動分類し、LLM 読込・ナレッジ化向けの JSONL コーパスと Markdown レポートを生成します（GitHub Pages ダッシュボードには掲載せず、独立ワークフロー [.github/workflows/collect-feedback.yml](.github/workflows/collect-feedback.yml) および `scripts/sync-dropbox.ts --scope feedback` で Dropbox `/data/` へ蓄積します）。
+
+```bash
+# 直近 90 日のマージ済み初回提出 PR から差し戻し指摘を収集（増分キャッシュ対応）
+bun run collect:feedback
+
+# ポータブル配布形式のみを既存キャッシュから再集計（API 呼び出し 0 回）
+bun run collect:feedback --fetch-budget 0 --portable-only
+
+# 未マージ（OPEN）および放棄クローズ（CLOSED）も含めて収集
+bun run collect:feedback --states merged,open,closed --lookback-days 60
+```
+
+**主なオプション:** `--repo` / `--repository` / `--lookback-days`（既定 90）/ `--states`（`merged` / `open` / `closed` のカンマ区切り、既定 `merged`）/ `--fetch-budget`（既定 200、`0` でキャッシュ再集計のみ）/ `--fetch-limit`（既定 2000）/ `--installer-type` / `--nested-installer-type` / `--portable-only` / `--privileged-only`（`MEMBER`・`COLLABORATOR`・`OWNER` のみ限定）/ `--first-timer-only` / `--output-path`（既定 `data/review-feedback.jsonl`）/ `--report-path`（既定 `data/review-feedback-report.md`）/ `--no-report` / `--no-write` / `--as-json`
+
 ---
 
 ## データ蓄積と自動化（GitHub Actions / Dropbox / GitHub Pages / Cloudflare Workers）

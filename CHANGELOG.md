@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 初回提出（`New package:`）PR のメンテナ差し戻し指摘（地雷パターン）を GraphQL で収集・自動分類するクローラー CLI および独立ワークフローを追加（#150）:
+  - `src/models/review-feedback.ts`, `src/domain/review-feedback.ts`, `src/domain/review-feedback-report.ts`: 差し戻しトリガー判定（`Needs-Author-Feedback` / `Changes-Requested` ラベル履歴・人間 `CHANGES_REQUESTED` レビュー）、レビュー本文・インラインレビューコメント・手動コメントの 3 系統抽出（Bot・自動検証ログ・CI 再実行コマンド・`[Policy]` 単体コマンド除外）、PR 作成者の手動返信（`authorReplies`）抽出、`.installer.yaml` メタデータ抽出・フィルタリング、5 カテゴリ＋`uncategorized` マルチタグ自動分類、JSONL コーパス読み書きおよび Markdown レポート生成を実装
+  - `src/api/feedback-queries.ts`: GraphQL alias バッチ詳細取得・必要時ページング補完・`.installer.yaml` Blob バッチ取得を追加（REST 非使用・既存リトライ制御を継承）
+  - `src/cli/feedback-collector.ts`, `src/cli/collect-review-feedback.ts`, `package.json`: 動的二分窓走査・増分キャッシュ・取得予算制御（`--fetch-budget 0` でキャッシュ再集計のみも対応）・初回作者メタデータ付与を備えた `bun run collect:feedback` CLI を追加
+  - `scripts/sync-dropbox.ts`, `.github/workflows/collect-feedback.yml`: Dropbox 同期に `--scope observe|feedback|all`（既定 `observe`）を追加し、ダッシュボード・`observe.yml` と完全分離した独立ワークフロー `collect-feedback.yml` を追加
 - 2×2 待機ライン体系（フェーズ × レンジ・起票日時順統一・全体／初回提出者一括トグル）に向けた Phase 1 データモデル・GraphQL 収集基盤を追加（#127）:
   - `src/models/depths.ts`, `src/domain/depths.ts`: `CURRENT_DEPTHS_VERSION = 5` へ更新し、`DepthsSnapshot` に `SingleCommitBottom` / `FirstTimerSingleCommitBottom`（1コミット完走組・起票日時順 TOP 10、打ち切りフラグ付き）、`FirstTimerUnreviewedBottom` / `FirstTimerUnreviewedTruncated`（未レビュー前線・初回提出者 TOP 10）、`AllAuthorsFirstReviewFrontier`（常連含む全体コホート）を追加、`FirstReviewCohortItem` に `AuthorAssociation` / `AuthorMergedCount` を追加し、初回提出者判定 SSoT ヘルパー `isFirstTimerDepthsRow` を追加
   - `src/cli/explore-depths.ts`: `HealthyBottom`（TOP 10）と `FirstTimerBottom`（TOP 10）を 1 回の GraphQL 走査で同時取得する `fetchHealthyBottoms`、1コミット完走組（全体・初回）を `sort:created-asc` で同時取得する `fetchSingleCommitBottoms`（走査上限到達時は打ち切りフラグ付きで確定済みデータを返却）、常連含む全体コホートと初回限定コホートを同時算出する `fetchFirstReviewFrontiers` を追加し、全指標で `mergedCountCache` を共有して作者メタデータを統一付与
