@@ -1185,5 +1185,57 @@ describe("review-feedback domain logic", () => {
       expect(closedHttp404.hasBlockingFeedback).toBe(true);
       expect(closedHttp404.categories).toEqual(["metadata-url"]);
     }
+
+    // 任意と明記された提案内に `Please update ...` を含む場合でも non-blocking を維持し、
+    // 却下ラベルなしの CLOSED では直接却下にせず、既存ラベル経由でも --blocking-only から除外する
+    const optionalNotesBody =
+      "No blockers have been found for this PR.\n\nOptional, non-blocking notes:\n- Please update the package description for clarity.";
+    expect(classifyFeedbackCommentSeverity(optionalNotesBody)).toBe("non-blocking");
+
+    const closedOptionalNotesOnly = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900012,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: optionalNotesBody,
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedOptionalNotesOnly.entryType).toBe("no-feedback");
+    if (closedOptionalNotesOnly.entryType === "no-feedback") {
+      expect(closedOptionalNotesOnly.skipReason).toBe("no-rejection-trigger");
+    }
+
+    const optionalNotesWithLabel = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900013,
+        state: "MERGED",
+        comments: [
+          {
+            author: { __typename: "User", login: "taras-janea" },
+            authorAssociation: "NONE",
+            body: optionalNotesBody,
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    }) as ReviewFeedbackRecord;
+    expect(optionalNotesWithLabel.hasBlockingFeedback).toBe(false);
+    expect(
+      filterReviewFeedbackRecords([optionalNotesWithLabel], { blockingOnly: true }),
+    ).toHaveLength(0);
   });
 });

@@ -384,8 +384,18 @@ export function isFeedbackNoiseComment(body: string | null | undefined): boolean
 const NON_BLOCKING_FEEDBACK_PATTERN =
   /\b(?:No\s+blockers\s+have\s+been\s+found\s+for\s+this\s+PR|No\s+blocking\s+issues?\s+(?:were|was|have\s+been)?\s*found)\b/i;
 
-const EXPLICIT_BLOCKING_ISSUE_PATTERN =
-  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|can't\s+(?:be\s+)?(?:approved|accepted|proceed)|before\s+this\s+(?:package|submission|pr)\s+can\s+(?:proceed|be\s+approved)|corrections?\s+are\s+required|(?:must|need(?:s)?\s+to|should)\s+be\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch)|fails?\s+to\s+(?:start|launch|run|install|download)|returned\s+exit\s+code|install\s+failed|hash\s+(?:doesn't\s+match|verification\s+failed)|(?:url|link|download|installer|asset|endpoint|page|site)\b[^\r\n]{0,40}\b(?:returns?\s+(?:http\s+)?(?:4\d\d|5\d\d)|is\s+(?:unavailable|unreachable|broken|dead)|404s?)|http\s+(?:4\d\d|5\d\d)\b)|(?:^|\n)\s*required\s*:|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
+/**
+ * 「No blockers / No blocking issues were found」の宣言が本文にあっても、
+ * それを上書きして `blocking` とみなすべき明示的な却下・実障害・必須修正の根拠パターン。
+ * 任意助言（`Optional, non-blocking notes: - Please update ...`）の汎用 `please update` はここには含めない。
+ */
+const HARD_BLOCKING_OVERRIDE_PATTERN =
+  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|can't\s+(?:be\s+)?(?:approved|accepted|proceed)|before\s+this\s+(?:package|submission|pr)\s+can\s+(?:proceed|be\s+approved)|corrections?\s+are\s+required|fails?\s+to\s+(?:start|launch|run|install|download)|returned\s+exit\s+code|install\s+failed|hash\s+(?:doesn't\s+match|verification\s+failed)|(?:url|link|download|installer|asset|endpoint|page|site)\b[^\r\n]{0,40}\b(?:returns?\s+(?:http\s+)?(?:4\d\d|5\d\d)|is\s+(?:unavailable|unreachable|broken|dead)|404s?)|http\s+(?:4\d\d|5\d\d)\b|(?:however|but)\b[^\r\n]{0,60}\b(?:please\s+(?:fix|update|remove|add|address|correct)|must\s+be|fails?\s+to|cannot))|(?:^|\n)\s*required\s*:|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
+
+const EXPLICIT_BLOCKING_ISSUE_PATTERN = new RegExp(
+  `${HARD_BLOCKING_OVERRIDE_PATTERN.source}|\\b(?:(?:must|need(?:s)?\\s+to|should)\\s+be\\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch))`,
+  "i",
+);
 
 const CLOSED_REJECTION_ACTIONABLE_PATTERN = new RegExp(
   `${EXPLICIT_BLOCKING_ISSUE_PATTERN.source}|\\b(?:is\\s+not\\s+recommended|deprecated\\s+manifest|manifest\\s+version\\s+has\\s+been\\s+depreciated|policy\\s+\\d+\\.\\d+|policy-test-\\d|Manual\\s+Validation\\s+ended\\s+with\\s*:|Automatic\\s+Validation\\s+ended\\s+with\\s*:)`,
@@ -395,7 +405,8 @@ const CLOSED_REJECTION_ACTIONABLE_PATTERN = new RegExp(
 /**
  * 指摘コメントがブロッキング差し戻しか、任意・非ブロッキング助言かを判定する。
  * 本文に「No blockers / No blocking issues were found」が含まれていても、
- * 明示的な障害報告・必須修正依頼（`fails to start` / `Please fix` / `Required:` 等）が併記されている場合は `blocking` を優先する。
+ * 明示的な却下宣言・実障害報告・必須修正（`Required:` / `fails to start` / 逆接の必須修正等）が
+ * 併記されている場合は `blocking` を優先し、任意助言内の汎用提案（`Optional, non-blocking notes: - Please update ...`）は `non-blocking` を維持する。
  */
 export function classifyFeedbackCommentSeverity(
   body: string | null | undefined,
@@ -403,7 +414,7 @@ export function classifyFeedbackCommentSeverity(
   if (typeof body !== "string") {
     return "blocking";
   }
-  if (EXPLICIT_BLOCKING_ISSUE_PATTERN.test(body)) {
+  if (HARD_BLOCKING_OVERRIDE_PATTERN.test(body)) {
     return "blocking";
   }
   if (NON_BLOCKING_FEEDBACK_PATTERN.test(body)) {
