@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { extractExpectedArpSpec } from "./sandbox-plan";
+import { extractExpectedArpSpec, resolveSelectedInstallerArchitecture } from "./sandbox-plan";
 import type {
   ArpRegistryEntry,
   CliProbeResult,
@@ -400,30 +400,43 @@ export function evaluateSandboxResult(
     });
   }
 
+  const resolvedArchForOs =
+    result.installedArchitecture && unfilteredSpec.availableArchitectures.length > 0
+      ? resolveSelectedInstallerArchitecture(
+          unfilteredSpec.availableArchitectures,
+          result.installedArchitecture,
+        )
+      : null;
+
   if (
     result.installedArchitecture &&
     unfilteredSpec.availableArchitectures.length > 0 &&
-    !unfilteredSpec.availableArchitectures.includes(result.installedArchitecture) &&
-    !unfilteredSpec.availableArchitectures.includes("neutral")
+    !resolvedArchForOs
   ) {
     identityIssues++;
     findings.push({
       id: "CMN-SBX-02",
       status: "fail",
-      title: "Sandbox 結果の installedArchitecture がマニフェスト定義に存在しない",
-      detail: `installedArchitecture="${result.installedArchitecture}" はマニフェスト定義 [${unfilteredSpec.availableArchitectures.join(", ")}] に含まれていません。`,
-      remediation: "マニフェストが対象とするアーキテクチャの Sandbox 環境で検証してください。",
+      title: "Sandbox の OS アーキテクチャで適用可能なインストーラーがマニフェストに存在しない",
+      detail: `installedArchitecture="${result.installedArchitecture}" に対し適用可能なエントリが [${unfilteredSpec.availableArchitectures.join(", ")}] に存在しません。`,
+      remediation:
+        "マニフェストが対象とするアーキテクチャを実行できる Sandbox 環境で検証してください。",
       file: sourceFile,
       guideRef: "PKG-INST-01",
     });
   }
 
   if (identityIssues === 0 && (manifestPkgId || manifestPkgVer)) {
+    const archLabel = result.installedArchitecture
+      ? resolvedArchForOs && resolvedArchForOs !== result.installedArchitecture
+        ? ` (OS=${result.installedArchitecture}, installer=${resolvedArchForOs})`
+        : ` (${result.installedArchitecture})`
+      : "";
     findings.push({
       id: "CMN-SBX-02",
       status: "pass",
       title: "Sandbox 結果のパッケージ識別子・バージョンが対象マニフェストと一致",
-      detail: `${manifestPkgId ?? "(unknown)"}@${manifestPkgVer ?? "(unknown)"}${result.installedArchitecture ? ` (${result.installedArchitecture})` : ""}`,
+      detail: `${manifestPkgId ?? "(unknown)"}@${manifestPkgVer ?? "(unknown)"}${archLabel}`,
       file: sourceFile,
       guideRef: "7.1",
     });
@@ -731,11 +744,16 @@ export function evaluateSandboxResult(
   if (result.cliProbes && result.cliProbes.length > 0) {
     let noArgChecked = 0;
     const requiredArgProbes: CliProbeResult[] = [];
+    const commandsWithRequiredProbes = new Set<string>();
     const optionalArgProbesByCommand = new Map<string, CliProbeResult[]>();
 
     for (const probe of result.cliProbes) {
       const invocation =
         probe.args.length > 0 ? `${probe.command} ${probe.args.join(" ")}` : probe.command;
+
+      if (probe.required) {
+        commandsWithRequiredProbes.add(probe.command.toLowerCase());
+      }
 
       if (isStatusDllNotFound(probe.exitCode)) {
         findings.push({
@@ -832,9 +850,12 @@ export function evaluateSandboxResult(
       }
     }
 
-    // 自動探索プローブ（--version / --help 等）は、コマンドごとに 1 件以上成功すれば合格
-    // （--version のみ対応 / --help のみ対応の CLI を誤って fail にしない）
+    // 自動探索プローブ（--version / --help 等）は、同一コマンドに明示指定の必須プローブがある場合は
+    // 明示指定側で判定する。明示指定が無いコマンドは 1 件以上成功すれば合格とする。
     for (const [cmd, probes] of optionalArgProbesByCommand.entries()) {
+      if (commandsWithRequiredProbes.has(cmd.toLowerCase())) {
+        continue;
+      }
       const succeeded = probes.filter((p) => !p.timedOut && p.exitCode === 0);
       if (succeeded.length > 0) {
         verifiedPassCount += succeeded.length;

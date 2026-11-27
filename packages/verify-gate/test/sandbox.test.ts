@@ -454,12 +454,87 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
         makeBaseSandboxResult({ installedArchitecture: undefined, cliProbes: [] }),
       );
       expect(noArchFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(true);
+
+      // x64 と neutral が異なる ProductCode を併記している場合、x64 実行時は x64 のみ照合し neutral を要求しない
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: neutral",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{77777777-6666-5555-4444-333333333333}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-neutral.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const x64NeutralFindings = evaluateSandboxResult(
+        loadManifestBundle(tmpDir),
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(x64NeutralFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(x64NeutralFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(
+        true,
+      );
+
+      // x64 OS（WOW64）上で x86 のみマニフェストをインストールした結果も CMN-SBX-02 / PKG-INST-01 で合格する
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x86",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const wow64Findings = evaluateSandboxResult(
+        loadManifestBundle(tmpDir),
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(wow64Findings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(wow64Findings.some((f) => f.id === "CMN-SBX-02" && f.status === "pass")).toBe(true);
+      expect(wow64Findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("CLI 自動プローブは --version / --help の片方成功で pass し、明示指定の required コマンド失敗は fail にする", () => {
+  test("CLI 自動プローブは --version / --help の片方成功で pass し、明示指定があるコマンドは必須プローブ結果で判定する", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-cli-mode-"));
     try {
       writeInstallerManifest(tmpDir, { installerType: "portable" });
@@ -480,6 +555,41 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       });
       expect(partialFindings.some((f) => f.id === "APP-CLI-02" && f.status === "pass")).toBe(true);
       expect(partialFindings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(false);
+
+      // 自動プローブ 2 件が非 0 でも、同一コマンドの明示指定（required: true）が 0 なら APP-CLI-02 pass
+      const overridePassFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          { command: "myapp", args: [], exitCode: 2, timedOut: false, required: false },
+          { command: "myapp", args: ["--version"], exitCode: 1, timedOut: false, required: false },
+          { command: "myapp", args: ["--help"], exitCode: 1, timedOut: false, required: false },
+          { command: "myapp", args: ["status"], exitCode: 0, timedOut: false, required: true },
+        ],
+      });
+      expect(overridePassFindings.some((f) => f.id === "APP-CLI-02" && f.status === "pass")).toBe(
+        true,
+      );
+      expect(overridePassFindings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(
+        false,
+      );
+
+      // 自動プローブ側で 0xC0000135（DLL 欠損）が起きた場合は明示指定成功でも PKG-PORT-01 fail を維持する
+      const dllFailWithOverride = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          {
+            command: "myapp",
+            args: ["--version"],
+            exitCode: -1073741515,
+            timedOut: false,
+            required: false,
+          },
+          { command: "myapp", args: ["status"], exitCode: 0, timedOut: false, required: true },
+        ],
+      });
+      expect(dllFailWithOverride.some((f) => f.id === "PKG-PORT-01" && f.status === "fail")).toBe(
+        true,
+      );
 
       // 利用者明示指定（required: true）の検証コマンドが失敗 → APP-CLI-02 fail
       const requiredFailFindings = evaluateSandboxResult(bundle, {

@@ -70,10 +70,37 @@ export interface ExpectedArpSpec {
   explicitEntries: ExplicitArpEntrySpec[];
   hasInstallerBasedEntry: boolean;
   availableArchitectures: string[];
+  resolvedInstallerArchitecture: string | null;
   hasArchitectureSpecificArpVariants: boolean;
 }
 
 const INSTALLER_BASED_TYPES = new Set(["inno", "nullsoft", "wix", "msi", "exe", "burn", "msix"]);
+
+const WINGET_ARCH_PREFERENCE: Record<string, readonly string[]> = {
+  x64: ["x64", "x86", "neutral"],
+  arm64: ["arm64", "x64", "x86", "neutral"],
+  x86: ["x86", "neutral"],
+  neutral: ["neutral"],
+};
+
+/**
+ * WinGet のアーキテクチャ適用優先順（GetApplicableArchitectures 相当、WOW64 含む）に従い、
+ * 指定 OS アーキテクチャで選択される最優先のインストーラーアーキテクチャを返す。
+ */
+export function resolveSelectedInstallerArchitecture(
+  availableArchitectures: readonly string[],
+  osArchitecture: string,
+): string | null {
+  const normalizedAvailable = new Set(availableArchitectures.map((a) => a.toLowerCase()));
+  const preference = WINGET_ARCH_PREFERENCE[osArchitecture.toLowerCase()];
+  if (!preference) return null;
+  for (const candidate of preference) {
+    if (normalizedAvailable.has(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
 
 function parseAppsAndFeaturesEntries(container: Record<string, unknown>): ExplicitArpEntrySpec[] {
   if (!Array.isArray(container.AppsAndFeaturesEntries)) return [];
@@ -188,11 +215,19 @@ export function extractExpectedArpSpec(
     variantByArch.size > 1 && new Set(variantByArch.values()).size > 1;
 
   const normalizedSelectedArch = selectedArchitecture?.toLowerCase();
+  const resolvedInstallerArchitecture = normalizedSelectedArch
+    ? resolveSelectedInstallerArchitecture(availableArchitectures, normalizedSelectedArch)
+    : availableArchitectures.length === 1
+      ? availableArchitectures[0]
+      : null;
+
   const targetEntries = normalizedSelectedArch
-    ? allEntries.filter((entry) => {
-        const arch = asNonEmptyString(entry.Architecture)?.toLowerCase();
-        return arch === normalizedSelectedArch || arch === "neutral";
-      })
+    ? resolvedInstallerArchitecture
+      ? allEntries.filter(
+          (entry) =>
+            asNonEmptyString(entry.Architecture)?.toLowerCase() === resolvedInstallerArchitecture,
+        )
+      : []
     : allEntries;
 
   let productCode = rootProductCode;
@@ -245,6 +280,7 @@ export function extractExpectedArpSpec(
     explicitEntries,
     hasInstallerBasedEntry,
     availableArchitectures,
+    resolvedInstallerArchitecture,
     hasArchitectureSpecificArpVariants,
   };
 }
