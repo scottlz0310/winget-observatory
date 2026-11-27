@@ -14,6 +14,13 @@ export interface SlsaProvenanceCheckInput {
   expectedTarballSha512Hex: string;
 }
 
+export interface VerifyPublishedPackageDeps {
+  npmView?: (spec: string) => string;
+  fetchJson?: (url: string) => Promise<unknown>;
+  fetchBytes?: (url: string) => Promise<Buffer>;
+  stdout?: (line: string) => void;
+}
+
 interface AttestationEntry {
   predicateType?: unknown;
   bundle?: {
@@ -179,7 +186,15 @@ export function compareExtractedDirectories(
   return { ok: true };
 }
 
-async function fetchJson(url: string): Promise<unknown> {
+function defaultNpmView(spec: string): string {
+  return execFileSync("npm", ["view", spec, "--json"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
+  });
+}
+
+async function defaultFetchJson(url: string): Promise<unknown> {
   const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} (${url})`);
@@ -187,7 +202,7 @@ async function fetchJson(url: string): Promise<unknown> {
   return res.json();
 }
 
-async function fetchBytes(url: string): Promise<Buffer> {
+async function defaultFetchBytes(url: string): Promise<Buffer> {
   const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} (${url})`);
@@ -195,8 +210,15 @@ async function fetchBytes(url: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer());
 }
 
-async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
+export async function runVerifyPublishedPackage(
+  argv: readonly string[],
+  deps: VerifyPublishedPackageDeps = {},
+): Promise<number> {
+  const npmView = deps.npmView ?? defaultNpmView;
+  const fetchJson = deps.fetchJson ?? defaultFetchJson;
+  const fetchBytes = deps.fetchBytes ?? defaultFetchBytes;
+  const stdout = deps.stdout ?? ((line: string) => console.log(line));
+
   let pkgName = "";
   let version = "";
   let repo = "";
@@ -229,18 +251,13 @@ async function main(): Promise<void> {
 
   let metadataRaw: string;
   try {
-    metadataRaw = execFileSync("npm", ["view", `${pkgName}@${version}`, "--json"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 60_000,
-    });
+    metadataRaw = npmView(`${pkgName}@${version}`);
   } catch (error) {
     const err = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
     const combined = `${String(err.stderr ?? "")}\n${String(err.stdout ?? "")}\n${err.message ?? ""}`;
     if (allowMissing && /E404|404 Not Found|No match found/i.test(combined)) {
-      console.log(`MISSING ${pkgName}@${version}`);
-      process.exitCode = 3;
-      return;
+      stdout(`MISSING ${pkgName}@${version}`);
+      return 3;
     }
     throw new Error(`npm view に失敗しました: ${combined.trim()}`);
   }
@@ -309,14 +326,15 @@ async function main(): Promise<void> {
   if (outRegistryTarball) {
     await Bun.write(outRegistryTarball, registryBytes);
   }
-  console.log(
+  stdout(
     `VERIFIED ${pkgName}@${version} commit=${commitSha} sha512=${actualSha512Hex.slice(0, 16)}... strictBytes=${strictBytes}`,
   );
+  return 0;
 }
 
 if (import.meta.main) {
   try {
-    await main();
+    process.exitCode = await runVerifyPublishedPackage(process.argv.slice(2));
   } catch (error) {
     console.error(
       `[verify-published-package] ${error instanceof Error ? error.message : String(error)}`,

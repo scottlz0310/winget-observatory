@@ -4,38 +4,32 @@
 
 90 日窓 3,603 件の `microsoft/winget-pkgs` 実 PR コーパス分析から抽出した差し戻しブロッカーを、PR 提出前に一括検出します。
 
-## インストール / 実行方法
+## 導入方法（Bun / pnpm / Node.js / 単体バイナリ）
 
-### 1. `bunx --bun` / `npx` で即時実行（推奨・Node.js 20+ または Bun）
+Bun・pnpm・Node.js（20+）のいずれでも動作し、[GitHub Releases](https://github.com/scottlz0310/winget-observatory/releases) の単体バイナリを使えばランタイム未導入環境でもそのまま実行できます。
 
-```bash
-# Bun（Node.js 未導入環境でも動作するよう --bun をパッケージ名より前に指定）
-bunx --bun @scottlz0310/winget-verify-gate check ./manifests/e/Example/MyApp/1.0.0
+| 環境           | 即時実行                                         | MCP 設定（`command` / `args`）                                  |
+| -------------- | ------------------------------------------------ | --------------------------------------------------------------- |
+| Bun            | `bunx --bun @scottlz0310/winget-verify-gate ...` | `"bunx"`, `["--bun", "@scottlz0310/winget-verify-gate", "mcp"]` |
+| pnpm           | `pnpm dlx @scottlz0310/winget-verify-gate ...`   | `"pnpm"`, `["dlx", "@scottlz0310/winget-verify-gate", "mcp"]`   |
+| Node.js (npx)  | `npx -y @scottlz0310/winget-verify-gate ...`     | `"npx"`, `["-y", "@scottlz0310/winget-verify-gate", "mcp"]`     |
+| ランタイム不要 | `winget-verify-gate-windows-x64.exe ...`         | `"C:\\Tools\\winget-verify-gate-windows-x64.exe"`, `["mcp"]`    |
 
-# Node.js
-npx -y @scottlz0310/winget-verify-gate check ./manifests/e/Example/MyApp/1.0.0
-```
+> **補足**: 配布バンドルの shebang は Node.js / Bun 両対応のため `#!/usr/bin/env node` です。Node.js 未導入の Bun 環境では、`--bun` をパッケージ名より前に指定してください。単体バイナリは [GitHub Releases](https://github.com/scottlz0310/winget-observatory/releases) から `windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64` と `SHA256SUMS.txt` を取得できます。
 
-> **補足**: 配布バンドルの shebang は Node.js / Bun 両対応のため `#!/usr/bin/env node` を採用しています。Node.js を入れていない Bun 単独環境では、`bunx` に `--bun` をパッケージ名より前に付けて実行してください。
-
-### 2. グローバルインストール
+### グローバルインストール（`winget-verify-gate` コマンドを常設する場合）
 
 ```bash
 bun add -g @scottlz0310/winget-verify-gate
-# または npm install -g @scottlz0310/winget-verify-gate
+# または: pnpm add -g @scottlz0310/winget-verify-gate
+# または: npm install -g @scottlz0310/winget-verify-gate
 
 winget-verify-gate --version
 ```
 
-### 3. 単体バイナリ（Node.js / Bun 不要）
-
-[GitHub Releases](https://github.com/scottlz0310/winget-observatory/releases) から各環境向け単体バイナリ（`winget-verify-gate-windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64`）と `SHA256SUMS.txt` をダウンロードして直接実行できます。
-
 ## MCP サーバー登録（STDIO + `io.modelcontextprotocol/skills`）
 
-MCP クライアント（Antigravity / Claude Code / Codex / Cursor 等）の MCP 設定へ以下を追加します。
-
-### `bunx --bun` を使う場合
+MCP クライアント（Antigravity / Claude Code / Codex / Cursor 等）の設定へ追加します（環境に応じて上表の `command` / `args` へ差し替えてください）。
 
 ```json
 {
@@ -48,42 +42,18 @@ MCP クライアント（Antigravity / Claude Code / Codex / Cursor 等）の MC
 }
 ```
 
-### `npx`（Node.js）を使う場合
-
-```json
-{
-  "mcpServers": {
-    "winget-verify-gate": {
-      "command": "npx",
-      "args": ["-y", "@scottlz0310/winget-verify-gate", "mcp"]
-    }
-  }
-}
-```
-
-### 単体バイナリを使う場合（Windows 例）
-
-```json
-{
-  "mcpServers": {
-    "winget-verify-gate": {
-      "command": "C:\\Tools\\winget-verify-gate-windows-x64.exe",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
 ### Skills over MCP / 非対応クライアント向けエクスポート
 
 - `io.modelcontextprotocol/skills`（SEP-2640）対応クライアントでは、サーバーから `skill://winget-verify-gate/SKILL.md`・`references/submission-guide.md`・`templates/pr-template.md` を自動配信します。
-- 非対応クライアント向けに、同梱スキル一式をローカルディレクトリへ書き出せます:
+- 非対応クライアント向けには、同梱スキル一式をローカルへ書き出せます:
 
 ```bash
-bunx --bun @scottlz0310/winget-verify-gate skill export --out ./.agent/skills
+winget-verify-gate skill export --out ./.agent/skills
 ```
 
 ## 主な CLI コマンド
+
+以下ではコマンド名を `winget-verify-gate` と表記します（未インストールの場合は上表の `bunx --bun` / `pnpm dlx` / `npx -y` / 単体バイナリへ読み替えてください）。
 
 ```bash
 # マニフェスト静的検証 + URL 到達性（--verify-sha256 で実ダウンロード照合、--binary で PE 解析も同時実行）

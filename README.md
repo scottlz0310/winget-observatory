@@ -109,23 +109,17 @@ bun run collect:feedback --states merged,open,closed --lookback-days 60
 
 `packages/verify-gate/` で提供するローカル `stdio` CLI 核 ＋ `io.modelcontextprotocol/skills`（SEP-2640）対応 STDIO MCP サーバーです。マニフェスト静的検証・URL/SHA-256 検証・PE バイナリ（`VCRUNTIME140.dll` 等）診断・Windows Sandbox 検証テンプレート生成＆ARP/CLI 実測突き合わせを単体パッケージで実行できます（詳細は [packages/verify-gate/README.md](packages/verify-gate/README.md) 参照）。
 
-#### 導入方法
+#### 導入方法（Bun / pnpm / Node.js / 単体バイナリ）
 
-1. **`bunx --bun` / `npx` で即時実行（Node.js 20+ または Bun）**:
+| 環境           | 即時実行                                         | MCP 設定（`command` / `args`）                                  |
+| -------------- | ------------------------------------------------ | --------------------------------------------------------------- |
+| Bun            | `bunx --bun @scottlz0310/winget-verify-gate ...` | `"bunx"`, `["--bun", "@scottlz0310/winget-verify-gate", "mcp"]` |
+| pnpm           | `pnpm dlx @scottlz0310/winget-verify-gate ...`   | `"pnpm"`, `["dlx", "@scottlz0310/winget-verify-gate", "mcp"]`   |
+| Node.js (npx)  | `npx -y @scottlz0310/winget-verify-gate ...`     | `"npx"`, `["-y", "@scottlz0310/winget-verify-gate", "mcp"]`     |
+| ランタイム不要 | `winget-verify-gate-windows-x64.exe ...`         | `"C:\\Tools\\winget-verify-gate-windows-x64.exe"`, `["mcp"]`    |
 
-   ```bash
-   # Bun（Node.js 未導入環境でも動作するよう --bun をパッケージ名より前に指定）
-   bunx --bun @scottlz0310/winget-verify-gate check <manifest-dir>
-   # Node.js 環境の場合:
-   npx -y @scottlz0310/winget-verify-gate check <manifest-dir>
-   ```
-2. **GitHub Releases 単体バイナリ（ランタイム不要）**:
-   - [Releases](https://github.com/scottlz0310/winget-observatory/releases) から `winget-verify-gate-windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64`（および `SHA256SUMS.txt`）を取得して直接実行できます。
-3. **本リポジトリからのローカル実行**:
-
-   ```bash
-   bun run verify:gate check <manifest-dir>
-   ```
+- 配布バンドルの shebang は Node.js / Bun 両対応のため `#!/usr/bin/env node` です。Node.js 未導入の Bun 環境では `--bun` をパッケージ名より前に指定してください。
+- 単体バイナリは [Releases](https://github.com/scottlz0310/winget-observatory/releases) から `windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64` と `SHA256SUMS.txt` を取得できます。本リポジトリ内からは `bun run verify:gate ...` でも実行できます。
 
 #### MCP サーバー登録例（STDIO + Skills over MCP）
 
@@ -140,26 +134,27 @@ bun run collect:feedback --states merged,open,closed --lookback-days 60
 }
 ```
 
-- 配布バンドルの shebang は `#!/usr/bin/env node` のため、Node.js 未導入の Bun 環境では `--bun` をパッケージ名より前に指定してください。
-- Node.js 環境では `"command": "npx"`, `"args": ["-y", "@scottlz0310/winget-verify-gate", "mcp"]`、単体バイナリでは `"command": "C:\\Tools\\winget-verify-gate-windows-x64.exe"`, `"args": ["mcp"]` を指定できます。
+- 環境に応じて上表の `command` / `args` へ差し替えてください。
 - `io.modelcontextprotocol/skills` 非対応の AI クライアント向けには、同梱スキル・ガイド・PR テンプレートを書き出すフォールバックコマンドを用意しています:
 
   ```bash
-  bunx --bun @scottlz0310/winget-verify-gate skill export --out ./.agent/skills
+  winget-verify-gate skill export --out ./.agent/skills
   ```
 
 #### 主な CLI コマンド
 
+以下ではコマンド名を `winget-verify-gate` と表記します（未インストールの場合は上表の `bunx --bun` / `pnpm dlx` / `npx -y` / 単体バイナリへ読み替えてください）。
+
 ```bash
 # マニフェスト診断（--verify-sha256 で実ダウンロード照合、--binary で PE 解析併用）
-bunx --bun @scottlz0310/winget-verify-gate check <manifest-dir> [--binary <path>] [--sandbox-result <path>] [--verify-sha256] [--json]
+winget-verify-gate check <manifest-dir> [--binary <path>] [--sandbox-result <path>] [--verify-sha256] [--json]
 
 # PE バイナリ単体検査（アーキテクチャ / 未同梱 CRT DLL / Authenticode 署名）
-bunx --bun @scottlz0310/winget-verify-gate binary <pe-path> [--arch x64|x86|arm64] [--json]
+winget-verify-gate binary <pe-path> [--arch x64|x86|arm64] [--json]
 
 # Windows Sandbox 検証一式（.wsb / WinGet 自動導入 / 4ハイブ ARP ダンプ / CLI 実測）生成と評価
-bunx --bun @scottlz0310/winget-verify-gate sandbox prepare <manifest-dir> --out <dir>
-bunx --bun @scottlz0310/winget-verify-gate sandbox eval <manifest-dir> --result <sandbox-result.json> [--json]
+winget-verify-gate sandbox prepare <manifest-dir> --out <dir>
+winget-verify-gate sandbox eval <manifest-dir> --result <sandbox-result.json> [--json]
 ```
 
 ---
