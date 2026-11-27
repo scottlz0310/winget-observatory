@@ -1,9 +1,9 @@
 import { resolve } from "node:path";
 import { loadManifestBundle } from "./manifest-loader";
 import {
-  collectDeclaredPackageDependencies,
   evaluateManifestRules,
   getInstallerEntries,
+  resolveEffectivePackageDependencySetsForArchitecture,
 } from "./manifest-rules";
 import { runNetworkChecks } from "./network-checks";
 import { inspectPeFile } from "./pe-inspector";
@@ -63,6 +63,7 @@ export function evaluatePeInspectionFindings(
   options: {
     expectedArchitectures?: readonly string[];
     declaredDependencies?: readonly string[];
+    effectiveDependencySets?: readonly (readonly string[])[];
   } = {},
 ): GateFinding[] {
   if (!pe.valid) {
@@ -103,13 +104,19 @@ export function evaluatePeInspectionFindings(
   }
 
   // PKG-PORT-01: 非標準ランタイム DLL 依存（VCRUNTIME140.dll 等）
-  const declaredDeps = options.declaredDependencies ?? [];
+  // マニフェスト経由時は対象アーキテクチャの全該当インストーラー実効依存セットすべてがカバーしていること
+  const dependencySets: readonly (readonly string[])[] =
+    options.effectiveDependencySets && options.effectiveDependencySets.length > 0
+      ? options.effectiveDependencySets
+      : [options.declaredDependencies ?? []];
+
   if (pe.nonStandardRuntimeDlls.length > 0) {
     const isVcRedistOnly = pe.nonStandardRuntimeDlls.every((dll) =>
       /^(?:vcruntime|msvcp|concrt|mfc|vcomp)\d+/i.test(dll),
     );
     const coveredByManifest =
-      isVcRedistOnly && hasMatchingVcRedistDependency(pe.architecture, declaredDeps);
+      isVcRedistOnly &&
+      dependencySets.every((depSet) => hasMatchingVcRedistDependency(pe.architecture, depSet));
 
     if (coveredByManifest) {
       findings.push({
@@ -229,11 +236,14 @@ export async function runManifestGate(
     const expectedArchitectures = getInstallerEntries(bundle)
       .map((entry) => (typeof entry.Architecture === "string" ? entry.Architecture : null))
       .filter((a): a is string => a !== null);
-    const declaredDependencies = collectDeclaredPackageDependencies(bundle);
+    const effectiveDependencySets = resolveEffectivePackageDependencySetsForArchitecture(
+      bundle,
+      pe.architecture,
+    );
     findings.push(
       ...evaluatePeInspectionFindings(pe, {
         expectedArchitectures,
-        declaredDependencies,
+        effectiveDependencySets,
       }),
     );
   }

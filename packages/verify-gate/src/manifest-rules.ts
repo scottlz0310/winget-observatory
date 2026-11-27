@@ -56,14 +56,26 @@ export function getLocaleHostFile(bundle: ManifestBundle): ParsedManifestFile | 
   return bundle.defaultLocaleFile ?? bundle.singletonFile;
 }
 
-export function getInstallerEntries(bundle: ManifestBundle): Record<string, unknown>[] {
+export interface IndexedInstallerEntry {
+  index: number;
+  entry: Record<string, unknown> | null;
+}
+
+export function getIndexedInstallerEntries(bundle: ManifestBundle): IndexedInstallerEntry[] {
   const host = getInstallerHostFile(bundle);
   if (!host || !Array.isArray(host.data.Installers)) {
     return [];
   }
-  return host.data.Installers.map((entry) => asRecord(entry)).filter(
-    (entry): entry is Record<string, unknown> => entry !== null,
-  );
+  return host.data.Installers.map((raw, index) => ({
+    index,
+    entry: asRecord(raw),
+  }));
+}
+
+export function getInstallerEntries(bundle: ManifestBundle): Record<string, unknown>[] {
+  return getIndexedInstallerEntries(bundle)
+    .map((item) => item.entry)
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
 }
 
 export function resolveEffectiveInstallerType(
@@ -85,24 +97,39 @@ export function resolveEffectiveInstallerType(
   return { installerType, nestedInstallerType, effectiveType };
 }
 
-export function collectDeclaredPackageDependencies(bundle: ManifestBundle): string[] {
+function extractPackageDependenciesFromContainer(container: Record<string, unknown>): string[] {
+  const depObj = asRecord(container.Dependencies);
+  if (!depObj || !Array.isArray(depObj.PackageDependencies)) return [];
+  const deps: string[] = [];
+  for (const item of depObj.PackageDependencies) {
+    const rec = asRecord(item);
+    const id = rec ? asString(rec.PackageIdentifier) : null;
+    if (id) deps.push(id);
+  }
+  return deps;
+}
+
+/**
+ * 指定アーキテクチャに該当するインストーラーエントリごとの実効 PackageDependencies（トップレベル共通依存 ∪ エントリ固有依存）を返す。
+ * 該当アーキテクチャのエントリが 0 件の場合は、他アーキテクチャのエントリ依存を流用せずトップレベル共通依存のみを 1 組として返す。
+ */
+export function resolveEffectivePackageDependencySetsForArchitecture(
+  bundle: ManifestBundle,
+  architecture: string,
+): string[][] {
   const host = getInstallerHostFile(bundle);
   if (!host) return [];
-  const deps = new Set<string>();
-  const extract = (container: Record<string, unknown>) => {
-    const depObj = asRecord(container.Dependencies);
-    if (!depObj || !Array.isArray(depObj.PackageDependencies)) return;
-    for (const item of depObj.PackageDependencies) {
-      const rec = asRecord(item);
-      const id = rec ? asString(rec.PackageIdentifier) : null;
-      if (id) deps.add(id);
-    }
-  };
-  extract(host.data);
-  for (const entry of getInstallerEntries(bundle)) {
-    extract(entry);
+  const topLevelDeps = extractPackageDependenciesFromContainer(host.data);
+  const targetArch = architecture.toLowerCase();
+  const matchingEntries = getInstallerEntries(bundle).filter(
+    (entry) => asString(entry.Architecture)?.toLowerCase() === targetArch,
+  );
+  if (matchingEntries.length === 0) {
+    return [topLevelDeps];
   }
-  return [...deps];
+  return matchingEntries.map((entry) => [
+    ...new Set([...topLevelDeps, ...extractPackageDependenciesFromContainer(entry)]),
+  ]);
 }
 
 export interface ManifestRuleOptions {
@@ -228,9 +255,9 @@ export function evaluateManifestRules(
 
   // 3. Installer ルール (CMN-03, PKG-PORT-02, PKG-INST-02, APP-CLI-03, NG-01)
   const installerHost = getInstallerHostFile(bundle);
-  const installers = getInstallerEntries(bundle);
+  const indexedInstallers = getIndexedInstallerEntries(bundle);
   if (installerHost) {
-    if (installers.length === 0) {
+    if (indexedInstallers.length === 0) {
       findings.push({
         id: "CMN-03",
         status: "fail",
@@ -242,13 +269,30 @@ export function evaluateManifestRules(
       });
     }
 
+    let validInstallerCount = 0;
     let urlAndHashIssues = 0;
     let zipAndCommandIssues = 0;
     let upgradeIssues = 0;
     let scriptIssues = 0;
 
-    for (const [index, entry] of installers.entries()) {
+    for (const { index, entry } of indexedInstallers) {
       const label = `Installers[${index}]`;
+      if (!entry) {
+        urlAndHashIssues++;
+        findings.push({
+          id: "CMN-03",
+          status: "fail",
+          title: `${label} がオブジェクトではない`,
+          detail: `${installerHost.fileName} の ${label} がマッピングオブジェクトではありません（null やスカラー値等が混在しています）。`,
+          remediation:
+            "Installers 配列の各要素は Architecture / InstallerUrl / InstallerSha256 等を持つマッピングオブジェクトで記述してください。",
+          file: installerHost.fileName,
+          guideRef: "CMN-03",
+        });
+        continue;
+      }
+
+      validInstallerCount++;
       const url = asString(entry.InstallerUrl);
       const sha = asString(entry.InstallerSha256);
       const { installerType, nestedInstallerType, effectiveType } = resolveEffectiveInstallerType(
@@ -327,13 +371,14 @@ export function evaluateManifestRules(
         : Array.isArray(installerHost.data.NestedInstallerFiles)
           ? installerHost.data.NestedInstallerFiles
           : [];
-      const nestedFiles = nestedFilesRaw
-        .map((item) => asRecord(item))
-        .filter((item): item is Record<string, unknown> => item !== null);
+      const indexedNestedFiles = nestedFilesRaw.map((item, nfIdx) => ({
+        nfIdx,
+        item: asRecord(item),
+      }));
 
       if (installerType === "portable") {
         if (
-          nestedFiles.length > 0 ||
+          indexedNestedFiles.length > 0 ||
           asString(entry.PortableCommandAlias) ||
           asString(installerHost.data.PortableCommandAlias)
         ) {
@@ -364,7 +409,7 @@ export function evaluateManifestRules(
             guideRef: "PKG-PORT-02",
           });
         }
-        if (nestedFiles.length === 0) {
+        if (indexedNestedFiles.length === 0) {
           zipAndCommandIssues++;
           findings.push({
             id: "PKG-PORT-02",
@@ -378,7 +423,21 @@ export function evaluateManifestRules(
             guideRef: "PKG-PORT-02",
           });
         } else {
-          for (const [nfIdx, nf] of nestedFiles.entries()) {
+          for (const { nfIdx, item: nf } of indexedNestedFiles) {
+            if (!nf) {
+              zipAndCommandIssues++;
+              findings.push({
+                id: "PKG-PORT-02",
+                status: "fail",
+                title: `${label} NestedInstallerFiles[${nfIdx}] がオブジェクトではない`,
+                detail: `${installerHost.fileName} の ${label} NestedInstallerFiles[${nfIdx}] がマッピングオブジェクトではありません。`,
+                remediation:
+                  "NestedInstallerFiles 配列の各要素は RelativeFilePath を持つマッピングオブジェクトで記述してください。",
+                file: installerHost.fileName,
+                guideRef: "PKG-PORT-02",
+              });
+              continue;
+            }
             const relPath = asString(nf.RelativeFilePath);
             const alias = asString(nf.PortableCommandAlias);
             if (
@@ -486,27 +545,27 @@ export function evaluateManifestRules(
       }
     }
 
-    if (installers.length > 0 && urlAndHashIssues === 0) {
+    if (indexedInstallers.length > 0 && urlAndHashIssues === 0) {
       findings.push({
         id: "CMN-03",
         status: "pass",
         title: "InstallerUrl と InstallerSha256 の静的検証を通過",
-        detail: `全 ${installers.length} エントリが HTTPS 不変 URL かつ 64 桁 SHA-256 形式です。`,
+        detail: `全 ${indexedInstallers.length} エントリが HTTPS 不変 URL かつ 64 桁 SHA-256 形式です。`,
         file: installerHost.fileName,
         guideRef: "CMN-03",
       });
     }
-    if (installers.length > 0 && zipAndCommandIssues === 0) {
+    if (validInstallerCount > 0 && zipAndCommandIssues === 0) {
       findings.push({
         id: "PKG-PORT-02",
         status: "pass",
         title: "配布形式・ZIP 内包形式・コマンドエイリアス定義が整合",
-        detail: `${installers.length} エントリの形式分岐とエイリアス指定に矛盾はありません。`,
+        detail: `${validInstallerCount} エントリの形式分岐とエイリアス指定に矛盾はありません。`,
         file: installerHost.fileName,
         guideRef: "PKG-PORT-02",
       });
     }
-    if (installers.length > 0 && upgradeIssues === 0) {
+    if (validInstallerCount > 0 && upgradeIssues === 0) {
       findings.push({
         id: "PKG-INST-02",
         status: "pass",
@@ -517,7 +576,7 @@ export function evaluateManifestRules(
         guideRef: "PKG-INST-02",
       });
     }
-    if (scriptIssues === 0) {
+    if (validInstallerCount > 0 && scriptIssues === 0) {
       findings.push({
         id: "NG-01",
         status: "pass",

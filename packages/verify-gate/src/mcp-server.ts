@@ -233,7 +233,7 @@ export async function handleJsonRpcMessage(
       }
       const dir = catalog.readDirectory(uri);
       if (!dir) {
-        return makeError(id, -32002, `Directory not found: ${uri}`);
+        return makeError(id, -32602, `Directory not found or not a directory: ${uri}`);
       }
       return makeResult(id, dir);
     }
@@ -248,9 +248,9 @@ export async function handleJsonRpcMessage(
       }
       const skill = catalog.getSkill(uri);
       if (!skill) {
-        return makeError(id, -32002, `Skill not found: ${uri}`);
+        return makeError(id, -32602, `Skill not found: ${uri}`);
       }
-      return makeResult(id, skill);
+      return makeResult(id, { skill });
     }
 
     default:

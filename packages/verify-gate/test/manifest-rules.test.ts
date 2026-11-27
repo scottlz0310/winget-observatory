@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runCli } from "../src/cli";
 import { formatGateReportText, runManifestGate } from "../src/gate-runner";
 import { loadManifestBundle } from "../src/manifest-loader";
 import { evaluateManifestRules } from "../src/manifest-rules";
@@ -330,6 +331,159 @@ describe("manifest-rules and gate-runner", () => {
       expect(findings.some((f) => f.id === "NG-01" && f.status === "fail")).toBe(true);
       expect(findings.some((f) => f.id === "PKG-PORT-02" && f.status === "fail")).toBe(true);
       expect(findings.some((f) => f.id === "CMN-04" && f.status === "warn")).toBe(true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Installers や NestedInstallerFiles に null 等の非オブジェクト要素が混在した場合は元インデックス付きで fail にする", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-nonobj-"));
+    try {
+      const base = makeCleanPortableZipFixture();
+      writeManifestFixture(tmpDir, {
+        ...base,
+        "Example.MyCli.installer.yaml": [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyCli",
+          "PackageVersion: 1.0.0",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: zip",
+          "    NestedInstallerType: portable",
+          "    NestedInstallerFiles:",
+          "      - RelativeFilePath: mycli.exe",
+          "        PortableCommandAlias: mycli",
+          "      - null",
+          "    InstallerUrl: https://github.com/example/mycli/releases/download/v1.0.0/mycli-x64.zip",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - null",
+          "  - Architecture: arm64",
+          "    InstallerType: portable",
+          "    InstallerUrl: http://insecure.example.com/mycli-arm64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+      });
+
+      const report = await runManifestGate({ manifestDir: tmpDir, offline: true });
+      expect(report.passed).toBe(false);
+      expect(
+        report.findings.some(
+          (f) => f.id === "CMN-03" && f.status === "fail" && f.title.includes("Installers[1]"),
+        ),
+      ).toBe(true);
+      expect(
+        report.findings.some(
+          (f) => f.id === "CMN-03" && f.status === "fail" && f.title.includes("Installers[2]"),
+        ),
+      ).toBe(true);
+      expect(
+        report.findings.some(
+          (f) =>
+            f.id === "PKG-PORT-02" &&
+            f.status === "fail" &&
+            f.title.includes("NestedInstallerFiles[1]"),
+        ),
+      ).toBe(true);
+
+      const cliOut: string[] = [];
+      const cliErr: string[] = [];
+      const exitCode = await runCli(["check", tmpDir, "--offline", "--json"], {
+        io: { stdout: (t) => cliOut.push(t), stderr: (t) => cliErr.push(t) },
+      });
+      expect(exitCode).toBe(1);
+      expect(JSON.parse(cliOut[0] ?? "{}").passed).toBe(false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("PE の VC++ ランタイム依存チェックは別アーキテクチャの PackageDependencies を流用せず該当アーキテクチャで判定する", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-arch-dep-"));
+    try {
+      const exePath = join(tmpDir, "mycli-x64.exe");
+      writeFileSync(
+        exePath,
+        buildSyntheticPe({
+          machine: 0x8664,
+          pe32Plus: true,
+          importedDlls: ["KERNEL32.dll", "VCRUNTIME140.dll"],
+          hasSignature: true,
+        }),
+      );
+
+      const base = makeCleanPortableZipFixture();
+      // arm64 エントリにだけ Microsoft.VCRedist.2015+.x64 があり、x64 エントリには無い
+      writeManifestFixture(tmpDir, {
+        ...base,
+        "Example.MyCli.installer.yaml": [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyCli",
+          "PackageVersion: 1.0.0",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: portable",
+          "    InstallerUrl: https://github.com/example/mycli/releases/download/v1.0.0/mycli-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: arm64",
+          "    InstallerType: portable",
+          "    InstallerUrl: https://github.com/example/mycli/releases/download/v1.0.0/mycli-arm64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "    Dependencies:",
+          "      PackageDependencies:",
+          "        - PackageIdentifier: Microsoft.VCRedist.2015+.x64",
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+      });
+
+      const failReport = await runManifestGate({
+        manifestDir: tmpDir,
+        binaryPath: exePath,
+        offline: true,
+      });
+      expect(failReport.passed).toBe(false);
+      expect(failReport.findings.some((f) => f.id === "PKG-PORT-01" && f.status === "fail")).toBe(
+        true,
+      );
+
+      // x64 エントリ自身に宣言すれば pass する
+      writeManifestFixture(tmpDir, {
+        ...base,
+        "Example.MyCli.installer.yaml": [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyCli",
+          "PackageVersion: 1.0.0",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: portable",
+          "    InstallerUrl: https://github.com/example/mycli/releases/download/v1.0.0/mycli-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "    Dependencies:",
+          "      PackageDependencies:",
+          "        - PackageIdentifier: Microsoft.VCRedist.2015+.x64",
+          "  - Architecture: arm64",
+          "    InstallerType: portable",
+          "    InstallerUrl: https://github.com/example/mycli/releases/download/v1.0.0/mycli-arm64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+      });
+
+      const passReport = await runManifestGate({
+        manifestDir: tmpDir,
+        binaryPath: exePath,
+        offline: true,
+      });
+      expect(passReport.passed).toBe(true);
+      expect(passReport.findings.some((f) => f.id === "PKG-PORT-01" && f.status === "pass")).toBe(
+        true,
+      );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

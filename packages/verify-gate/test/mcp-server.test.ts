@@ -75,7 +75,10 @@ describe("MCP STDIO server (io.modelcontextprotocol/skills) & CLI", () => {
       method: "skills/get",
       params: { uri: skillUri },
     });
-    expect(((getRes?.result ?? {}) as { uri: string }).uri).toBe(skillUri);
+    const gotSkill = ((getRes?.result ?? {}) as { skill?: { uri: string; resources: unknown[] } })
+      .skill;
+    expect(gotSkill?.uri).toBe(skillUri);
+    expect(gotSkill?.resources).toHaveLength(3);
 
     const readRes = await handleJsonRpcMessage({
       jsonrpc: "2.0",
@@ -90,9 +93,47 @@ describe("MCP STDIO server (io.modelcontextprotocol/skills) & CLI", () => {
       jsonrpc: "2.0",
       id: 13,
       method: "resources/directory/read",
-      params: { uri: "skill://winget-verify-gate/" },
+      params: { uri: "skill://winget-verify-gate" },
     });
-    expect(((dirRes?.result ?? {}) as { entries: unknown[] }).entries).toHaveLength(3);
+    const dirResources = (
+      (dirRes?.result ?? {}) as {
+        resources: Array<{ uri: string; name: string; mimeType: string }>;
+      }
+    ).resources;
+    expect(dirResources).toHaveLength(3);
+    const refsEntry = dirResources.find((r) => r.name === "references");
+    expect(refsEntry).toEqual({
+      uri: "skill://winget-verify-gate/references",
+      name: "references",
+      mimeType: "inode/directory",
+    });
+
+    const subDirRes = await handleJsonRpcMessage({
+      jsonrpc: "2.0",
+      id: 130,
+      method: "resources/directory/read",
+      params: { uri: refsEntry?.uri },
+    });
+    const subResources = (
+      (subDirRes?.result ?? {}) as { resources: Array<{ uri: string; name: string }> }
+    ).resources;
+    expect(subResources.map((r) => r.name)).toEqual(["submission-guide.md"]);
+
+    const fileAsDirRes = await handleJsonRpcMessage({
+      jsonrpc: "2.0",
+      id: 131,
+      method: "resources/directory/read",
+      params: { uri: skillUri },
+    });
+    expect(fileAsDirRes?.error?.code).toBe(-32602);
+
+    const missingDirRes = await handleJsonRpcMessage({
+      jsonrpc: "2.0",
+      id: 132,
+      method: "resources/directory/read",
+      params: { uri: "skill://winget-verify-gate/missing" },
+    });
+    expect(missingDirRes?.error?.code).toBe(-32602);
 
     const notFoundRes = await handleJsonRpcMessage({
       jsonrpc: "2.0",
@@ -100,7 +141,7 @@ describe("MCP STDIO server (io.modelcontextprotocol/skills) & CLI", () => {
       method: "skills/get",
       params: { uri: "skill://nonexistent/SKILL.md" },
     });
-    expect(notFoundRes?.error?.code).toBe(-32002);
+    expect(notFoundRes?.error?.code).toBe(-32602);
   });
 
   test("tools/call で verify_binary と不正パラメータエラーを処理できる", async () => {
@@ -249,6 +290,22 @@ describe("MCP STDIO server (io.modelcontextprotocol/skills) & CLI", () => {
 
     const serverPromise = runStdioMcpServer({}, { input, output });
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" })}\n`);
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "skills/get",
+        params: { uri: "skill://winget-verify-gate/SKILL.md" },
+      })}\n`,
+    );
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "resources/directory/read",
+        params: { uri: "skill://winget-verify-gate" },
+      })}\n`,
+    );
     input.write("{broken json\n");
     input.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
     input.end();
@@ -263,13 +320,22 @@ describe("MCP STDIO server (io.modelcontextprotocol/skills) & CLI", () => {
           JSON.parse(l) as {
             jsonrpc: string;
             id: number | null;
-            result?: unknown;
+            result?: Record<string, unknown>;
             error?: { code: number };
           },
       );
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(4);
     expect(lines[0]).toEqual({ jsonrpc: "2.0", id: 1, result: {} });
-    expect(lines[1]?.error?.code).toBe(-32700);
+    expect((lines[1]?.result?.skill as { uri: string } | undefined)?.uri).toBe(
+      "skill://winget-verify-gate/SKILL.md",
+    );
+    expect(
+      (lines[2]?.result?.resources as Array<{ uri: string; mimeType: string }> | undefined)?.some(
+        (r) =>
+          r.uri === "skill://winget-verify-gate/references" && r.mimeType === "inode/directory",
+      ),
+    ).toBe(true);
+    expect(lines[3]?.error?.code).toBe(-32700);
 
     // CLI skill list / export / help の動作確認
     const stdoutLines: string[] = [];

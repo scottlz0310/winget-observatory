@@ -24,23 +24,15 @@ export interface SkillEntry {
 export interface McpResourceDescriptor {
   uri: string;
   name: string;
-  description: string;
+  description?: string;
   mimeType: string;
-  size: number;
+  size?: number;
 }
 
 export interface McpResourceContent {
   uri: string;
   mimeType: string;
   text: string;
-}
-
-export interface DirectoryEntry {
-  uri: string;
-  name: string;
-  kind: "file" | "directory";
-  size?: number;
-  digest?: string;
 }
 
 export interface SkillExportResult {
@@ -215,13 +207,19 @@ export class SkillCatalog {
     };
   }
 
-  readDirectory(uri: string): { entries: DirectoryEntry[] } | null {
-    const normalized = uri.endsWith("/") ? uri : `${uri}/`;
-    if (!normalized.startsWith(SKILL_SCHEME_PREFIX)) {
+  readDirectory(uri: string): { resources: McpResourceDescriptor[] } | null {
+    // 既存ファイル URI へのディレクトリ読込は拒否する（SEP-2640: 非ディレクトリは -32602）
+    if (this.resourcesByUri.has(uri)) {
       return null;
     }
-    const prefixRel = normalized.slice(SKILL_SCHEME_PREFIX.length);
-    const entries = new Map<string, DirectoryEntry>();
+    const stripped = uri.endsWith("/") ? uri.slice(0, -1) : uri;
+    const rootNoSlash = SKILL_SCHEME_PREFIX.slice(0, -1);
+    if (stripped !== rootNoSlash && !stripped.startsWith(SKILL_SCHEME_PREFIX)) {
+      return null;
+    }
+    const prefixRel =
+      stripped === rootNoSlash ? "" : `${stripped.slice(SKILL_SCHEME_PREFIX.length)}/`;
+    const children = new Map<string, McpResourceDescriptor>();
 
     for (const res of this.allResources) {
       if (!res.relativePath.startsWith(prefixRel)) continue;
@@ -229,31 +227,32 @@ export class SkillCatalog {
       if (!remainder) continue;
       const slashIdx = remainder.indexOf("/");
       if (slashIdx === -1) {
-        entries.set(res.uri, {
+        children.set(res.uri, {
           uri: res.uri,
           name: remainder,
-          kind: "file",
+          description: res.description,
+          mimeType: res.mimeType,
           size: res.size,
-          digest: res.digest,
         });
       } else {
         const dirName = remainder.slice(0, slashIdx);
-        const dirUri = `${normalized}${dirName}/`;
-        if (!entries.has(dirUri)) {
-          entries.set(dirUri, {
+        // SEP-2640: ディレクトリ URI は末尾スラッシュなし、mimeType は "inode/directory"
+        const dirUri = `${stripped}/${dirName}`;
+        if (!children.has(dirUri)) {
+          children.set(dirUri, {
             uri: dirUri,
             name: dirName,
-            kind: "directory",
+            mimeType: "inode/directory",
           });
         }
       }
     }
 
-    if (entries.size === 0) {
+    if (children.size === 0) {
       return null;
     }
     return {
-      entries: [...entries.values()].sort((a, b) => a.uri.localeCompare(b.uri)),
+      resources: [...children.values()].sort((a, b) => a.uri.localeCompare(b.uri)),
     };
   }
 

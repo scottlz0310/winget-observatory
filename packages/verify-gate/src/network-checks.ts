@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { getInstallerEntries, getInstallerHostFile, getLocaleHostFile } from "./manifest-rules";
+import {
+  getIndexedInstallerEntries,
+  getInstallerHostFile,
+  getLocaleHostFile,
+} from "./manifest-rules";
 import type { FetchLike, GateFinding, ManifestBundle } from "./types";
 
 export interface NetworkCheckOptions {
@@ -114,8 +118,9 @@ export async function runNetworkChecks(
 
   // 1. InstallerUrl 到達性 & 任意 SHA-256 照合
   const installerHost = getInstallerHostFile(bundle);
-  const installers = getInstallerEntries(bundle);
-  for (const [index, entry] of installers.entries()) {
+  const indexedInstallers = getIndexedInstallerEntries(bundle);
+  for (const { index, entry } of indexedInstallers) {
+    if (!entry) continue;
     const url = asString(entry.InstallerUrl);
     if (!url?.toLowerCase().startsWith("https://")) continue;
 
