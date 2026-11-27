@@ -1,0 +1,16 @@
+{
+  "name": "@scottlz0310/winget-verify-gate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pre-submission verification gate (STDIO CLI + MCP server with io.modelcontextprotocol/skills) for microsoft/winget-pkgs",
+  "type": "module",
+  "bin": {
+    "verify-gate": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "mcp": "bun run src/cli.ts mcp",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test test"
+  }
+}

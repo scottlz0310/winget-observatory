@@ -9,4 +9,4 @@ pre-commit:
       run: bunx biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
     typecheck:
       glob: "*.ts"
-      run: bunx tsc --noEmit
+      run: bun run typecheck
