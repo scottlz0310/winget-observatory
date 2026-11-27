@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!data"]
+    "includes": ["**", "!data", "!packages/verify-gate/skills/**/SKILL.md"]
   },
   "formatter": {
     "enabled": true,

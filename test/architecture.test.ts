@@ -302,7 +302,11 @@ describe("Architecture Boundary Rules", () => {
       return results;
     }
 
-    const allFiles = [...collectTsFiles(resolve("src")), ...collectTsFiles(resolve("scripts"))];
+    const allFiles = [
+      ...collectTsFiles(resolve("src")),
+      ...collectTsFiles(resolve("scripts")),
+      ...collectTsFiles(resolve("packages/verify-gate/src")),
+    ];
     const fileContents = new Map<string, string>();
     for (const file of allFiles) {
       fileContents.set(file, readFileSync(file, "utf-8"));

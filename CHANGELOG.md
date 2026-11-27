@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `microsoft/winget-pkgs` 提出前関門 `verify-gate`（ローカル `stdio` CLI 核＋`io.modelcontextprotocol/skills` 対応 STDIO MCP サーバー）を独立パッケージ `packages/verify-gate/` として追加（#155 PR 1/2）:
+  - `packages/verify-gate/src/manifest-loader.ts`, `manifest-rules.ts`, `network-checks.ts`, `pe-inspector.ts`, `gate-runner.ts`: マニフェスト静的検査（`ManifestVersion`/`$schema` 一致、可変 URL・SHA-256 形式、`InstallerType: portable` の `Commands` vs `zip` 内包形式分岐、`UpgradeBehavior`/`InstallerSwitches.Silent`、`LicenseUrl`/`PrivacyUrl`、`Policy-Test` 誤検知語句、`Scripted-Application` 拡張子）、DI 可能な HTTP 到達性・SHA-256 照合、および依存ゼロ PE32/PE32+ パーサー（アーキテクチャ・未同梱 `VCRUNTIME140.dll` 等ランタイム依存・Authenticode 署名検出）を実装
+  - `packages/verify-gate/src/skill-catalog.ts`, `mcp-server.ts`, `cli.ts`, `skills/winget-verify-gate/SKILL.md`: 極小ツール説明（`verify_manifest` / `verify_binary`）の STDIO JSON-RPC 2.0 MCP サーバーと `io.modelcontextprotocol/skills`（`capabilities.extensions["io.modelcontextprotocol/skills"]`, `skills/list`, `skills/get`, `resources/read`, `resources/directory/read`、既存 `docs/` ガイド・テンプレートの SSoT 配信）および非対応クライアント向け `verify-gate skill export` を実装
+  - `package.json`, `lefthook.yml`, `test/architecture.test.ts`, `README.md`: `packages/verify-gate/tsconfig.json` の型チェック統合・循環インポート検査対象追加・`bun run verify:gate` スクリプトと導線を追加
 - `microsoft/winget-pkgs` 初回パッケージ提出向けの実践ガイドおよび先回り PR 本文テンプレートを追加（#154）:
   - `docs/winget-pkgs-submission-guide.md`: 精製済み 90 日窓 3,603 件（`MERGED` 1,462 件 + `CLOSED` 2,141 件、差し戻し・却下 943 件）コーパスの定量根拠（マージ済み PR の観測上の中央値差 +16.1 日、配布形式別未マージ脱落率、7 カテゴリ発生頻度）と実 PR リンクを整理し、共通・配布形式別（Portable/ZIP vs インストーラー［ZIP 内包含む］）・アプリ種別（CLI / GUI・GPU / 外部通信・AI）・構造的 NG 条件（`Scripted-Application` 等）・クリーン環境検証手順および Step 3 自動化対応チェック ID 体系を整備
   - `docs/templates/winget-pkgs-pr-template.md`: CLI 引数なし終了コード挙動・クリーン VM 検証・ARP 実測値・外部通信/プライバシー方針・ビルド来歴/署名・`Policy-Test` 誤検知の事前説明を網羅した英語コピペ用 PR 本文テンプレートと 2 パターンの記入例を追加
