@@ -457,12 +457,18 @@ function parseVerifyCommandLine(raw: string): { command: string; args: string[] 
 export function buildInsideSandboxScript(options: {
   packageIdentifier: string | null;
   packageVersion: string | null;
+  manifestInstallerUrls?: readonly string[];
   probeCommands: readonly string[];
   verifyCommands?: readonly string[];
   skipUninstall?: boolean;
 }): string {
   const pkgIdLiteral = toPsSingleQuotedLiteral(options.packageIdentifier ?? "");
   const pkgVerLiteral = toPsSingleQuotedLiteral(options.packageVersion ?? "");
+  const manifestUrlItems = [
+    ...new Set((options.manifestInstallerUrls ?? []).map((u) => u.trim()).filter(Boolean)),
+  ]
+    .map((url) => toPsSingleQuotedLiteral(url))
+    .join(", ");
   const probeArrayItems = options.probeCommands
     .map((cmd) => toPsSingleQuotedLiteral(cmd))
     .join(", ");
@@ -487,6 +493,7 @@ export function buildInsideSandboxScript(options: {
     "$LogPath = Join-Path $OutputDir 'sandbox-run.log'",
     `$PackageIdentifier = ${pkgIdLiteral}`,
     `$PackageVersion = ${pkgVerLiteral}`,
+    `$ManifestInstallerUrls = @(${manifestUrlItems})`,
     `$ProbeCommands = @(${probeArrayItems})`,
     `$VerifyCommands = @(${verifySpecItems})`,
     `$SkipUninstall = ${skipUninstallLiteral}`,
@@ -643,6 +650,21 @@ export function buildInsideSandboxScript(options: {
     "  }",
     "}",
     "",
+    "function Select-ManifestInstallerUrl([string]$InstallOutput, [string[]]$KnownManifestUrls) {",
+    "  if ([string]::IsNullOrWhiteSpace($InstallOutput) -or $KnownManifestUrls.Count -eq 0) { return $null }",
+    "  $matches = [regex]::Matches($InstallOutput, 'Downloading\\s+(https?://\\S+)')",
+    "  $selected = $null",
+    "  foreach ($m in $matches) {",
+    "    $candidate = $m.Groups[1].Value.Trim()",
+    "    foreach ($known in $KnownManifestUrls) {",
+    "      if ([string]::Equals($candidate, $known, [System.StringComparison]::OrdinalIgnoreCase)) {",
+    "        $selected = $known",
+    "      }",
+    "    }",
+    "  }",
+    "  return $selected",
+    "}",
+    "",
     "$installedArchitecture = Get-NormalizedOsArchitecture",
     "$osVersion = [System.Environment]::OSVersion.Version.ToString()",
     "$localManifestFilesEnabled = $false",
@@ -661,7 +683,7 @@ export function buildInsideSandboxScript(options: {
     "  $installOut = & winget install --manifest $ManifestDir --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | Out-String",
     "  $installExitCode = [int]$LASTEXITCODE",
     "  $installLog = $installOut.Substring(0, [Math]::Min(1200, $installOut.Length))",
-    "  if ($installOut -match 'Downloading\\s+(https?://\\S+)') { $selectedInstallerUrl = $Matches[1].Trim() }",
+    "  $selectedInstallerUrl = Select-ManifestInstallerUrl -InstallOutput $installOut -KnownManifestUrls $ManifestInstallerUrls",
     "} else {",
     "  $installLog = 'WinGet bootstrap failed in Windows Sandbox (see sandbox-run.log for details).'",
     "}",
@@ -784,6 +806,9 @@ export function prepareSandboxWorkspace(
     ? asNonEmptyString(versionHost.data.PackageIdentifier)
     : null;
   const packageVersion = versionHost ? asNonEmptyString(versionHost.data.PackageVersion) : null;
+  const manifestInstallerUrls = getInstallerEntries(bundle)
+    .map((entry) => asNonEmptyString(entry.InstallerUrl))
+    .filter((url): url is string => url !== null);
 
   const inferredProbes = inferProbeCommandsFromBundle(bundle);
   const explicitProbes = (options.probeCommands ?? [])
@@ -809,6 +834,7 @@ export function prepareSandboxWorkspace(
   const insideScript = buildInsideSandboxScript({
     packageIdentifier,
     packageVersion,
+    manifestInstallerUrls,
     probeCommands,
     verifyCommands,
     skipUninstall: options.skipUninstall,

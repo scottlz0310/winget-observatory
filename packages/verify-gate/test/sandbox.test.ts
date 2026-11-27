@@ -214,10 +214,41 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       const scriptText = scriptBytes.toString("utf8");
       expect(scriptText).toContain("Ensure-WinGetInstalled");
       expect(scriptText).toContain("Repair-WinGetPackageManager");
+      expect(scriptText).toContain("Select-ManifestInstallerUrl");
+      expect(scriptText).toContain(
+        "'https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe'",
+      );
       expect(scriptText).toContain("winget settings --enable LocalManifestFiles");
       expect(scriptText).toContain("installedArchitecture = $installedArchitecture");
       expect(scriptText).toContain("$SkipUninstall = $true");
       expect(scriptText).toContain("'extra-cmd'");
+
+      // Windows 環境では生成した Select-ManifestInstallerUrl を実 PowerShell で実行し、
+      // 依存パッケージ URL が先に Downloading 出力されても対象マニフェスト URL のみ抽出されることを検証
+      if (process.platform === "win32") {
+        const psMatch = scriptText.match(/function Select-ManifestInstallerUrl[\s\S]*?\n\}/);
+        expect(psMatch).not.toBeNull();
+        const probePs = [
+          psMatch?.[0] ?? "",
+          "$known = @('https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe')",
+          '$both = "Found dependency`nDownloading https://aka.ms/vs/17/release/vc_redist.x64.exe`nSuccessfully installed`nDownloading https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe`nSuccessfully installed"',
+          '$depOnly = "Downloading https://aka.ms/vs/17/release/vc_redist.x64.exe`nSuccessfully installed"',
+          "$r1 = Select-ManifestInstallerUrl -InstallOutput $both -KnownManifestUrls $known",
+          "$r2 = Select-ManifestInstallerUrl -InstallOutput $depOnly -KnownManifestUrls $known",
+          'Write-Output ("R1=" + $r1)',
+          "Write-Output (\"R2=\" + ($(if ($null -eq $r2) { 'NULL' } else { $r2 })))",
+        ].join("\n");
+        const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", probePs], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        expect(proc.exitCode).toBe(0);
+        const psOut = new TextDecoder().decode(proc.stdout);
+        expect(psOut).toContain(
+          "R1=https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe",
+        );
+        expect(psOut).toContain("R2=NULL");
+      }
 
       // シングルクォートを含む特殊引数でも安全にエスケープされる
       const quotedScript = buildInsideSandboxScript({
