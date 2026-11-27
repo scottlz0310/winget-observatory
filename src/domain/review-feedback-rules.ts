@@ -202,20 +202,21 @@ const VERIFY_MEMO_SIMPLE_LINE_PATTERNS: readonly RegExp[] = [
   /^Edit\s*[:;]?\s*$/i,
 ];
 
-const VERIFY_MEMO_IN_APP_PURCHASE_PATTERN =
-  /^(?:Edit\s*[:;]\s*)?In-App\s+Purchase\s*:\s*(?:(?:Processed\s+by|Payment\s+processors?\s+(?:is|are)|Processor\s+(?:is|appears\s+to\s+be))\s+[A-Za-z0-9 ,./&'-]+|[A-Za-z0-9 ,./&'-]+\s+is\s+processor|https?:\/\/\S+)\.?:?\s*$/i;
+const KNOWN_PAYMENT_PROCESSOR_PATTERN =
+  "(?:Stripe|PayPal|Paddle|Lemon\\s+Squeezy|Link|Gumroad|FastSpring|Braintree|Square|Buy\\s+Me\\s+a\\s+Coffee|Patreon|Ko-fi|Polar|GitHub\\s+Sponsors)";
 
-const IN_APP_PURCHASE_ISSUE_GUARD_PATTERN =
-  /[?]|\b(?:but|404|fail(?:s|ed|ing)?|error|cannot|missing|broken|require(?:s|d)?|should|please)\b/i;
+const PAYMENT_PROCESSOR_LIST_PATTERN = `${KNOWN_PAYMENT_PROCESSOR_PATTERN}(?:\\s*(?:,|/|&|and)\\s*(?:a\\s+)?${KNOWN_PAYMENT_PROCESSOR_PATTERN}(?:\\s+company)?)*`;
+
+const VERIFY_MEMO_IN_APP_PURCHASE_PATTERN = new RegExp(
+  `^(?:Edit\\s*[:;]\\s*)?In-App\\s+Purchase\\s*:\\s*(?:(?:Processed\\s+by|Payment\\s+processors?\\s+(?:is|are)|Processor\\s+(?:is|appears\\s+to\\s+be))\\s+${PAYMENT_PROCESSOR_LIST_PATTERN}|${PAYMENT_PROCESSOR_LIST_PATTERN}\\s+is\\s+processor|https?:\\/\\/\\S+)\\.?\\:?\\s*$`,
+  "i",
+);
 
 function isVerifyMemoOnlyLine(line: string): boolean {
   if (VERIFY_MEMO_SIMPLE_LINE_PATTERNS.some((re) => re.test(line))) {
     return true;
   }
-  return (
-    VERIFY_MEMO_IN_APP_PURCHASE_PATTERN.test(line) &&
-    !IN_APP_PURCHASE_ISSUE_GUARD_PATTERN.test(line)
-  );
+  return VERIFY_MEMO_IN_APP_PURCHASE_PATTERN.test(line);
 }
 
 /**
@@ -292,12 +293,15 @@ const AUTOMATIC_VALIDATION_REAL_FAILURE_PATTERN =
   /\b(?:exit\s+code|STATUS_DLL_NOT_FOUND|0xC0000135|C0000135|hash\s+doesn't\s+match|hash\s+verification\s+failed|within\s+the\s+timeout|Zip\s+file\s+expired)\b|-1073741515\b/i;
 
 const AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN =
-  /^(?:Edit\s*[:;]\s*)?My\s+automation\s+isn't\s+getting\s+a\s+valid\s+output\b[^\r\n]*$/i;
+  /^(?:Edit\s*[:;]\s*)?My\s+automation\s+isn't\s+getting\s+a\s+valid\s+output\s+from\s+the\s+pipeline\s+artifacts\.?$/i;
+
+const AUTOMATIC_VALIDATION_POLICY_TEST_QUOTE_LINE_PATTERN =
+  /^>\s*(?:\[Policy-Test-[^\]]+\]\([^)]+\)[^\r\n]*|All\s+banking\s+applications\s+require\s+review\.?)$/i;
 
 /**
  * `Automatic Validation ended with:` で始まるコメントのうち、
- * 定型の転載行（`>` 引用行の Policy-Test 誤検知出力）または自動検証出力エラー行のみで構成されているかを判定する。
- * 引用の後ろに人間による修正依頼・質問等の非引用行が追記されている場合、または実障害ログを含む場合は false（保持）を返す。
+ * 行単位で定型の Policy-Test 転載行または自動検証出力エラー行のみで構成されているかを判定する。
+ * 定型エラー文の後ろへの追記・別 `>` 行や非引用行の修正依頼・実障害ログが 1 行でも含まれる場合は false（保持）を返す。
  */
 export function isAutomaticValidationNoiseComment(body: string | null | undefined): boolean {
   if (typeof body !== "string") {
@@ -332,34 +336,11 @@ export function isAutomaticValidationNoiseComment(body: string | null | undefine
     return false;
   }
 
-  let hasArtifactError = false;
-  const quotedLines: string[] = [];
-  for (const line of remainingLines) {
-    if (line.startsWith(">")) {
-      quotedLines.push(line);
-      continue;
-    }
-    if (AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN.test(line)) {
-      hasArtifactError = true;
-      continue;
-    }
-    // 定型転載・自動検証出力エラー以外の非引用行（人間追記）が 1 行でもあれば保持
-    return false;
-  }
-
-  if (hasArtifactError && quotedLines.length === 0) {
-    return true;
-  }
-  if (quotedLines.length === 0) {
-    return false;
-  }
-
-  const quotedBody = quotedLines.join("\n");
-  const hasPolicyTestOutput =
-    /Policy-Test-\d|All\s+banking\s+applications\s+require\s+review|Algo\s+Speak|Adult\s+Reference\s+or\s+Theme|Targeted\s+Brand|Possible\s+CP\/CE\s+term/i.test(
-      quotedBody,
-    );
-  return hasPolicyTestOutput || hasArtifactError;
+  return remainingLines.every(
+    (line) =>
+      AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN.test(line) ||
+      AUTOMATIC_VALIDATION_POLICY_TEST_QUOTE_LINE_PATTERN.test(line),
+  );
 }
 
 /**
@@ -385,7 +366,8 @@ export function isFeedbackNoiseComment(body: string | null | undefined): boolean
   );
 }
 
-const NON_BLOCKING_FEEDBACK_PATTERN = /\bNo\s+blockers\s+have\s+been\s+found\s+for\s+this\s+PR\b/i;
+const NON_BLOCKING_FEEDBACK_PATTERN =
+  /\b(?:No\s+blockers\s+have\s+been\s+found\s+for\s+this\s+PR|No\s+blocking\s+issues?\s+(?:were|was|have\s+been)?\s*found)\b/i;
 
 /**
  * 指摘コメントがブロッキング差し戻しか、任意・非ブロッキング助言かを判定する。
@@ -400,11 +382,11 @@ export function classifyFeedbackCommentSeverity(
 }
 
 const CLOSED_REJECTION_ACTIONABLE_PATTERN =
-  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|must\s+be|should\s+be\s+(?:removed|updated|fixed|changed|added)|please\s+(?:fix|update|remove|add|address|correct|provide|use|ensure)|required\s*:|blocking|policy\s+\d+\.\d+|policy-test-|deprecated|not\s+recommended|fails?\s+to|invalid|mismatch|missing|unavailable|unreachable|404|exit\s+code|Manual\s+Validation\s+ended\s+with|Automatic\s+Validation\s+ended\s+with)\b|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
+  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|can't\s+(?:be\s+)?(?:approved|accepted|proceed)|before\s+this\s+(?:package|submission|pr)\s+can\s+(?:proceed|be\s+approved)|corrections?\s+are\s+required|(?:must|need(?:s)?\s+to|should)\s+be\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch)|is\s+not\s+recommended|deprecated\s+manifest|manifest\s+version\s+has\s+been\s+depreciated|policy\s+\d+\.\d+|policy-test-\d|fails?\s+to\s+(?:start|launch|run|install|download)|returned\s+exit\s+code|install\s+failed|hash\s+(?:doesn't\s+match|verification\s+failed)|Manual\s+Validation\s+ended\s+with\s*:|Automatic\s+Validation\s+ended\s+with\s*:)|(?:^|\n)\s*required\s*:|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
 
 /**
- * `CLOSED`（未マージ終了）PR の特権メンテナコメントが、単なる挨拶や任意助言ではなく、
- * 却下・修正要求・障害指摘の根拠を含むかを判定する。
+ * `CLOSED`（未マージ終了）PR の特権メンテナコメントが、単なる挨拶や任意助言・否定文（「ブロッキングなし」等）ではなく、
+ * 明確な却下・修正要求・実障害指摘の根拠を含むかを判定する。
  */
 export function isActionableClosedRejectionComment(body: string | null | undefined): boolean {
   if (typeof body !== "string" || isFeedbackNoiseComment(body)) {

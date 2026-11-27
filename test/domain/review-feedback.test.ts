@@ -181,6 +181,10 @@ describe("review-feedback domain logic", () => {
       true,
     ],
     [
+      'Verify: <img src="https://example.com/a.png" />\nIn-App Purchase: Processed by Stripe. The checkout page never loads.',
+      false,
+    ],
+    [
       'Verify: <img src="https://example.com/a.png" />\nIn-App Purchase: Does this app require a subscription to start?',
       false,
     ],
@@ -241,8 +245,16 @@ describe("review-feedback domain logic", () => {
       false,
     ],
     [
+      "Automatic Validation ended with:\n> [Policy-Test-2.7](https://example.com) `Algo Speak - Potential adult content` (Deterministic automation)\n> Please fix the installer URL.",
+      false,
+    ],
+    [
       "Automatic Validation ended with:\nEdit: My automation isn't getting a valid output from the pipeline artifacts.",
       true,
+    ],
+    [
+      "Automatic Validation ended with:\nMy automation isn't getting a valid output from the pipeline artifacts. Please fix the installer URL. It returns HTTP 404.",
+      false,
     ],
     [
       "Automatic Validation ended with:\n> Executable wave.exe returned exit code: -1073741515 | C0000135 | STATUS_DLL_NOT_FOUND",
@@ -1060,5 +1072,56 @@ describe("review-feedback domain logic", () => {
     if (closedAdviceOnly.entryType === "no-feedback") {
       expect(closedAdviceOnly.skipReason).toBe("no-rejection-trigger");
     }
+
+    const closedNoBlockingIssues = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900008,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: "Thanks for your contribution. No blocking issues were found.",
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedNoBlockingIssues.entryType).toBe("no-feedback");
+    if (closedNoBlockingIssues.entryType === "no-feedback") {
+      expect(closedNoBlockingIssues.skipReason).toBe("no-rejection-trigger");
+    }
+
+    // 否定文（No blocking issues were found.）が Needs-Author-Feedback 経由で記録された場合も --blocking-only から除外される
+    const closedNoBlockingWithLabel = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900009,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "Needs-Author-Feedback", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: "Thanks for your contribution. No blocking issues were found.",
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    }) as ReviewFeedbackRecord;
+    expect(closedNoBlockingWithLabel.hasBlockingFeedback).toBe(false);
+    expect(
+      filterReviewFeedbackRecords([closedNoBlockingWithLabel], { blockingOnly: true }),
+    ).toHaveLength(0);
   });
 });
