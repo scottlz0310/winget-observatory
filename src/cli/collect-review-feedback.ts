@@ -211,10 +211,11 @@ export async function runCollectReviewFeedback(
   const allowedStates = new Set<ReviewFeedbackPrState>(
     options.states.map((s) => s.toUpperCase() as ReviewFeedbackPrState),
   );
+  const normalizedRepo = options.repository.trim().toLowerCase();
   const candidateFeedbackRecords = allEntries.filter(
     (entry): entry is ReviewFeedbackRecord =>
       entry.entryType === "feedback" &&
-      entry.repository === options.repository &&
+      entry.repository.trim().toLowerCase() === normalizedRepo &&
       allowedStates.has(entry.state),
   );
 

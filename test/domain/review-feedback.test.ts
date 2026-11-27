@@ -471,7 +471,7 @@ describe("review-feedback domain logic", () => {
     ).toEqual([445661]);
   });
 
-  test("JSONL パース・直列化・キャッシュ再利用判定・異常系エラー", () => {
+  test("JSONL パース・直列化・複合キー分離・キャッシュ再利用判定・異常系エラー", () => {
     const entry = buildReviewFeedbackEntry({
       pr: makeBasePr(),
       installer: parseInstallerManifestMetadata([]),
@@ -490,8 +490,51 @@ describe("review-feedback domain logic", () => {
     expect(parsed.map((e) => e.number)).toEqual([445699, 445661]);
     expect(indexReviewFeedbackCorpus(parsed).size).toBe(2);
 
+    // 異なるリポジトリの同番号 PR (#7) は上書きせず両方保持されること
+    const repoAEntry = buildReviewFeedbackEntry({
+      pr: makeBasePr({ repository: "owner-a/repo-a", number: 7 }),
+      installer: parseInstallerManifestMetadata([]),
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    const repoBEntry = buildReviewFeedbackEntry({
+      pr: makeBasePr({ repository: "owner-b/repo-b", number: 7 }),
+      installer: parseInstallerManifestMetadata([]),
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    const multiRepoParsed = parseReviewFeedbackCorpus(
+      serializeReviewFeedbackCorpus([repoAEntry, repoBEntry]),
+    );
+    expect(multiRepoParsed).toHaveLength(2);
+    expect(multiRepoParsed.map((e) => e.repository)).toEqual(["owner-a/repo-a", "owner-b/repo-b"]);
+    expect(indexReviewFeedbackCorpus(multiRepoParsed).size).toBe(2);
+
     expect(canReuseCachedFeedbackEntry(entry)).toBe(true);
     expect(canReuseCachedFeedbackEntry(openEntry)).toBe(false);
+    // 状態変化（CLOSED -> OPEN 再オープン）や updatedAt の進行があればキャッシュを再利用しない
+    const closedEntry: ReviewFeedbackCorpusEntry = {
+      ...entry,
+      state: "CLOSED",
+      mergedAt: null,
+      updatedAt: "2026-11-20T00:00:00Z",
+    };
+    expect(
+      canReuseCachedFeedbackEntry(closedEntry, {
+        currentState: "CLOSED",
+        currentUpdatedAt: "2026-11-20T00:00:00Z",
+      }),
+    ).toBe(true);
+    expect(
+      canReuseCachedFeedbackEntry(closedEntry, {
+        currentState: "OPEN",
+        currentUpdatedAt: "2026-11-20T00:00:00Z",
+      }),
+    ).toBe(false);
+    expect(
+      canReuseCachedFeedbackEntry(closedEntry, {
+        currentState: "CLOSED",
+        currentUpdatedAt: "2026-11-21T00:00:00Z",
+      }),
+    ).toBe(false);
     expect(
       canReuseCachedFeedbackEntry({
         ...entry,
@@ -502,7 +545,9 @@ describe("review-feedback domain logic", () => {
     expect(() => parseReviewFeedbackCorpus("{broken json")).toThrow("不正な JSON");
     expect(() => parseReviewFeedbackCorpus('{"foo":"bar"}\n')).toThrow("必須フィールド");
     expect(() =>
-      parseReviewFeedbackCorpus('{"entryType":"feedback","number":1,"schemaVersion":1}\n'),
+      parseReviewFeedbackCorpus(
+        '{"entryType":"feedback","repository":"microsoft/winget-pkgs","number":1,"schemaVersion":1}\n',
+      ),
     ).toThrow("feedbackItems / installer");
   });
 

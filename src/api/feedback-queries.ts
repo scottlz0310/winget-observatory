@@ -104,6 +104,10 @@ export interface FetchedFeedbackPrDetail {
   input: RawPrFeedbackInput;
   /** マニフェスト Blob 参照に利用可能な commit OID（mergeCommit 優先、未マージ時は headRefOid） */
   manifestOid: string | null;
+  /** いずれかのコネクションが追加ページング上限に到達し未取得ページが残ったか */
+  incomplete: boolean;
+  /** 上限到達により未完了となったコネクション一覧 */
+  incompleteConnections: string[];
 }
 
 export const GET_FEEDBACK_REVIEWS_PAGE_QUERY = `
@@ -416,6 +420,11 @@ interface PageResult<T> {
   nodes: Array<T | null>;
 }
 
+interface RemainingPagesResult<T> {
+  nodes: T[];
+  truncated: boolean;
+}
+
 async function fetchRemainingPages<T>(params: {
   label: string;
   prNumber: number;
@@ -423,7 +432,7 @@ async function fetchRemainingPages<T>(params: {
   initialHasNext: boolean;
   initialCursor: string | null;
   fetchPage: (after: string) => Promise<PageResult<T>>;
-}): Promise<T[]> {
+}): Promise<RemainingPagesResult<T>> {
   const collected: T[] = [];
   let hasNext = params.initialHasNext;
   let cursor = params.initialCursor;
@@ -436,7 +445,7 @@ async function fetchRemainingPages<T>(params: {
       );
     }
     if (pages >= params.maxExtraPages) {
-      break;
+      return { nodes: collected, truncated: true };
     }
     pages++;
     const prevCursor = cursor;
@@ -455,7 +464,7 @@ async function fetchRemainingPages<T>(params: {
     }
   }
 
-  return collected;
+  return { nodes: collected, truncated: false };
 }
 
 function normalizePrState(
@@ -476,53 +485,63 @@ async function resolveCompleteReviewComments(
   prNumber: number,
   reviewNode: GraphQLFeedbackReviewNode,
   maxExtraPages: number,
-): Promise<RawPrReviewCommentInput[]> {
+): Promise<{ comments: RawPrReviewCommentInput[]; truncated: boolean }> {
   const initialNodes = (reviewNode.comments?.nodes ?? []).filter(
     (n): n is GraphQLFeedbackReviewCommentNode => n !== null && n !== undefined,
   );
 
   let allNodes = [...initialNodes];
-  if (reviewNode.id && reviewNode.comments?.pageInfo?.hasNextPage) {
-    const extra = await fetchRemainingPages<GraphQLFeedbackReviewCommentNode>({
-      label: `review(${reviewNode.id}).comments`,
-      prNumber,
-      maxExtraPages,
-      initialHasNext: Boolean(reviewNode.comments.pageInfo.hasNextPage),
-      initialCursor: reviewNode.comments.pageInfo.endCursor ?? null,
-      fetchPage: async (after) => {
-        const res = await graphqlFn<{
-          node?: {
-            comments?: {
-              pageInfo?: GraphQLPageInfo | null;
-              nodes?: Array<GraphQLFeedbackReviewCommentNode | null> | null;
+  let truncated = false;
+  if (reviewNode.comments?.pageInfo?.hasNextPage) {
+    if (!reviewNode.id) {
+      truncated = true;
+    } else {
+      const extra = await fetchRemainingPages<GraphQLFeedbackReviewCommentNode>({
+        label: `review(${reviewNode.id}).comments`,
+        prNumber,
+        maxExtraPages,
+        initialHasNext: Boolean(reviewNode.comments.pageInfo.hasNextPage),
+        initialCursor: reviewNode.comments.pageInfo.endCursor ?? null,
+        fetchPage: async (after) => {
+          const res = await graphqlFn<{
+            node?: {
+              comments?: {
+                pageInfo?: GraphQLPageInfo | null;
+                nodes?: Array<GraphQLFeedbackReviewCommentNode | null> | null;
+              } | null;
             } | null;
-          } | null;
-        }>(GET_FEEDBACK_REVIEW_COMMENTS_PAGE_QUERY, {
-          reviewId: reviewNode.id,
-          after,
-        });
-        const conn = res?.node?.comments;
-        return {
-          hasNextPage: Boolean(conn?.pageInfo?.hasNextPage),
-          endCursor: conn?.pageInfo?.endCursor ?? null,
-          nodes: Array.isArray(conn?.nodes) ? conn.nodes : [],
-        };
-      },
-    });
-    allNodes = [...allNodes, ...extra];
+          }>(GET_FEEDBACK_REVIEW_COMMENTS_PAGE_QUERY, {
+            reviewId: reviewNode.id,
+            after,
+          });
+          const conn = res?.node?.comments;
+          return {
+            hasNextPage: Boolean(conn?.pageInfo?.hasNextPage),
+            endCursor: conn?.pageInfo?.endCursor ?? null,
+            nodes: Array.isArray(conn?.nodes) ? conn.nodes : [],
+          };
+        },
+      });
+      allNodes = [...allNodes, ...extra.nodes];
+      truncated = extra.truncated;
+    }
   }
 
-  return allNodes.map((c) => ({
-    author: c.author,
-    authorAssociation: c.authorAssociation,
-    path: c.path,
-    body: c.body,
-    createdAt: c.createdAt,
-  }));
+  return {
+    comments: allNodes.map((c) => ({
+      author: c.author,
+      authorAssociation: c.authorAssociation,
+      path: c.path,
+      body: c.body,
+      createdAt: c.createdAt,
+    })),
+    truncated,
+  };
 }
 
 /**
  * 1 件の GraphQLFeedbackPrNode について不足ページがあれば追加取得し、完全な RawPrFeedbackInput へ変換する。
+ * 追加ページ上限に達し未取得ページが残った場合は `incomplete: true` と該当コネクション名を返す。
  */
 export async function resolveFeedbackPrNodeWithPaging(params: {
   graphqlFn: GraphQLInvoker;
@@ -541,12 +560,13 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
     maxExtraPages = DEFAULT_FEEDBACK_MAX_EXTRA_PAGES,
   } = params;
   const prNumber = Number(node.number ?? 0);
+  const incompleteConnections: string[] = [];
 
   // 1. Reviews + 各 Review のインラインコメント
   const initialReviewNodes = (node.reviews?.nodes ?? []).filter(
     (r): r is GraphQLFeedbackReviewNode => r !== null && r !== undefined,
   );
-  const extraReviewNodes = node.reviews?.pageInfo?.hasNextPage
+  const extraReviewsResult = node.reviews?.pageInfo?.hasNextPage
     ? await fetchRemainingPages<GraphQLFeedbackReviewNode>({
         label: "reviews",
         prNumber,
@@ -572,17 +592,18 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
           };
         },
       })
-    : [];
+    : { nodes: [], truncated: false };
+  if (extraReviewsResult.truncated) {
+    incompleteConnections.push("reviews");
+  }
 
-  const allReviewNodes = [...initialReviewNodes, ...extraReviewNodes];
+  const allReviewNodes = [...initialReviewNodes, ...extraReviewsResult.nodes];
   const reviews: RawPrReviewInput[] = [];
   for (const r of allReviewNodes) {
-    const inlineComments = await resolveCompleteReviewComments(
-      graphqlFn,
-      prNumber,
-      r,
-      maxExtraPages,
-    );
+    const inlineResult = await resolveCompleteReviewComments(graphqlFn, prNumber, r, maxExtraPages);
+    if (inlineResult.truncated) {
+      incompleteConnections.push(`review(${r.id ?? "unknown"}).comments`);
+    }
     reviews.push({
       author: r.author,
       authorAssociation: r.authorAssociation,
@@ -590,7 +611,7 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
       body: r.body,
       submittedAt: r.submittedAt,
       createdAt: r.createdAt,
-      comments: inlineComments,
+      comments: inlineResult.comments,
     });
   }
 
@@ -598,7 +619,7 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
   const initialCommentNodes = (node.comments?.nodes ?? []).filter(
     (c): c is GraphQLFeedbackCommentNode => c !== null && c !== undefined,
   );
-  const extraCommentNodes = node.comments?.pageInfo?.hasNextPage
+  const extraCommentsResult = node.comments?.pageInfo?.hasNextPage
     ? await fetchRemainingPages<GraphQLFeedbackCommentNode>({
         label: "comments",
         prNumber,
@@ -624,22 +645,27 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
           };
         },
       })
-    : [];
+    : { nodes: [], truncated: false };
+  if (extraCommentsResult.truncated) {
+    incompleteConnections.push("comments");
+  }
 
-  const comments: RawPrCommentInput[] = [...initialCommentNodes, ...extraCommentNodes].map((c) => ({
-    author: c.author,
-    authorAssociation: c.authorAssociation,
-    body: c.body,
-    createdAt: c.createdAt,
-    lastEditedAt: c.lastEditedAt,
-    editor: c.editor,
-  }));
+  const comments: RawPrCommentInput[] = [...initialCommentNodes, ...extraCommentsResult.nodes].map(
+    (c) => ({
+      author: c.author,
+      authorAssociation: c.authorAssociation,
+      body: c.body,
+      createdAt: c.createdAt,
+      lastEditedAt: c.lastEditedAt,
+      editor: c.editor,
+    }),
+  );
 
   // 3. Timeline LabeledEvents
   const initialTimelineNodes = (node.timelineItems?.nodes ?? []).filter(
     (t): t is GraphQLFeedbackLabeledEventNode => t !== null && t !== undefined,
   );
-  const extraTimelineNodes = node.timelineItems?.pageInfo?.hasNextPage
+  const extraTimelineResult = node.timelineItems?.pageInfo?.hasNextPage
     ? await fetchRemainingPages<GraphQLFeedbackLabeledEventNode>({
         label: "timelineItems",
         prNumber,
@@ -665,9 +691,12 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
           };
         },
       })
-    : [];
+    : { nodes: [], truncated: false };
+  if (extraTimelineResult.truncated) {
+    incompleteConnections.push("timelineItems");
+  }
 
-  const labeledEvents = [...initialTimelineNodes, ...extraTimelineNodes]
+  const labeledEvents = [...initialTimelineNodes, ...extraTimelineResult.nodes]
     .filter((t) => Boolean(t.label?.name))
     .map((t) => ({
       label: String(t.label?.name),
@@ -678,7 +707,7 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
   const initialFileNodes = (node.files?.nodes ?? []).filter(
     (f): f is GraphQLFeedbackFileNode => f !== null && f !== undefined,
   );
-  const extraFileNodes = node.files?.pageInfo?.hasNextPage
+  const extraFilesResult = node.files?.pageInfo?.hasNextPage
     ? await fetchRemainingPages<GraphQLFeedbackFileNode>({
         label: "files",
         prNumber,
@@ -704,9 +733,12 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
           };
         },
       })
-    : [];
+    : { nodes: [], truncated: false };
+  if (extraFilesResult.truncated) {
+    incompleteConnections.push("files");
+  }
 
-  const filePaths = [...initialFileNodes, ...extraFileNodes]
+  const filePaths = [...initialFileNodes, ...extraFilesResult.nodes]
     .map((f) => f.path?.trim())
     .filter((p): p is string => Boolean(p));
 
@@ -742,6 +774,8 @@ export async function resolveFeedbackPrNodeWithPaging(params: {
       filePaths,
     },
     manifestOid,
+    incomplete: incompleteConnections.length > 0,
+    incompleteConnections,
   };
 }
 

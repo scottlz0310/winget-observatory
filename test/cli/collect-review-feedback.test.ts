@@ -302,8 +302,10 @@ describe("runCollectReviewFeedback integration", () => {
       ): Promise<GitHubDetailedSearchResult> => {
         observedQueries.push(`${query} [p=${page},c=${cursor ?? ""}]`);
 
-        // 広い期間（30日）は 1,001 件を返して動的二分を誘発
-        if (query.includes("is:open") && query.includes('label:"Needs-Author-Feedback"')) {
+        // 広い期間（30日）は 1,001 件を返して動的二分を誘発（トリガー修飾子なしの状態・期間検索を検証）
+        if (query.includes("is:open")) {
+          expect(query).not.toContain('label:"Needs-Author-Feedback"');
+          expect(query).not.toContain("review:changes_requested");
           const rangeMatch = /updated:(\S+)\.\.(\S+)/.exec(query);
           const spanMs = rangeMatch ? Date.parse(rangeMatch[2]) - Date.parse(rangeMatch[1]) : 0;
           if (spanMs > 20 * 24 * 60 * 60 * 1000) {
@@ -440,6 +442,251 @@ describe("runCollectReviewFeedback integration", () => {
       expect(result.records[0].number).toBe(450002);
       expect(result.records[0].isFirstTimeAuthor).toBe(false);
       expect(result.records[0].categories).toEqual(["metadata-url"]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("ラベル解除済み CLOSED PR の拾い上げ・CLOSED→OPEN 再オープン時のキャッシュ再取得・他リポジトリ保全・未完了ページング非保存を検証する", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-feedback-regression-"));
+    const outputPath = join(tmpDir, "review-feedback.jsonl");
+
+    // 事前キャッシュ:
+    // 1) 別リポジトリ (other/repo) の同番号 PR #436234（上書きされてはならない）
+    // 2) microsoft/winget-pkgs の #450010 が CLOSED としてキャッシュ済み（今回 OPEN へ再オープン）
+    writeFileSync(
+      outputPath,
+      `${[
+        JSON.stringify({
+          schemaVersion: 1,
+          entryType: "no-feedback",
+          repository: "other/repo",
+          number: 436234,
+          title: "New package: Other.Pkg 1.0",
+          state: "CLOSED",
+          createdAt: "2026-10-01T00:00:00Z",
+          updatedAt: "2026-10-10T00:00:00Z",
+          mergedAt: null,
+          closedAt: "2026-10-10T00:00:00Z",
+          skipReason: "no-rejection-trigger",
+          collectedAt: "2026-11-20T00:00:00.000Z",
+        }),
+        JSON.stringify({
+          schemaVersion: 1,
+          entryType: "no-feedback",
+          repository: "microsoft/winget-pkgs",
+          number: 450010,
+          title: "New package: Reopened.Pkg 1.0",
+          state: "CLOSED",
+          createdAt: "2026-10-01T00:00:00Z",
+          updatedAt: "2026-11-10T00:00:00Z",
+          mergedAt: null,
+          closedAt: "2026-11-10T00:00:00Z",
+          skipReason: "no-rejection-trigger",
+          collectedAt: "2026-11-15T00:00:00.000Z",
+        }),
+      ].join("\n")}\n`,
+      "utf-8",
+    );
+
+    const mockClient = {
+      searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+        if (query.includes("is:open")) {
+          return {
+            totalCount: 2,
+            items: [
+              {
+                number: 450010,
+                title: "New package: Reopened.Pkg 1.0",
+                html_url: "https://github.com/microsoft/winget-pkgs/pull/450010",
+                created_at: "2026-10-01T00:00:00Z",
+                updated_at: "2026-11-26T00:00:00Z",
+                author: "reopen-user",
+              },
+              {
+                number: 450011,
+                title: "New package: Truncated.Pkg 1.0",
+                html_url: "https://github.com/microsoft/winget-pkgs/pull/450011",
+                created_at: "2026-10-01T00:00:00Z",
+                updated_at: "2026-11-26T00:00:00Z",
+                author: "trunc-user",
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          };
+        }
+        if (query.includes("is:closed")) {
+          return {
+            totalCount: 1,
+            items: [
+              {
+                number: 436234,
+                title: "New package: RemovedLabel.Pkg 1.0",
+                html_url: "https://github.com/microsoft/winget-pkgs/pull/436234",
+                created_at: "2026-09-20T00:00:00Z",
+                updated_at: "2026-11-25T00:00:00Z",
+                author: "removed-label-user",
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          };
+        }
+        return { totalCount: 0, items: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      },
+      graphql: async <T = unknown>(query: string): Promise<T> => {
+        if (query.includes("GetPullRequestFeedbackBatch")) {
+          return {
+            repository: {
+              pr0: {
+                number: 450011,
+                title: "New package: Truncated.Pkg 1.0",
+                url: "https://github.com/microsoft/winget-pkgs/pull/450011",
+                state: "OPEN",
+                createdAt: "2026-10-01T00:00:00Z",
+                updatedAt: "2026-11-26T00:00:00Z",
+                mergedAt: null,
+                closedAt: null,
+                headRefOid: VALID_OID,
+                author: { __typename: "User", login: "trunc-user" },
+                authorAssociation: "NONE",
+                commits: { totalCount: 1 },
+                labels: { nodes: [{ name: "New-Package" }] },
+                files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                comments: {
+                  // 20 ページ超過を再現するため常に次のカーソルを返す
+                  pageInfo: { hasNextPage: true, endCursor: "page-0" },
+                  nodes: [],
+                },
+                timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+              },
+              pr1: {
+                number: 450010,
+                title: "New package: Reopened.Pkg 1.0",
+                url: "https://github.com/microsoft/winget-pkgs/pull/450010",
+                state: "OPEN",
+                createdAt: "2026-10-01T00:00:00Z",
+                updatedAt: "2026-11-26T00:00:00Z",
+                mergedAt: null,
+                closedAt: null,
+                headRefOid: VALID_OID,
+                author: { __typename: "User", login: "reopen-user" },
+                authorAssociation: "NONE",
+                commits: { totalCount: 2 },
+                labels: { nodes: [{ name: "New-Package" }, { name: "Needs-Author-Feedback" }] },
+                files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                comments: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      author: { __typename: "User", login: "mod" },
+                      authorAssociation: "COLLABORATOR",
+                      body: "VCRUNTIME140.dll missing",
+                      createdAt: "2026-11-26T00:00:00Z",
+                    },
+                  ],
+                },
+                timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+              },
+              pr2: {
+                number: 436234,
+                title: "New package: RemovedLabel.Pkg 1.0",
+                url: "https://github.com/microsoft/winget-pkgs/pull/436234",
+                state: "CLOSED",
+                createdAt: "2026-09-20T00:00:00Z",
+                updatedAt: "2026-11-25T00:00:00Z",
+                mergedAt: null,
+                closedAt: "2026-11-25T00:00:00Z",
+                headRefOid: VALID_OID,
+                author: { __typename: "User", login: "removed-label-user" },
+                authorAssociation: "NONE",
+                commits: { totalCount: 1 },
+                // 現在ラベルからは外れているが、timelineItems に Needs-Author-Feedback 履歴あり
+                labels: { nodes: [{ name: "New-Package" }] },
+                files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                comments: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      author: { __typename: "User", login: "reviewer" },
+                      authorAssociation: "NONE",
+                      body: "SmartScreen flagged installer",
+                      createdAt: "2026-11-24T00:00:00Z",
+                    },
+                  ],
+                },
+                timelineItems: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      __typename: "LabeledEvent",
+                      createdAt: "2026-11-24T00:01:00Z",
+                      label: { name: "Needs-Author-Feedback" },
+                    },
+                  ],
+                },
+              },
+            },
+          } as T;
+        }
+        if (query.includes("GetFeedbackCommentsPage")) {
+          const nextNum = Math.random().toString(36).slice(2);
+          return {
+            repository: {
+              pullRequest: {
+                comments: {
+                  pageInfo: { hasNextPage: true, endCursor: `page-${nextNum}` },
+                  nodes: [],
+                },
+              },
+            },
+          } as T;
+        }
+        if (query.includes("u_0: search")) {
+          return { u_0: { issueCount: 0 }, u_1: { issueCount: 0 } } as T;
+        }
+        throw new Error(`Unexpected query: ${query}`);
+      },
+      getRateLimit: async () => ({
+        graphql: { limit: 5000, remaining: 4950, resetAt: null },
+      }),
+    };
+
+    try {
+      const result = await runCollectReviewFeedback(
+        {
+          ...parseArgs([
+            "--states",
+            "open,closed",
+            "--lookback-days",
+            "30",
+            "--output-path",
+            outputPath,
+            "--no-report",
+          ]),
+          now: new Date("2026-11-27T06:00:00.000Z"),
+        },
+        mockClient,
+        () => {},
+      );
+
+      // 1) 再オープンされた #450010 とラベル解除済み履歴の #436234 が両方抽出される
+      expect(result.records.map((r) => r.number)).toEqual([450010, 436234]);
+      expect(result.records[0].state).toBe("OPEN");
+      expect(result.records[1].state).toBe("CLOSED");
+
+      // 2) ページング上限到達の #450011 は incompleteCount=1 で確定キャッシュに入らない
+      expect(result.stats.incompleteCount).toBe(1);
+      const saved = parseReviewFeedbackCorpus(readFileSync(outputPath, "utf-8"));
+      expect(saved.some((e) => e.number === 450011)).toBe(false);
+
+      // 3) 他リポジトリ (other/repo) の同番号 #436234 が上書きされず保全されている
+      expect(saved.filter((e) => e.number === 436234).map((e) => e.repository)).toEqual([
+        "microsoft/winget-pkgs",
+        "other/repo",
+      ]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

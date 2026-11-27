@@ -19,6 +19,7 @@ import {
   canReuseCachedFeedbackEntry,
   detectFeedbackTriggers,
   extractReviewFeedbackItems,
+  getReviewFeedbackCorpusKey,
   indexReviewFeedbackCorpus,
   isNewPackageTitle,
   parseInstallerManifestMetadata,
@@ -27,6 +28,7 @@ import {
 import type {
   InstallerManifestMetadata,
   ReviewFeedbackCorpusEntry,
+  ReviewFeedbackPrState,
   ReviewFeedbackStateFilter,
 } from "../models/review-feedback";
 
@@ -37,6 +39,7 @@ export interface FeedbackCollectionStats {
   skippedByBudgetCount: number;
   newFeedbackCount: number;
   newNoFeedbackCount: number;
+  incompleteCount: number;
   blobFetchCount: number;
 }
 
@@ -51,6 +54,7 @@ export interface OrchestrateFeedbackCollectionParams {
   now: Date;
   batchSize?: number;
   blobBatchSize?: number;
+  maxExtraPages?: number;
   pageSize?: number;
   maxPagesPerWindow?: number;
   log?: (msg: string) => void;
@@ -64,6 +68,8 @@ export interface OrchestrateFeedbackCollectionResult {
 interface SearchCandidate {
   number: number;
   title: string;
+  state: ReviewFeedbackPrState;
+  updatedAt: string;
   sortKeyMs: number;
 }
 
@@ -78,6 +84,7 @@ interface WindowSlice {
 async function collectCandidatesForQuery(params: {
   client: Pick<GitHubApiClient, "searchIssuesDetailed">;
   buildQuery: (sinceIso: string, untilIso: string) => string;
+  state: ReviewFeedbackPrState;
   sortField: "updated" | "created";
   since: Date;
   until: Date;
@@ -90,6 +97,7 @@ async function collectCandidatesForQuery(params: {
   const {
     client,
     buildQuery,
+    state,
     sortField,
     since,
     until,
@@ -167,6 +175,8 @@ async function collectCandidatesForQuery(params: {
         out.push({
           number: item.number,
           title: item.title,
+          state,
+          updatedAt: item.updated_at,
           sortKeyMs: Number.isFinite(sortTs) ? sortTs : 0,
         });
       }
@@ -234,6 +244,7 @@ export async function orchestrateFeedbackCollection(
     now,
     batchSize = DEFAULT_FEEDBACK_BATCH_SIZE,
     blobBatchSize = DEFAULT_BLOB_BATCH_SIZE,
+    maxExtraPages,
     pageSize = 100,
     maxPagesPerWindow = 10,
     log = () => {},
@@ -244,7 +255,9 @@ export async function orchestrateFeedbackCollection(
   // fetchBudget === 0 はオフライン集計（キャッシュ再利用のみ）モード
   if (fetchBudget <= 0) {
     return {
-      entries: [...cacheMap.values()].sort((a, b) => b.number - a.number),
+      entries: [...cacheMap.values()].sort(
+        (a, b) => b.number - a.number || a.repository.localeCompare(b.repository),
+      ),
       stats: {
         candidateCount: 0,
         reusedFromCacheCount: cacheMap.size,
@@ -252,6 +265,7 @@ export async function orchestrateFeedbackCollection(
         skippedByBudgetCount: 0,
         newFeedbackCount: 0,
         newNoFeedbackCount: 0,
+        incompleteCount: 0,
         blobFetchCount: 0,
       },
     };
@@ -261,7 +275,7 @@ export async function orchestrateFeedbackCollection(
   const since = new Date(now.getTime() - lookbackDays * DAY_MS);
   const until = now;
 
-  // 1. 候補 PR を状態ごとに検索
+  // 1. 候補 PR を状態・期間で網羅検索（ラベル解除済み履歴も拾うため全状態でトリガー修飾子なし）
   const candidates: SearchCandidate[] = [];
   const seenNumbers = new Set<number>();
 
@@ -269,52 +283,26 @@ export async function orchestrateFeedbackCollection(
     if (candidates.length >= fetchLimit) {
       break;
     }
-    if (state === "merged") {
-      await collectCandidatesForQuery({
-        client,
-        buildQuery: (sinceIso, untilIso) =>
-          buildFeedbackSearchQueryParts({
-            repository,
-            state: "merged",
-            sinceIso,
-            untilIso,
-          }).join(" "),
-        sortField: "updated",
-        since,
-        until,
-        fetchLimit,
-        pageSize,
-        maxPagesPerWindow,
-        seen: seenNumbers,
-        out: candidates,
-      });
-    } else {
-      // OPEN / CLOSED は差し戻しラベルまたは CHANGES_REQUESTED レビューで高純度検索
-      for (const triggerQualifier of ["needs-author-feedback", "changes-requested"] as const) {
-        if (candidates.length >= fetchLimit) {
-          break;
-        }
-        await collectCandidatesForQuery({
-          client,
-          buildQuery: (sinceIso, untilIso) =>
-            buildFeedbackSearchQueryParts({
-              repository,
-              state,
-              sinceIso,
-              untilIso,
-              triggerQualifier,
-            }).join(" "),
-          sortField: "updated",
-          since,
-          until,
-          fetchLimit,
-          pageSize,
-          maxPagesPerWindow,
-          seen: seenNumbers,
-          out: candidates,
-        });
-      }
-    }
+    const normalizedState = state.toUpperCase() as ReviewFeedbackPrState;
+    await collectCandidatesForQuery({
+      client,
+      buildQuery: (sinceIso, untilIso) =>
+        buildFeedbackSearchQueryParts({
+          repository,
+          state,
+          sinceIso,
+          untilIso,
+        }).join(" "),
+      state: normalizedState,
+      sortField: "updated",
+      since,
+      until,
+      fetchLimit,
+      pageSize,
+      maxPagesPerWindow,
+      seen: seenNumbers,
+      out: candidates,
+    });
   }
 
   // 新しい候補から優先的に予算を配分する
@@ -324,11 +312,13 @@ export async function orchestrateFeedbackCollection(
   const toFetchNumbers: number[] = [];
 
   for (const candidate of candidates) {
-    const cached = cacheMap.get(candidate.number);
+    const cached = cacheMap.get(getReviewFeedbackCorpusKey(repository, candidate.number));
     if (
-      cached &&
-      cached.repository === repository &&
-      canReuseCachedFeedbackEntry(cached, CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION)
+      canReuseCachedFeedbackEntry(cached, {
+        currentSchemaVersion: CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
+        currentState: candidate.state,
+        currentUpdatedAt: candidate.updatedAt,
+      })
     ) {
       reusedFromCacheCount++;
       continue;
@@ -345,7 +335,9 @@ export async function orchestrateFeedbackCollection(
 
   if (budgetedNumbers.length === 0) {
     return {
-      entries: [...cacheMap.values()].sort((a, b) => b.number - a.number),
+      entries: [...cacheMap.values()].sort(
+        (a, b) => b.number - a.number || a.repository.localeCompare(b.repository),
+      ),
       stats: {
         candidateCount: candidates.length,
         reusedFromCacheCount,
@@ -353,6 +345,7 @@ export async function orchestrateFeedbackCollection(
         skippedByBudgetCount,
         newFeedbackCount: 0,
         newNoFeedbackCount: 0,
+        incompleteCount: 0,
         blobFetchCount: 0,
       },
     };
@@ -366,14 +359,24 @@ export async function orchestrateFeedbackCollection(
     repository,
     prNumbers: budgetedNumbers,
     batchSize,
+    maxExtraPages,
   });
 
-  // 3. 採用候補（差し戻しトリガー + 人間指摘あり）のみ抽出し、.installer.yaml の Blob と作者生涯マージ数をバッチ照会
+  // 3. 完全取得できた採用候補のみ抽出し、.installer.yaml の Blob と作者生涯マージ数をバッチ照会
   const blobTargets: BlobFetchTarget[] = [];
   const manifestPathsByPr = new Map<number, string[]>();
   const eligibleAuthorLogins = new Set<string>();
+  let incompleteCount = 0;
 
   for (const detail of fetchedDetails) {
+    if (detail.incomplete) {
+      incompleteCount++;
+      log(
+        `[Feedback Crawler] 警告: PR #${detail.input.number} はページング上限到達により未完了 (${detail.incompleteConnections.join(", ")}) のため、確定キャッシュへ保存せずスキップします`,
+      );
+      continue;
+    }
+
     const { input, manifestOid } = detail;
     if (!isNewPackageTitle(input.title)) {
       continue;
@@ -439,12 +442,15 @@ export async function orchestrateFeedbackCollection(
         )
       : new Map<string, number>();
 
-  // 4. コーパスエントリ構築 & キャッシュへ反映
+  // 4. コーパスエントリ構築 & キャッシュへ反映（未完了詳細は確定キャッシュへ保存しない）
   const collectedAt = now.toISOString();
   let newFeedbackCount = 0;
   let newNoFeedbackCount = 0;
 
   for (const detail of fetchedDetails) {
+    if (detail.incomplete) {
+      continue;
+    }
     const { input } = detail;
     const installerPaths = manifestPathsByPr.get(input.number) ?? [];
     const installer: InstallerManifestMetadata = parseInstallerManifestMetadata(
@@ -483,7 +489,7 @@ export async function orchestrateFeedbackCollection(
       collectedAt,
     });
 
-    cacheMap.set(entry.number, entry);
+    cacheMap.set(getReviewFeedbackCorpusKey(entry.repository, entry.number), entry);
     if (entry.entryType === "feedback") {
       newFeedbackCount++;
     } else {
@@ -492,7 +498,9 @@ export async function orchestrateFeedbackCollection(
   }
 
   return {
-    entries: [...cacheMap.values()].sort((a, b) => b.number - a.number),
+    entries: [...cacheMap.values()].sort(
+      (a, b) => b.number - a.number || a.repository.localeCompare(b.repository),
+    ),
     stats: {
       candidateCount: candidates.length,
       reusedFromCacheCount,
@@ -500,6 +508,7 @@ export async function orchestrateFeedbackCollection(
       skippedByBudgetCount,
       newFeedbackCount,
       newNoFeedbackCount,
+      incompleteCount,
       blobFetchCount: blobTargets.length,
     },
   };

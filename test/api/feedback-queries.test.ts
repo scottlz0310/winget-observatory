@@ -237,6 +237,8 @@ describe("feedback-queries (GraphQL)", () => {
     });
 
     expect(details).toHaveLength(1);
+    expect(details[0].incomplete).toBe(false);
+    expect(details[0].incompleteConnections).toEqual([]);
     expect(details[0].manifestOid).toBe(VALID_OID);
     expect(details[0].input.reviews).toHaveLength(2);
     expect(details[0].input.reviews[0].comments).toHaveLength(2);
@@ -247,6 +249,55 @@ describe("feedback-queries (GraphQL)", () => {
     ]);
     expect(details[0].input.filePaths).toHaveLength(2);
     expect(calledQueries).toHaveLength(6);
+  });
+
+  test("fetchPullRequestFeedbackDetails は追加ページ上限到達時に incomplete=true を返す", async () => {
+    let pageCalls = 0;
+    const details = await fetchPullRequestFeedbackDetails({
+      graphqlFn: async <T = unknown>(query: string) => {
+        if (query.includes("GetPullRequestFeedbackBatch")) {
+          return {
+            repository: {
+              pr0: {
+                number: 445700,
+                title: "New package: Huge.Pr version 1.0",
+                url: "https://github.com/microsoft/winget-pkgs/pull/445700",
+                state: "MERGED",
+                createdAt: "2026-10-01T00:00:00Z",
+                updatedAt: "2026-11-26T00:00:00Z",
+                mergedAt: "2026-11-26T00:00:00Z",
+                closedAt: "2026-11-26T00:00:00Z",
+                comments: {
+                  pageInfo: { hasNextPage: true, endCursor: "c-1" },
+                  nodes: [],
+                },
+              },
+            },
+          } as T;
+        }
+        pageCalls++;
+        return {
+          repository: {
+            pullRequest: {
+              comments: {
+                pageInfo: { hasNextPage: true, endCursor: `c-${pageCalls + 1}` },
+                nodes: [],
+              },
+            },
+          },
+        } as T;
+      },
+      owner: "microsoft",
+      name: "winget-pkgs",
+      repository: "microsoft/winget-pkgs",
+      prNumbers: [445700],
+      maxExtraPages: 2,
+    });
+
+    expect(pageCalls).toBe(2);
+    expect(details).toHaveLength(1);
+    expect(details[0].incomplete).toBe(true);
+    expect(details[0].incompleteConnections).toEqual(["comments"]);
   });
 
   test("fetchPullRequestFeedbackDetails は endCursor 欠落やカーソル停滞時に例外を投げる", async () => {

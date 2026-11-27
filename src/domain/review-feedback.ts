@@ -796,20 +796,57 @@ export function filterReviewFeedbackRecords(
   return filtered;
 }
 
+export interface CachedFeedbackReuseCheckOptions {
+  currentSchemaVersion?: number;
+  /** 検索結果から判明した最新の PR 状態（キャッシュと不一致なら再取得） */
+  currentState?: ReviewFeedbackPrState;
+  /** 検索結果から判明した最新の更新日時 ISO 8601（キャッシュより新しければ再取得） */
+  currentUpdatedAt?: string;
+}
+
 /**
- * キャッシュ済みエントリが確定済み（MERGED / CLOSED かつ現行スキーマ版）で再取得をスキップできるか判定する。
+ * コーパス内の重複排除・索引に用いる一意キー（`owner/repo#number`、リポジトリ名は小文字正規化）を生成する。
+ */
+export function getReviewFeedbackCorpusKey(repository: string, prNumber: number): string {
+  return `${repository.trim().toLowerCase()}#${prNumber}`;
+}
+
+/**
+ * キャッシュ済みエントリが確定済み（MERGED / CLOSED かつ現行スキーマ版）であり、
+ * 最新の状態・更新日時とも整合して再取得をスキップできるか判定する。
  */
 export function canReuseCachedFeedbackEntry(
   entry: ReviewFeedbackCorpusEntry | undefined,
-  currentSchemaVersion: number = CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
+  optionsOrVersion:
+    | number
+    | CachedFeedbackReuseCheckOptions = CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
 ): boolean {
   if (!entry) {
     return false;
   }
+  const opts: CachedFeedbackReuseCheckOptions =
+    typeof optionsOrVersion === "number"
+      ? { currentSchemaVersion: optionsOrVersion }
+      : optionsOrVersion;
+  const currentSchemaVersion = opts.currentSchemaVersion ?? CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION;
+
   if (entry.schemaVersion < currentSchemaVersion) {
     return false;
   }
-  return entry.state === "MERGED" || entry.state === "CLOSED";
+  if (entry.state !== "MERGED" && entry.state !== "CLOSED") {
+    return false;
+  }
+  if (opts.currentState !== undefined && opts.currentState !== entry.state) {
+    return false;
+  }
+  if (opts.currentUpdatedAt !== undefined) {
+    const currentMs = Date.parse(opts.currentUpdatedAt);
+    const cachedMs = Date.parse(entry.updatedAt);
+    if (!Number.isFinite(cachedMs) || (Number.isFinite(currentMs) && currentMs > cachedMs)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -843,10 +880,12 @@ export function parseReviewFeedbackCorpus(raw: string): ReviewFeedbackCorpusEntr
       (obj.entryType !== "feedback" && obj.entryType !== "no-feedback") ||
       typeof obj.number !== "number" ||
       !Number.isInteger(obj.number) ||
-      typeof obj.schemaVersion !== "number"
+      typeof obj.schemaVersion !== "number" ||
+      typeof obj.repository !== "string" ||
+      obj.repository.trim().length === 0
     ) {
       throw new Error(
-        `JSONL の ${i + 1} 行目に必須フィールド (entryType / number / schemaVersion) が不足しています`,
+        `JSONL の ${i + 1} 行目に必須フィールド (entryType / repository / number / schemaVersion) が不足しています`,
       );
     }
 
@@ -866,16 +905,19 @@ export function parseReviewFeedbackCorpus(raw: string): ReviewFeedbackCorpusEntr
 }
 
 /**
- * コーパスエントリを PR 番号キーで重複排除（後勝ち）し、PR 番号降順でソートして JSONL 文字列へ直列化する。
+ * コーパスエントリを `(repository, number)` 複合キーで重複排除（後勝ち）し、
+ * PR 番号降順・リポジトリ昇順でソートして JSONL 文字列へ直列化する。
  */
 export function serializeReviewFeedbackCorpus(
   entries: readonly ReviewFeedbackCorpusEntry[],
 ): string {
-  const byNumber = new Map<number, ReviewFeedbackCorpusEntry>();
+  const byKey = new Map<string, ReviewFeedbackCorpusEntry>();
   for (const entry of entries) {
-    byNumber.set(entry.number, entry);
+    byKey.set(getReviewFeedbackCorpusKey(entry.repository, entry.number), entry);
   }
-  const sorted = [...byNumber.values()].sort((a, b) => b.number - a.number);
+  const sorted = [...byKey.values()].sort(
+    (a, b) => b.number - a.number || a.repository.localeCompare(b.repository),
+  );
   if (sorted.length === 0) {
     return "";
   }
@@ -883,14 +925,14 @@ export function serializeReviewFeedbackCorpus(
 }
 
 /**
- * コーパスエントリ一覧から PR 番号キーのマップを構築する（後勝ち）。
+ * コーパスエントリ一覧から `(repository, number)` 複合キーのマップを構築する（後勝ち）。
  */
 export function indexReviewFeedbackCorpus(
   entries: readonly ReviewFeedbackCorpusEntry[],
-): Map<number, ReviewFeedbackCorpusEntry> {
-  const map = new Map<number, ReviewFeedbackCorpusEntry>();
+): Map<string, ReviewFeedbackCorpusEntry> {
+  const map = new Map<string, ReviewFeedbackCorpusEntry>();
   for (const entry of entries) {
-    map.set(entry.number, entry);
+    map.set(getReviewFeedbackCorpusKey(entry.repository, entry.number), entry);
   }
   return map;
 }
