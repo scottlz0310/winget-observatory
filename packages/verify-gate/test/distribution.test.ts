@@ -425,7 +425,7 @@ describe("verify-gate distribution bundle & release provenance", () => {
       ).rejects.toThrow("SLSA provenance 検証失敗");
       expect(fatalSleepCount).toBe(0);
 
-      // 5. 未公開版（E404）+ --allow-missing → exit 3、--allow-missing かつ --wait-seconds なしは reject
+      // 5. 未公開版（E404）+ --allow-missing → exit 3、公開済み版の tarball/attestations 404 + --allow-missing → reject（再公開させない）
       const missLogs: string[] = [];
       const missCode = await runVerifyPublishedPackage([...baseArgs, "--allow-missing"], {
         npmView: () => {
@@ -437,6 +437,29 @@ describe("verify-gate distribution bundle & release provenance", () => {
       });
       expect(missCode).toBe(EXIT_CODE_MISSING);
       expect(missLogs[0]).toContain("MISSING");
+
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--allow-missing"], {
+          npmView: () => validMetadata,
+          fetchBytes: async () => {
+            const e = new Error("HTTP 404") as Error & { status?: number };
+            e.status = 404;
+            throw e;
+          },
+        }),
+      ).rejects.toThrow("配布物または attestation が未反映");
+
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--allow-missing"], {
+          npmView: () => validMetadata,
+          fetchBytes: async () => registryBytes,
+          fetchJson: async () => {
+            const e = new Error("HTTP 404") as Error & { status?: number };
+            e.status = 404;
+            throw e;
+          },
+        }),
+      ).rejects.toThrow("配布物または attestation が未反映");
 
       await expect(
         runVerifyPublishedPackage(baseArgs, {

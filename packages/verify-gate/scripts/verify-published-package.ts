@@ -37,10 +37,15 @@ interface AttestationEntry {
   };
 }
 
+type PendingRegistryKind = "version-missing" | "artifact-pending";
+
 class PendingRegistryError extends Error {
-  constructor(message: string) {
+  readonly kind: PendingRegistryKind;
+
+  constructor(kind: PendingRegistryKind, message: string) {
     super(message);
     this.name = "PendingRegistryError";
+    this.kind = kind;
   }
 }
 
@@ -244,7 +249,7 @@ function defaultNpmView(spec: string): string {
 async function defaultFetchJson(url: string): Promise<unknown> {
   const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (res.status === 404) {
-    throw new PendingRegistryError(`HTTP 404 (${url})`);
+    throw new PendingRegistryError("artifact-pending", `HTTP 404 (${url})`);
   }
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} (${url})`);
@@ -255,7 +260,7 @@ async function defaultFetchJson(url: string): Promise<unknown> {
 async function defaultFetchBytes(url: string): Promise<Buffer> {
   const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (res.status === 404) {
-    throw new PendingRegistryError(`HTTP 404 (${url})`);
+    throw new PendingRegistryError("artifact-pending", `HTTP 404 (${url})`);
   }
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} (${url})`);
@@ -286,6 +291,7 @@ async function verifyOnce(params: {
     const combined = `${String(err.stderr ?? "")}\n${String(err.stdout ?? "")}\n${err.message ?? ""}`;
     if (isNotFoundError(error)) {
       throw new PendingRegistryError(
+        "version-missing",
         `npm view が未反映です (404): ${params.pkgName}@${params.version}`,
       );
     }
@@ -310,7 +316,10 @@ async function verifyOnce(params: {
     registryBytes = await params.fetchBytes(tarballUrl);
   } catch (error) {
     if (isNotFoundError(error)) {
-      throw new PendingRegistryError(`tarball が未反映です (404): ${tarballUrl}`);
+      throw new PendingRegistryError(
+        "artifact-pending",
+        `tarball が未反映です (404): ${tarballUrl}`,
+      );
     }
     throw error;
   }
@@ -328,7 +337,10 @@ async function verifyOnce(params: {
     attestationsResponse = await params.fetchJson(attestationsUrl);
   } catch (error) {
     if (isNotFoundError(error)) {
-      throw new PendingRegistryError(`attestations が未反映です (404): ${attestationsUrl}`);
+      throw new PendingRegistryError(
+        "artifact-pending",
+        `attestations が未反映です (404): ${attestationsUrl}`,
+      );
     }
     throw error;
   }
@@ -442,8 +454,13 @@ export async function runVerifyPublishedPackage(
         throw error;
       }
       if (allowMissing) {
-        stdout(`MISSING ${pkgName}@${version}`);
-        return EXIT_CODE_MISSING;
+        if (error.kind === "version-missing") {
+          stdout(`MISSING ${pkgName}@${version}`);
+          return EXIT_CODE_MISSING;
+        }
+        throw new Error(
+          `公開済みバージョン ${pkgName}@${version} の配布物または attestation が未反映のため再利用・再公開できません: ${error.message}`,
+        );
       }
       if (waitSeconds <= 0) {
         throw new Error(`npm view に失敗しました: ${error.message}`);
