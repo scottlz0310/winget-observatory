@@ -306,6 +306,13 @@ describe("manifest-rules and gate-runner", () => {
       expect(netFinding?.detail).not.toContain("SECRET_JWT");
       expect(netFinding?.detail).not.toContain("#frag");
 
+      const { sanitizeUrlForDisplay } = await import("../src/network-checks");
+      expect(sanitizeUrlForDisplay("https://user:pass@example.invalid/a/b?token=1#top")).toBe(
+        "https://example.invalid/a/b",
+      );
+      expect(sanitizeUrlForDisplay("not-a-valid-url?secret=1")).toBe("not-a-valid-url");
+      expect(sanitizeUrlForDisplay("plain-text")).toBe("plain-text");
+
       // ネットワーク例外は fail として捕捉されること
       const errorReport = await runManifestGate(
         { manifestDir: tmpDir, verifySha256: false },

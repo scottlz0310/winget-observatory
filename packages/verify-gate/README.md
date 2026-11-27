@@ -6,15 +6,17 @@
 
 ## インストール / 実行方法
 
-### 1. `bunx` / `npx` で即時実行（推奨・Node.js 20+ または Bun）
+### 1. `bunx --bun` / `npx` で即時実行（推奨・Node.js 20+ または Bun）
 
 ```bash
-# Bun
-bunx @scottlz0310/winget-verify-gate check ./manifests/e/Example/MyApp/1.0.0
+# Bun（Node.js 未導入環境でも動作するよう --bun をパッケージ名より前に指定）
+bunx --bun @scottlz0310/winget-verify-gate check ./manifests/e/Example/MyApp/1.0.0
 
 # Node.js
 npx -y @scottlz0310/winget-verify-gate check ./manifests/e/Example/MyApp/1.0.0
 ```
+
+> **補足**: 配布バンドルの shebang は Node.js / Bun 両対応のため `#!/usr/bin/env node` を採用しています。Node.js を入れていない Bun 単独環境では、`bunx` に `--bun` をパッケージ名より前に付けて実行してください。
 
 ### 2. グローバルインストール
 
@@ -33,14 +35,14 @@ winget-verify-gate --version
 
 MCP クライアント（Antigravity / Claude Code / Codex / Cursor 等）の MCP 設定へ以下を追加します。
 
-### `bunx` を使う場合
+### `bunx --bun` を使う場合
 
 ```json
 {
   "mcpServers": {
     "winget-verify-gate": {
       "command": "bunx",
-      "args": ["@scottlz0310/winget-verify-gate", "mcp"]
+      "args": ["--bun", "@scottlz0310/winget-verify-gate", "mcp"]
     }
   }
 }
@@ -78,7 +80,7 @@ MCP クライアント（Antigravity / Claude Code / Codex / Cursor 等）の MC
 - 非対応クライアント向けに、同梱スキル一式をローカルディレクトリへ書き出せます:
 
 ```bash
-bunx @scottlz0310/winget-verify-gate skill export --out ./.agent/skills
+bunx --bun @scottlz0310/winget-verify-gate skill export --out ./.agent/skills
 ```
 
 ## 主な CLI コマンド

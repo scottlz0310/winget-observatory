@@ -160,8 +160,9 @@ export class SkillCatalog {
   constructor(
     paths?: SkillCatalogPaths,
     embeddedAssets: EmbeddedSkillAssets | null = EMBEDDED_SKILL_ASSETS,
+    defaultPathsResolver: () => SkillCatalogPaths = resolveDefaultSkillCatalogPaths,
   ) {
-    const resolvedPaths = paths ?? resolveDefaultSkillCatalogPaths();
+    const resolvedPaths = paths ?? defaultPathsResolver();
     const useEmbedded =
       paths === undefined && !allPathsExist(resolvedPaths) && embeddedAssets !== null;
 

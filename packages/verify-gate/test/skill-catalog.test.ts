@@ -100,6 +100,24 @@ describe("SkillCatalog (SSoT & Skills over MCP resources)", () => {
       prTemplate: "# Embedded Template",
     };
     expect(resolveVerifyGateVersion("/nonexistent/dir", embedded)).toBe("9.9.9");
+    expect(resolveVerifyGateVersion("/nonexistent/dir", null)).toBe("0.0.0-dev");
+
+    // デフォルトパスが存在しない環境（配布バンドル/単体バイナリ実行）では埋め込みアセットから構築する
+    const missingResolver = () => ({
+      skillMdPath: "/nonexistent/SKILL.md",
+      submissionGuidePath: "/nonexistent/guide.md",
+      prTemplatePath: "/nonexistent/template.md",
+    });
+    const embeddedCatalog = new SkillCatalog(undefined, embedded, missingResolver);
+    expect(embeddedCatalog.listSkills().skills[0]?.resources).toHaveLength(3);
+    expect(
+      embeddedCatalog.readResource("skill://winget-verify-gate/references/submission-guide.md")
+        ?.contents[0]?.text,
+    ).toBe("# Embedded Guide");
+    expect(
+      embeddedCatalog.readResource("skill://winget-verify-gate/templates/pr-template.md")
+        ?.contents[0]?.text,
+    ).toBe("# Embedded Template");
 
     // 明示パス不在時はエラー（fail-closed）
     expect(

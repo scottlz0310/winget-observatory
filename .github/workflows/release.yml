@@ -193,16 +193,10 @@ jobs:
             | node "$TMPDIR/package/dist/cli.mjs" mcp \
             | jq -e --arg ver "$VERSION" '.result.serverInfo.version == $ver and .result.capabilities.extensions["io.modelcontextprotocol/skills"].directoryRead == true'
 
-      - name: Upload npm payload
-        uses: actions/upload-artifact@v7
-        with:
-          name: npm-payload
-          path: package-output/*.tgz
-          if-no-files-found: error
-
-      - name: Publish to npm
+      - name: Publish to npm (or reuse verified publication for same SHA)
         env:
           TAG: ${{ needs.draft.outputs.tag_name }}
+          TARGET_SHA: ${{ needs.draft.outputs.target_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -210,11 +204,42 @@ jobs:
           unset NPM_CONFIG_USERCONFIG
 
           version="${TAG#v}"
-          args=(--provenance --access public)
-          if [[ "${version%%+*}" == *-* ]]; then args+=(--tag next); fi
           packages=(./package-output/*.tgz)
           test "${#packages[@]}" = 1
-          npm publish "${packages[0]}" "${args[@]}"
+          expected_tgz="${packages[0]}"
+
+          # 再実行時に同一版が公開済みの場合は、tarball 内容と SLSA provenance（repo / workflow / TARGET_SHA）が
+          # 完全一致する場合に限り再利用して後段検証・finalize を再開する（不一致時は即エラー停止）。
+          set +e
+          bun run packages/verify-gate/scripts/verify-published-package.ts \
+            --package "@scottlz0310/winget-verify-gate" \
+            --version "$version" \
+            --repo "$GITHUB_REPOSITORY" \
+            --commit "$TARGET_SHA" \
+            --expected-tarball "$expected_tgz" \
+            --allow-missing \
+            --out-registry-tarball "./package-output/registry-reused.tgz"
+          check_code=$?
+          set -e
+
+          if [ "$check_code" -eq 0 ]; then
+            echo "Verified existing published @scottlz0310/winget-verify-gate@${version} matches commit ${TARGET_SHA}; reusing for downstream verification."
+            mv "./package-output/registry-reused.tgz" "$expected_tgz"
+          elif [ "$check_code" -eq 3 ]; then
+            args=(--provenance --access public)
+            if [[ "${version%%+*}" == *-* ]]; then args+=(--tag next); fi
+            npm publish "$expected_tgz" "${args[@]}"
+          else
+            echo "::error::Existing published version verification failed (exit=$check_code)."
+            exit 1
+          fi
+
+      - name: Upload npm payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-payload
+          path: package-output/*.tgz
+          if-no-files-found: error
 
   verify-package:
     needs: [draft, publish-npm]
@@ -222,24 +247,42 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.draft.outputs.target_sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "26.13.1"
+
       - name: Download expected tarball
         uses: actions/download-artifact@v8
         with:
           name: npm-payload
           path: expected
 
-      - name: Verify registry tarball and provenance
+      - name: Verify registry tarball and SLSA provenance
         env:
           TAG: ${{ needs.draft.outputs.tag_name }}
+          TARGET_SHA: ${{ needs.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
-          timeout 60 npm view "@scottlz0310/winget-verify-gate@${TAG#v}" --json > metadata.json
-          tarball=$(jq -er '.dist.tarball' metadata.json)
-          jq -er '.dist.attestations.url' metadata.json
-          curl -fSL --connect-timeout 10 --max-time 60 "$tarball" -o registry.tgz
           packages=(expected/*.tgz)
           test "${#packages[@]}" = 1
-          cmp "${packages[0]}" registry.tgz
+          bun run packages/verify-gate/scripts/verify-published-package.ts \
+            --package "@scottlz0310/winget-verify-gate" \
+            --version "${TAG#v}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --commit "$TARGET_SHA" \
+            --expected-tarball "${packages[0]}" \
+            --strict-bytes
 
   finalize:
     needs: [draft, build-binaries, publish-npm, verify-package]

@@ -22,7 +22,7 @@ metadata:
 
 1. **マニフェスト診断を実行する**:
    - MCP 利用時: `verify_manifest`（`manifestDir`、任意で `binaryPath`・`offline`）を実行する。
-   - CLI フォールバック時: `winget-verify-gate check <manifest-dir> [--binary <path>] [--offline] [--json]`（または `bunx @scottlz0310/winget-verify-gate check ...`）
+   - CLI フォールバック時: `winget-verify-gate check <manifest-dir> [--binary <path>] [--offline] [--json]`（または `bunx --bun @scottlz0310/winget-verify-gate check ...`）
 2. **バイナリ単体検査が必要な場合**:
    - MCP 利用時: `verify_binary`（`binaryPath`、任意で `expectedArchitecture`）を実行する。
    - CLI フォールバック時: `winget-verify-gate binary <path> [--arch x64|arm64|x86] [--json]`

@@ -304,6 +304,5 @@ export async function runCli(
 }
 
 if (import.meta.main) {
-  const exitCode = await runCli(process.argv.slice(2));
-  process.exit(exitCode);
+  process.exitCode = await runCli(process.argv.slice(2));
 }
