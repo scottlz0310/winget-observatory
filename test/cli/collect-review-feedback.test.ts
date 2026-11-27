@@ -691,4 +691,283 @@ describe("runCollectReviewFeedback integration", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("複数状態指定時に先行状態が fetchLimit / fetchBudget を占有せず全状態へ配分され、再実行で未処理の古い OPEN と後続 CLOSED へ前進する", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-feedback-fairness-"));
+    const outputPath = join(tmpDir, "review-feedback.jsonl");
+
+    const searchedStates: string[] = [];
+    const fetchedPrBatches: number[][] = [];
+
+    const openItems = [
+      {
+        number: 500103,
+        title: "New package: Open.Latest 1.0",
+        html_url: "https://github.com/microsoft/winget-pkgs/pull/500103",
+        created_at: "2026-11-01T00:00:00Z",
+        updated_at: "2026-11-26T00:00:00Z",
+        author: "u1",
+      },
+      {
+        number: 500102,
+        title: "New package: Open.Older 1.0",
+        html_url: "https://github.com/microsoft/winget-pkgs/pull/500102",
+        created_at: "2026-10-20T00:00:00Z",
+        updated_at: "2026-11-20T00:00:00Z",
+        author: "u2",
+      },
+      {
+        number: 500101,
+        title: "New package: Open.Excess 1.0",
+        html_url: "https://github.com/microsoft/winget-pkgs/pull/500101",
+        created_at: "2026-10-10T00:00:00Z",
+        updated_at: "2026-11-10T00:00:00Z",
+        author: "u3",
+      },
+    ];
+    const closedItems = [
+      {
+        number: 500002,
+        title: "New package: Closed.Latest 1.0",
+        html_url: "https://github.com/microsoft/winget-pkgs/pull/500002",
+        created_at: "2026-10-15T00:00:00Z",
+        updated_at: "2026-11-25T00:00:00Z",
+        author: "u4",
+      },
+      {
+        number: 500001,
+        title: "New package: Closed.Older 1.0",
+        html_url: "https://github.com/microsoft/winget-pkgs/pull/500001",
+        created_at: "2026-10-05T00:00:00Z",
+        updated_at: "2026-11-15T00:00:00Z",
+        author: "u5",
+      },
+    ];
+
+    const prDetailsByNumber = new Map<number, Record<string, unknown>>([
+      [
+        500103,
+        {
+          number: 500103,
+          title: "New package: Open.Latest 1.0",
+          url: "https://github.com/microsoft/winget-pkgs/pull/500103",
+          state: "OPEN",
+          createdAt: "2026-11-01T00:00:00Z",
+          updatedAt: "2026-11-26T00:00:00Z",
+          mergedAt: null,
+          closedAt: null,
+          author: { __typename: "User", login: "u1" },
+          authorAssociation: "NONE",
+          commits: { totalCount: 1 },
+          labels: { nodes: [{ name: "New-Package" }, { name: "Needs-Author-Feedback" }] },
+          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                author: { __typename: "User", login: "mod" },
+                authorAssociation: "COLLABORATOR",
+                body: "PrivacyUrl 404",
+                createdAt: "2026-11-26T00:00:00Z",
+              },
+            ],
+          },
+          timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        },
+      ],
+      [
+        500102,
+        {
+          number: 500102,
+          title: "New package: Open.Older 1.0",
+          url: "https://github.com/microsoft/winget-pkgs/pull/500102",
+          state: "OPEN",
+          createdAt: "2026-10-20T00:00:00Z",
+          updatedAt: "2026-11-20T00:00:00Z",
+          mergedAt: null,
+          closedAt: null,
+          author: { __typename: "User", login: "u2" },
+          authorAssociation: "NONE",
+          commits: { totalCount: 1 },
+          labels: { nodes: [{ name: "New-Package" }, { name: "Needs-Author-Feedback" }] },
+          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                author: { __typename: "User", login: "mod" },
+                authorAssociation: "COLLABORATOR",
+                body: "VCRUNTIME140.dll missing",
+                createdAt: "2026-11-20T00:00:00Z",
+              },
+            ],
+          },
+          timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        },
+      ],
+      [
+        500002,
+        {
+          number: 500002,
+          title: "New package: Closed.Latest 1.0",
+          url: "https://github.com/microsoft/winget-pkgs/pull/500002",
+          state: "CLOSED",
+          createdAt: "2026-10-15T00:00:00Z",
+          updatedAt: "2026-11-25T00:00:00Z",
+          mergedAt: null,
+          closedAt: "2026-11-25T00:00:00Z",
+          author: { __typename: "User", login: "u4" },
+          authorAssociation: "NONE",
+          commits: { totalCount: 1 },
+          labels: { nodes: [{ name: "New-Package" }] },
+          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                author: { __typename: "User", login: "mod" },
+                authorAssociation: "COLLABORATOR",
+                body: "SmartScreen warning",
+                createdAt: "2026-11-25T00:00:00Z",
+              },
+            ],
+          },
+          timelineItems: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                __typename: "LabeledEvent",
+                createdAt: "2026-11-25T00:00:00Z",
+                label: { name: "Needs-Author-Feedback" },
+              },
+            ],
+          },
+        },
+      ],
+      [
+        500001,
+        {
+          number: 500001,
+          title: "New package: Closed.Older 1.0",
+          url: "https://github.com/microsoft/winget-pkgs/pull/500001",
+          state: "CLOSED",
+          createdAt: "2026-10-05T00:00:00Z",
+          updatedAt: "2026-11-15T00:00:00Z",
+          mergedAt: null,
+          closedAt: "2026-11-15T00:00:00Z",
+          author: { __typename: "User", login: "u5" },
+          authorAssociation: "NONE",
+          commits: { totalCount: 1 },
+          labels: { nodes: [{ name: "New-Package" }] },
+          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                author: { __typename: "User", login: "mod" },
+                authorAssociation: "COLLABORATOR",
+                body: "InstallerType mismatch",
+                createdAt: "2026-11-15T00:00:00Z",
+              },
+            ],
+          },
+          timelineItems: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                __typename: "LabeledEvent",
+                createdAt: "2026-11-15T00:00:00Z",
+                label: { name: "Needs-Author-Feedback" },
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+
+    const mockClient = {
+      searchIssuesDetailed: async (query: string): Promise<GitHubDetailedSearchResult> => {
+        if (query.includes("is:open")) {
+          searchedStates.push("open");
+          return {
+            totalCount: openItems.length,
+            items: openItems,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          };
+        }
+        if (query.includes("is:closed")) {
+          searchedStates.push("closed");
+          return {
+            totalCount: closedItems.length,
+            items: closedItems,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          };
+        }
+        return { totalCount: 0, items: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      },
+      graphql: async <T = unknown>(query: string): Promise<T> => {
+        if (query.includes("GetPullRequestFeedbackBatch")) {
+          const matchedNums = [...query.matchAll(/pullRequest\(number:\s*(\d+)\)/g)].map((m) =>
+            Number(m[1]),
+          );
+          fetchedPrBatches.push(matchedNums);
+          const repo: Record<string, unknown> = {};
+          matchedNums.forEach((num, idx) => {
+            repo[`pr${idx}`] = prDetailsByNumber.get(num) ?? null;
+          });
+          return { repository: repo } as T;
+        }
+        if (query.includes("u_0: search")) {
+          return { u_0: { issueCount: 0 }, u_1: { issueCount: 0 } } as T;
+        }
+        throw new Error(`Unexpected query: ${query}`);
+      },
+      getRateLimit: async () => ({
+        graphql: { limit: 5000, remaining: 4940, resetAt: null },
+      }),
+    };
+
+    try {
+      const cliArgs = [
+        "--states",
+        "open,closed",
+        "--lookback-days",
+        "90",
+        "--fetch-limit",
+        "4",
+        "--fetch-budget",
+        "2",
+        "--output-path",
+        outputPath,
+        "--no-report",
+      ];
+
+      // 1 回目: fetchLimit=4 が open:2 / closed:2 に均等配分され、fetchBudget=2 が open:1 / closed:1 に配分される
+      const run1 = await runCollectReviewFeedback(
+        { ...parseArgs(cliArgs), now: new Date("2026-11-27T06:00:00.000Z") },
+        mockClient,
+        () => {},
+      );
+      expect(searchedStates).toEqual(["open", "closed"]);
+      expect(fetchedPrBatches[0]).toEqual([500103, 500002]);
+      expect(run1.records.map((r) => r.number)).toEqual([500103, 500002]);
+
+      // 2 回目: 1 回目で取得した未更新 OPEN (#500103) と CLOSED (#500002) が再利用され、
+      //        古い OPEN (#500102) と後続 CLOSED (#500001) の両方へ前進する
+      const run2 = await runCollectReviewFeedback(
+        { ...parseArgs(cliArgs), now: new Date("2026-11-27T06:05:00.000Z") },
+        mockClient,
+        () => {},
+      );
+      expect(run2.stats.reusedFromCacheCount).toBe(2);
+      expect(fetchedPrBatches[1]).toEqual([500102, 500001]);
+      expect(run2.records.map((r) => r.number)).toEqual([500103, 500102, 500002, 500001]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

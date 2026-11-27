@@ -276,14 +276,22 @@ export async function orchestrateFeedbackCollection(
   const until = now;
 
   // 1. 候補 PR を状態・期間で網羅検索（ラベル解除済み履歴も拾うため全状態でトリガー修飾子なし）
-  const candidates: SearchCandidate[] = [];
+  //    先行状態が fetchLimit 全体を占有して後続状態が未検索にならないよう、残り状態数で均等に上限枠を配分する
+  const candidatesByState = new Map<ReviewFeedbackStateFilter, SearchCandidate[]>();
   const seenNumbers = new Set<number>();
+  let totalCollectedCandidates = 0;
 
-  for (const state of states) {
-    if (candidates.length >= fetchLimit) {
+  for (let i = 0; i < states.length; i++) {
+    const state = states[i];
+    const remainingStates = states.length - i;
+    const remainingLimit = Math.max(0, fetchLimit - totalCollectedCandidates);
+    if (remainingLimit <= 0) {
       break;
     }
+    const stateLimit = Math.max(1, Math.ceil(remainingLimit / remainingStates));
+    const stateCandidates: SearchCandidate[] = [];
     const normalizedState = state.toUpperCase() as ReviewFeedbackPrState;
+
     await collectCandidatesForQuery({
       client,
       buildQuery: (sinceIso, untilIso) =>
@@ -297,40 +305,67 @@ export async function orchestrateFeedbackCollection(
       sortField: "updated",
       since,
       until,
-      fetchLimit,
+      fetchLimit: stateLimit,
       pageSize,
       maxPagesPerWindow,
       seen: seenNumbers,
-      out: candidates,
+      out: stateCandidates,
     });
+
+    stateCandidates.sort((a, b) => b.sortKeyMs - a.sortKeyMs || b.number - a.number);
+    candidatesByState.set(state, stateCandidates);
+    totalCollectedCandidates += stateCandidates.length;
   }
 
-  // 新しい候補から優先的に予算を配分する
-  candidates.sort((a, b) => b.sortKeyMs - a.sortKeyMs || b.number - a.number);
-
+  // 状態ごとに未キャッシュ・要再取得候補を抽出し、状態間ラウンドロビンで fetchBudget を公平配分する
   let reusedFromCacheCount = 0;
-  const toFetchNumbers: number[] = [];
+  const toFetchQueues: number[][] = [];
+  let totalToFetch = 0;
 
-  for (const candidate of candidates) {
-    const cached = cacheMap.get(getReviewFeedbackCorpusKey(repository, candidate.number));
-    if (
-      canReuseCachedFeedbackEntry(cached, {
-        currentSchemaVersion: CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
-        currentState: candidate.state,
-        currentUpdatedAt: candidate.updatedAt,
-      })
-    ) {
-      reusedFromCacheCount++;
-      continue;
+  for (const state of states) {
+    const stateCandidates = candidatesByState.get(state) ?? [];
+    const queue: number[] = [];
+    for (const candidate of stateCandidates) {
+      const cached = cacheMap.get(getReviewFeedbackCorpusKey(repository, candidate.number));
+      if (
+        canReuseCachedFeedbackEntry(cached, {
+          currentSchemaVersion: CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
+          currentState: candidate.state,
+          currentUpdatedAt: candidate.updatedAt,
+        })
+      ) {
+        reusedFromCacheCount++;
+        continue;
+      }
+      queue.push(candidate.number);
     }
-    toFetchNumbers.push(candidate.number);
+    if (queue.length > 0) {
+      toFetchQueues.push(queue);
+      totalToFetch += queue.length;
+    }
   }
 
-  const budgetedNumbers = toFetchNumbers.slice(0, fetchBudget);
-  const skippedByBudgetCount = Math.max(0, toFetchNumbers.length - budgetedNumbers.length);
+  const budgetedNumbers: number[] = [];
+  const queueOffsets = toFetchQueues.map(() => 0);
+  while (budgetedNumbers.length < fetchBudget) {
+    let pickedAny = false;
+    for (let q = 0; q < toFetchQueues.length && budgetedNumbers.length < fetchBudget; q++) {
+      const idx = queueOffsets[q];
+      if (idx < toFetchQueues[q].length) {
+        budgetedNumbers.push(toFetchQueues[q][idx]);
+        queueOffsets[q]++;
+        pickedAny = true;
+      }
+    }
+    if (!pickedAny) {
+      break;
+    }
+  }
+
+  const skippedByBudgetCount = Math.max(0, totalToFetch - budgetedNumbers.length);
 
   log(
-    `[Feedback Crawler] 候補 ${candidates.length} 件 / キャッシュ再利用 ${reusedFromCacheCount} 件 / 新規取得対象 ${budgetedNumbers.length} 件 (予算超過スキップ ${skippedByBudgetCount} 件)`,
+    `[Feedback Crawler] 候補 ${totalCollectedCandidates} 件 / キャッシュ再利用 ${reusedFromCacheCount} 件 / 新規取得対象 ${budgetedNumbers.length} 件 (予算超過スキップ ${skippedByBudgetCount} 件)`,
   );
 
   if (budgetedNumbers.length === 0) {
@@ -339,7 +374,7 @@ export async function orchestrateFeedbackCollection(
         (a, b) => b.number - a.number || a.repository.localeCompare(b.repository),
       ),
       stats: {
-        candidateCount: candidates.length,
+        candidateCount: totalCollectedCandidates,
         reusedFromCacheCount,
         fetchedCount: 0,
         skippedByBudgetCount,
@@ -502,7 +537,7 @@ export async function orchestrateFeedbackCollection(
       (a, b) => b.number - a.number || a.repository.localeCompare(b.repository),
     ),
     stats: {
-      candidateCount: candidates.length,
+      candidateCount: totalCollectedCandidates,
       reusedFromCacheCount,
       fetchedCount: fetchedDetails.length,
       skippedByBudgetCount,

@@ -812,8 +812,11 @@ export function getReviewFeedbackCorpusKey(repository: string, prNumber: number)
 }
 
 /**
- * キャッシュ済みエントリが確定済み（MERGED / CLOSED かつ現行スキーマ版）であり、
- * 最新の状態・更新日時とも整合して再取得をスキップできるか判定する。
+ * キャッシュ済みエントリを再利用して詳細再取得をスキップできるか判定する。
+ * - スキーマ版が古い場合は常に再取得（false）。
+ * - `MERGED` / `CLOSED` は状態一致かつ `currentUpdatedAt` がキャッシュより進んでいなければ再利用可。
+ * - `OPEN` は `currentState` と `currentUpdatedAt` が両方渡され、状態一致かつ未更新
+ *   （`currentUpdatedAt <= entry.updatedAt`）が確認できた場合のみ再利用可（再実行時に未処理候補へ前進するため）。
  */
 export function canReuseCachedFeedbackEntry(
   entry: ReviewFeedbackCorpusEntry | undefined,
@@ -833,15 +836,25 @@ export function canReuseCachedFeedbackEntry(
   if (entry.schemaVersion < currentSchemaVersion) {
     return false;
   }
-  if (entry.state !== "MERGED" && entry.state !== "CLOSED") {
-    return false;
-  }
   if (opts.currentState !== undefined && opts.currentState !== entry.state) {
     return false;
   }
-  if (opts.currentUpdatedAt !== undefined) {
-    const currentMs = Date.parse(opts.currentUpdatedAt);
-    const cachedMs = Date.parse(entry.updatedAt);
+
+  const hasCurrentUpdatedAt = opts.currentUpdatedAt !== undefined;
+  const cachedMs = Date.parse(entry.updatedAt);
+  const currentMs = hasCurrentUpdatedAt ? Date.parse(opts.currentUpdatedAt as string) : Number.NaN;
+
+  if (entry.state === "OPEN") {
+    if (opts.currentState !== "OPEN" || !hasCurrentUpdatedAt) {
+      return false;
+    }
+    return Number.isFinite(cachedMs) && Number.isFinite(currentMs) && currentMs <= cachedMs;
+  }
+
+  if (entry.state !== "MERGED" && entry.state !== "CLOSED") {
+    return false;
+  }
+  if (hasCurrentUpdatedAt) {
     if (!Number.isFinite(cachedMs) || (Number.isFinite(currentMs) && currentMs > cachedMs)) {
       return false;
     }

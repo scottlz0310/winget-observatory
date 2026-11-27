@@ -510,6 +510,19 @@ describe("review-feedback domain logic", () => {
 
     expect(canReuseCachedFeedbackEntry(entry)).toBe(true);
     expect(canReuseCachedFeedbackEntry(openEntry)).toBe(false);
+    // OPEN でも現在状態・更新日時が双方一致（未更新）なら再利用可、更新が進めば再取得
+    expect(
+      canReuseCachedFeedbackEntry(openEntry, {
+        currentState: "OPEN",
+        currentUpdatedAt: openEntry.updatedAt,
+      }),
+    ).toBe(true);
+    expect(
+      canReuseCachedFeedbackEntry(openEntry, {
+        currentState: "OPEN",
+        currentUpdatedAt: "2026-11-27T00:00:00Z",
+      }),
+    ).toBe(false);
     // 状態変化（CLOSED -> OPEN 再オープン）や updatedAt の進行があればキャッシュを再利用しない
     const closedEntry: ReviewFeedbackCorpusEntry = {
       ...entry,
