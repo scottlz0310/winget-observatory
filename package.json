@@ -17,6 +17,7 @@
     "sync:dropbox": "bun run scripts/sync-dropbox.ts",
     "explore:depths": "bun run src/cli/explore-depths.ts",
     "progress": "bun run src/cli/progress.ts",
+    "collect:feedback": "bun run src/cli/collect-review-feedback.ts",
     "sync:secrets": "bun run scripts/sync-worker-secrets.ts"
   },
   "devDependencies": {

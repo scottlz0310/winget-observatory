@@ -1,0 +1,506 @@
+/**
+ * 初回提出 PR の差し戻し指摘を動的二分窓走査・増分キャッシュ・GraphQL バッチで収集するオーケストレーター。
+ */
+
+import {
+  type BlobFetchTarget,
+  DEFAULT_BLOB_BATCH_SIZE,
+  DEFAULT_FEEDBACK_BATCH_SIZE,
+  fetchInstallerManifestBlobs,
+  fetchPullRequestFeedbackDetails,
+} from "../api/feedback-queries";
+import { type GitHubApiClient, parseRepository } from "../api/github";
+import { isPrivilegedOrBotAuthor, resolveAuthorMergedCounts } from "../domain/first-timer";
+import { DAY_MS } from "../domain/formatters";
+import {
+  buildFeedbackSearchQueryParts,
+  buildReviewFeedbackEntry,
+  CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
+  canReuseCachedFeedbackEntry,
+  detectFeedbackTriggers,
+  extractReviewFeedbackItems,
+  indexReviewFeedbackCorpus,
+  isNewPackageTitle,
+  parseInstallerManifestMetadata,
+  selectInstallerManifestPaths,
+} from "../domain/review-feedback";
+import type {
+  InstallerManifestMetadata,
+  ReviewFeedbackCorpusEntry,
+  ReviewFeedbackStateFilter,
+} from "../models/review-feedback";
+
+export interface FeedbackCollectionStats {
+  candidateCount: number;
+  reusedFromCacheCount: number;
+  fetchedCount: number;
+  skippedByBudgetCount: number;
+  newFeedbackCount: number;
+  newNoFeedbackCount: number;
+  blobFetchCount: number;
+}
+
+export interface OrchestrateFeedbackCollectionParams {
+  client: Pick<GitHubApiClient, "searchIssuesDetailed" | "graphql">;
+  repository: string;
+  states: readonly ReviewFeedbackStateFilter[];
+  lookbackDays: number;
+  fetchBudget: number;
+  fetchLimit: number;
+  existingEntries: readonly ReviewFeedbackCorpusEntry[];
+  now: Date;
+  batchSize?: number;
+  blobBatchSize?: number;
+  pageSize?: number;
+  maxPagesPerWindow?: number;
+  log?: (msg: string) => void;
+}
+
+export interface OrchestrateFeedbackCollectionResult {
+  entries: ReviewFeedbackCorpusEntry[];
+  stats: FeedbackCollectionStats;
+}
+
+interface SearchCandidate {
+  number: number;
+  title: string;
+  sortKeyMs: number;
+}
+
+interface WindowSlice {
+  since: Date;
+  until: Date;
+}
+
+/**
+ * Search API の 1,000 件上限を回避する動的二分窓走査で候補 PR 番号一覧を収集する。
+ */
+async function collectCandidatesForQuery(params: {
+  client: Pick<GitHubApiClient, "searchIssuesDetailed">;
+  buildQuery: (sinceIso: string, untilIso: string) => string;
+  sortField: "updated" | "created";
+  since: Date;
+  until: Date;
+  fetchLimit: number;
+  pageSize: number;
+  maxPagesPerWindow: number;
+  seen: Set<number>;
+  out: SearchCandidate[];
+}): Promise<void> {
+  const {
+    client,
+    buildQuery,
+    sortField,
+    since,
+    until,
+    fetchLimit,
+    pageSize,
+    maxPagesPerWindow,
+    seen,
+    out,
+  } = params;
+
+  if (since.getTime() >= until.getTime() || fetchLimit <= 0) {
+    return;
+  }
+
+  const stack: WindowSlice[] = [{ since, until }];
+  const windowCapacity = maxPagesPerWindow * pageSize;
+
+  while (stack.length > 0 && out.length < fetchLimit) {
+    const slice = stack.pop();
+    if (!slice || slice.since.getTime() >= slice.until.getTime()) {
+      continue;
+    }
+
+    const query = buildQuery(slice.since.toISOString(), slice.until.toISOString());
+    const firstPage = await client.searchIssuesDetailed(
+      query,
+      sortField,
+      "desc",
+      pageSize,
+      1,
+      null,
+    );
+
+    if (firstPage.totalCount === 0) {
+      continue;
+    }
+
+    if (firstPage.totalCount > windowCapacity) {
+      const durationMs = slice.until.getTime() - slice.since.getTime();
+      if (durationMs <= 1000) {
+        throw new Error(
+          `期間 (${slice.since.toISOString()} .. ${slice.until.toISOString()}) の候補 PR 件数が Search API 上限 (${windowCapacity} 件) を超過しており、これ以上分割できません。`,
+        );
+      }
+      const mid = new Date(Math.floor((slice.since.getTime() + slice.until.getTime()) / 2));
+      stack.push({ since: slice.since, until: mid });
+      stack.push({ since: mid, until: slice.until });
+      continue;
+    }
+
+    if (!firstPage.items || firstPage.items.length === 0) {
+      continue;
+    }
+
+    const consume = (
+      items: ReadonlyArray<{
+        number: number;
+        title: string;
+        updated_at: string;
+        pull_request?: { merged_at?: string | null };
+      }>,
+    ): boolean => {
+      for (const item of items) {
+        if (out.length >= fetchLimit) {
+          return false;
+        }
+        if (!isNewPackageTitle(item.title)) {
+          continue;
+        }
+        if (seen.has(item.number)) {
+          continue;
+        }
+        seen.add(item.number);
+        const sortTs = Date.parse(item.pull_request?.merged_at ?? item.updated_at);
+        out.push({
+          number: item.number,
+          title: item.title,
+          sortKeyMs: Number.isFinite(sortTs) ? sortTs : 0,
+        });
+      }
+      return out.length < fetchLimit;
+    };
+
+    if (!consume(firstPage.items)) {
+      break;
+    }
+
+    let hasNextPage = Boolean(
+      firstPage.pageInfo ? firstPage.pageInfo.hasNextPage : firstPage.items.length >= pageSize,
+    );
+    let cursor = firstPage.pageInfo?.endCursor ?? null;
+    let page = 2;
+
+    while (hasNextPage && page <= maxPagesPerWindow && out.length < fetchLimit) {
+      const res = await client.searchIssuesDetailed(
+        query,
+        sortField,
+        "desc",
+        pageSize,
+        page,
+        cursor,
+      );
+      if (!res.items || res.items.length === 0) {
+        break;
+      }
+      if (!consume(res.items)) {
+        break;
+      }
+      hasNextPage = Boolean(res.pageInfo ? res.pageInfo.hasNextPage : res.items.length >= pageSize);
+      cursor = res.pageInfo?.endCursor ?? null;
+      page++;
+    }
+
+    if (hasNextPage && page > maxPagesPerWindow) {
+      const durationMs = slice.until.getTime() - slice.since.getTime();
+      if (durationMs <= 1000) {
+        throw new Error(
+          `期間 (${slice.since.toISOString()} .. ${slice.until.toISOString()}) の候補 PR 件数が Search API 上限を超過しており、これ以上分割できません。`,
+        );
+      }
+      const mid = new Date(Math.floor((slice.since.getTime() + slice.until.getTime()) / 2));
+      stack.push({ since: slice.since, until: mid });
+      stack.push({ since: mid, until: slice.until });
+    }
+  }
+}
+
+/**
+ * 状態・期間・キャッシュ・予算制御を組み合わせて差し戻し指摘コーパスを増分収集する。
+ */
+export async function orchestrateFeedbackCollection(
+  params: OrchestrateFeedbackCollectionParams,
+): Promise<OrchestrateFeedbackCollectionResult> {
+  const {
+    client,
+    repository,
+    states,
+    lookbackDays,
+    fetchBudget,
+    fetchLimit,
+    existingEntries,
+    now,
+    batchSize = DEFAULT_FEEDBACK_BATCH_SIZE,
+    blobBatchSize = DEFAULT_BLOB_BATCH_SIZE,
+    pageSize = 100,
+    maxPagesPerWindow = 10,
+    log = () => {},
+  } = params;
+
+  const cacheMap = indexReviewFeedbackCorpus(existingEntries);
+
+  // fetchBudget === 0 はオフライン集計（キャッシュ再利用のみ）モード
+  if (fetchBudget <= 0) {
+    return {
+      entries: [...cacheMap.values()].sort((a, b) => b.number - a.number),
+      stats: {
+        candidateCount: 0,
+        reusedFromCacheCount: cacheMap.size,
+        fetchedCount: 0,
+        skippedByBudgetCount: 0,
+        newFeedbackCount: 0,
+        newNoFeedbackCount: 0,
+        blobFetchCount: 0,
+      },
+    };
+  }
+
+  const { owner, name } = parseRepository(repository);
+  const since = new Date(now.getTime() - lookbackDays * DAY_MS);
+  const until = now;
+
+  // 1. 候補 PR を状態ごとに検索
+  const candidates: SearchCandidate[] = [];
+  const seenNumbers = new Set<number>();
+
+  for (const state of states) {
+    if (candidates.length >= fetchLimit) {
+      break;
+    }
+    if (state === "merged") {
+      await collectCandidatesForQuery({
+        client,
+        buildQuery: (sinceIso, untilIso) =>
+          buildFeedbackSearchQueryParts({
+            repository,
+            state: "merged",
+            sinceIso,
+            untilIso,
+          }).join(" "),
+        sortField: "updated",
+        since,
+        until,
+        fetchLimit,
+        pageSize,
+        maxPagesPerWindow,
+        seen: seenNumbers,
+        out: candidates,
+      });
+    } else {
+      // OPEN / CLOSED は差し戻しラベルまたは CHANGES_REQUESTED レビューで高純度検索
+      for (const triggerQualifier of ["needs-author-feedback", "changes-requested"] as const) {
+        if (candidates.length >= fetchLimit) {
+          break;
+        }
+        await collectCandidatesForQuery({
+          client,
+          buildQuery: (sinceIso, untilIso) =>
+            buildFeedbackSearchQueryParts({
+              repository,
+              state,
+              sinceIso,
+              untilIso,
+              triggerQualifier,
+            }).join(" "),
+          sortField: "updated",
+          since,
+          until,
+          fetchLimit,
+          pageSize,
+          maxPagesPerWindow,
+          seen: seenNumbers,
+          out: candidates,
+        });
+      }
+    }
+  }
+
+  // 新しい候補から優先的に予算を配分する
+  candidates.sort((a, b) => b.sortKeyMs - a.sortKeyMs || b.number - a.number);
+
+  let reusedFromCacheCount = 0;
+  const toFetchNumbers: number[] = [];
+
+  for (const candidate of candidates) {
+    const cached = cacheMap.get(candidate.number);
+    if (
+      cached &&
+      cached.repository === repository &&
+      canReuseCachedFeedbackEntry(cached, CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION)
+    ) {
+      reusedFromCacheCount++;
+      continue;
+    }
+    toFetchNumbers.push(candidate.number);
+  }
+
+  const budgetedNumbers = toFetchNumbers.slice(0, fetchBudget);
+  const skippedByBudgetCount = Math.max(0, toFetchNumbers.length - budgetedNumbers.length);
+
+  log(
+    `[Feedback Crawler] 候補 ${candidates.length} 件 / キャッシュ再利用 ${reusedFromCacheCount} 件 / 新規取得対象 ${budgetedNumbers.length} 件 (予算超過スキップ ${skippedByBudgetCount} 件)`,
+  );
+
+  if (budgetedNumbers.length === 0) {
+    return {
+      entries: [...cacheMap.values()].sort((a, b) => b.number - a.number),
+      stats: {
+        candidateCount: candidates.length,
+        reusedFromCacheCount,
+        fetchedCount: 0,
+        skippedByBudgetCount,
+        newFeedbackCount: 0,
+        newNoFeedbackCount: 0,
+        blobFetchCount: 0,
+      },
+    };
+  }
+
+  // 2. GraphQL alias バッチで詳細（reviews / comments / timelineItems / files）を取得
+  const fetchedDetails = await fetchPullRequestFeedbackDetails({
+    graphqlFn: (query, variables) => client.graphql(query, variables),
+    owner,
+    name,
+    repository,
+    prNumbers: budgetedNumbers,
+    batchSize,
+  });
+
+  // 3. 採用候補（差し戻しトリガー + 人間指摘あり）のみ抽出し、.installer.yaml の Blob と作者生涯マージ数をバッチ照会
+  const blobTargets: BlobFetchTarget[] = [];
+  const manifestPathsByPr = new Map<number, string[]>();
+  const eligibleAuthorLogins = new Set<string>();
+
+  for (const detail of fetchedDetails) {
+    const { input, manifestOid } = detail;
+    if (!isNewPackageTitle(input.title)) {
+      continue;
+    }
+    const { triggers } = detectFeedbackTriggers({
+      prAuthorLogin: input.author?.login,
+      currentLabels: input.currentLabels,
+      labeledEvents: input.labeledEvents,
+      reviews: input.reviews,
+    });
+    if (triggers.length === 0) {
+      continue;
+    }
+    const feedbackItems = extractReviewFeedbackItems({
+      prAuthorLogin: input.author?.login,
+      reviews: input.reviews,
+      comments: input.comments,
+    });
+    if (feedbackItems.length === 0) {
+      continue;
+    }
+
+    const installerPaths = selectInstallerManifestPaths(input.filePaths);
+    manifestPathsByPr.set(input.number, installerPaths);
+    if (manifestOid) {
+      for (const path of installerPaths) {
+        blobTargets.push({
+          key: `${input.number}:${path}`,
+          oid: manifestOid,
+          path,
+        });
+      }
+    }
+
+    const authorLogin = input.author?.login?.trim();
+    if (
+      authorLogin &&
+      !isPrivilegedOrBotAuthor({
+        author: authorLogin,
+        authorType: input.author?.__typename ?? undefined,
+        authorAssociation: input.authorAssociation ?? undefined,
+      })
+    ) {
+      eligibleAuthorLogins.add(authorLogin);
+    }
+  }
+
+  const blobMap =
+    blobTargets.length > 0
+      ? await fetchInstallerManifestBlobs({
+          graphqlFn: (query, variables) => client.graphql(query, variables),
+          owner,
+          name,
+          targets: blobTargets,
+          batchSize: blobBatchSize,
+        })
+      : new Map<string, string>();
+
+  const authorMergedCounts =
+    eligibleAuthorLogins.size > 0
+      ? await resolveAuthorMergedCounts(repository, [...eligibleAuthorLogins], (query) =>
+          client.graphql<Record<string, { issueCount?: number } | undefined>>(query),
+        )
+      : new Map<string, number>();
+
+  // 4. コーパスエントリ構築 & キャッシュへ反映
+  const collectedAt = now.toISOString();
+  let newFeedbackCount = 0;
+  let newNoFeedbackCount = 0;
+
+  for (const detail of fetchedDetails) {
+    const { input } = detail;
+    const installerPaths = manifestPathsByPr.get(input.number) ?? [];
+    const installer: InstallerManifestMetadata = parseInstallerManifestMetadata(
+      installerPaths.map((path) => ({
+        path,
+        text: blobMap.get(`${input.number}:${path}`),
+      })),
+    );
+
+    let isFirstTimeAuthor: boolean | undefined;
+    let authorMergedCount: number | undefined;
+    const authorLogin = input.author?.login?.trim();
+    if (authorLogin) {
+      if (
+        isPrivilegedOrBotAuthor({
+          author: authorLogin,
+          authorType: input.author?.__typename ?? undefined,
+          authorAssociation: input.authorAssociation ?? undefined,
+        })
+      ) {
+        isFirstTimeAuthor = false;
+      } else if (authorMergedCounts.has(authorLogin)) {
+        authorMergedCount = authorMergedCounts.get(authorLogin);
+        if (authorMergedCount !== undefined) {
+          isFirstTimeAuthor =
+            input.state === "MERGED" ? authorMergedCount <= 1 : authorMergedCount === 0;
+        }
+      }
+    }
+
+    const entry = buildReviewFeedbackEntry({
+      pr: input,
+      installer,
+      isFirstTimeAuthor,
+      authorMergedCount,
+      collectedAt,
+    });
+
+    cacheMap.set(entry.number, entry);
+    if (entry.entryType === "feedback") {
+      newFeedbackCount++;
+    } else {
+      newNoFeedbackCount++;
+    }
+  }
+
+  return {
+    entries: [...cacheMap.values()].sort((a, b) => b.number - a.number),
+    stats: {
+      candidateCount: candidates.length,
+      reusedFromCacheCount,
+      fetchedCount: fetchedDetails.length,
+      skippedByBudgetCount,
+      newFeedbackCount,
+      newNoFeedbackCount,
+      blobFetchCount: blobTargets.length,
+    },
+  };
+}

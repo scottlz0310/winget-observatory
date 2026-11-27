@@ -1,0 +1,81 @@
+name: Collect Review Feedback
+
+# 初回提出（New package:）PR のメンテナ差し戻し指摘を GraphQL で収集・分類し、
+# LLM 読込・ナレッジ化向けの JSONL / Markdown を Dropbox App folder (/data/) へ保存する独立ワークフロー。
+# ダッシュボード（GitHub Pages / observe.yml）および main ブランチへの git push には一切干渉しない。
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "対象リポジトリ (owner/repo)"
+        required: false
+        default: "microsoft/winget-pkgs"
+      lookback_days:
+        description: "遡及日数 (1-365)"
+        required: false
+        default: "90"
+      states:
+        description: "収集対象 PR 状態（merged / open / closed のカンマ区切り）"
+        required: false
+        default: "merged"
+      fetch_budget:
+        description: "1 回の実行で新規詳細取得する PR 上限（0 でキャッシュ集計のみ）"
+        required: false
+        default: "200"
+
+concurrency:
+  group: collect-review-feedback
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    name: Collect Review Feedback & Save to Dropbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download existing review feedback corpus from Dropbox
+        id: download_dropbox
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+        run: bun run scripts/sync-dropbox.ts --direction download --scope feedback
+
+      - name: Run collect-review-feedback CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINGET_REPOSITORY: ${{ inputs.repository || 'microsoft/winget-pkgs' }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || '90' }}
+          STATES: ${{ inputs.states || 'merged' }}
+          FETCH_BUDGET: ${{ inputs.fetch_budget || '200' }}
+        run: |
+          bun run src/cli/collect-review-feedback.ts \
+            --repo "$WINGET_REPOSITORY" \
+            --lookback-days "$LOOKBACK_DAYS" \
+            --states "$STATES" \
+            --fetch-budget "$FETCH_BUDGET" \
+            --output-path "data/review-feedback.jsonl" \
+            --report-path "data/review-feedback-report.md"
+
+      - name: Upload review feedback corpus and report to Dropbox
+        if: always() && steps.download_dropbox.outcome == 'success'
+        env:
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+        run: bun run scripts/sync-dropbox.ts --direction upload --scope feedback

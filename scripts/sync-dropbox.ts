@@ -5,27 +5,48 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join, resolve } from "node:path";
 import { DROPBOX_ROOT, DropboxClient } from "./lib/dropbox";
 
+export type SyncScope = "observe" | "feedback" | "all";
+
 export interface SyncOptions {
   direction: "upload" | "download";
   dataDir: string;
   dryRun: boolean;
   allowSkip: boolean;
+  scope: SyncScope;
 }
 
-const TARGET_FILES = [
+export const OBSERVE_TARGET_FILES = [
   "progress-history.csv",
   "latest-progress.json",
   "depths-history.jsonl",
   "latest-depths.json",
   "forecast-history.jsonl",
   "merged-samples.jsonl",
-];
+] as const;
+
+export const FEEDBACK_TARGET_FILES = [
+  "review-feedback.jsonl",
+  "review-feedback-report.md",
+] as const;
+
+const TARGET_FILES: readonly string[] = OBSERVE_TARGET_FILES;
+
+export function resolveTargetFiles(scope: SyncScope): string[] {
+  if (scope === "feedback") {
+    return [...FEEDBACK_TARGET_FILES];
+  }
+  if (scope === "all") {
+    return [...OBSERVE_TARGET_FILES, ...FEEDBACK_TARGET_FILES];
+  }
+  return [...OBSERVE_TARGET_FILES];
+}
 
 export function parseArgs(args: string[], cwd: string = process.cwd()): SyncOptions {
   let direction: "upload" | "download" | undefined;
   let dataDir = resolve(cwd, "data");
   let dryRun = false;
   let allowSkip = false;
+  let scope: SyncScope = "observe";
 
   const requireValue = (i: number, name: string): string => {
     const value = args[i + 1];
@@ -45,6 +66,12 @@ export function parseArgs(args: string[], cwd: string = process.cwd()): SyncOpti
       direction = val;
     } else if (arg === "--data-dir") {
       dataDir = resolve(cwd, requireValue(i++, arg));
+    } else if (arg === "--scope") {
+      const val = requireValue(i++, arg);
+      if (val !== "observe" && val !== "feedback" && val !== "all") {
+        throw new Error(`無効な scope: ${val}（observe, feedback, all のいずれかを指定）`);
+      }
+      scope = val;
     } else if (arg === "--dry-run") {
       dryRun = true;
     } else if (arg === "--allow-skip") {
@@ -59,7 +86,7 @@ export function parseArgs(args: string[], cwd: string = process.cwd()): SyncOpti
     throw new Error("--direction オプション（upload または download）が必要です");
   }
 
-  return { direction, dataDir, dryRun, allowSkip };
+  return { direction, dataDir, dryRun, allowSkip, scope };
 }
 
 export interface DownloadSummary {
@@ -73,7 +100,7 @@ export interface DownloadSummary {
 export async function downloadMetricsFiles(
   client: Pick<DropboxClient, "download">,
   dataDir: string,
-  targetFiles: string[] = TARGET_FILES,
+  targetFiles: readonly string[] = TARGET_FILES,
   log: (msg: string) => void = console.log,
 ): Promise<DownloadSummary> {
   if (!existsSync(dataDir)) {
@@ -107,7 +134,10 @@ export async function downloadMetricsFiles(
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  console.log(`[Dropbox Sync] モード: ${options.direction}, 対象ディレクトリ: ${options.dataDir}`);
+  const targetFiles = resolveTargetFiles(options.scope);
+  console.log(
+    `[Dropbox Sync] モード: ${options.direction}, スコープ: ${options.scope}, 対象ディレクトリ: ${options.dataDir}`,
+  );
 
   const appKey = process.env.DROPBOX_APP_KEY;
   const appSecret = process.env.DROPBOX_APP_SECRET;
@@ -141,7 +171,7 @@ async function main(): Promise<void> {
     }
 
     const availableFiles = readdirSync(options.dataDir);
-    const filesToUpload = TARGET_FILES.filter((f) => availableFiles.includes(f));
+    const filesToUpload = targetFiles.filter((f) => availableFiles.includes(f));
 
     if (filesToUpload.length === 0) {
       console.log("[Dropbox Sync] アップロード対象ファイルがありません。");
@@ -166,13 +196,13 @@ async function main(): Promise<void> {
   } else {
     // download
     if (options.dryRun) {
-      for (const filename of TARGET_FILES) {
+      for (const filename of targetFiles) {
         console.log(
           `[DryRun] ダウンロード予定: ${DROPBOX_ROOT}${filename} -> ${join(options.dataDir, filename)}`,
         );
       }
     } else {
-      await downloadMetricsFiles(client, options.dataDir, TARGET_FILES, console.log);
+      await downloadMetricsFiles(client, options.dataDir, targetFiles, console.log);
     }
   }
 
