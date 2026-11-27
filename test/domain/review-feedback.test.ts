@@ -5,6 +5,7 @@ import {
   CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
   canReuseCachedFeedbackEntry,
   categorizeFeedback,
+  classifyFeedbackCommentSeverity,
   detectFeedbackTriggers,
   extractAuthorReplies,
   extractReviewFeedbackItems,
@@ -12,11 +13,18 @@ import {
   hasEmbeddedImage,
   indexReviewFeedbackCorpus,
   isAuthorNoiseComment,
+  isAutomaticValidationNoiseComment,
+  isFalsePositiveNoteOnlyComment,
+  isFeedbackNoiseComment,
   isNewPackageTitle,
   isPolicyCommandOnlyComment,
+  isStaleCloseCommandOnlyComment,
+  isVerifyMemoOnlyComment,
+  isWingetbotCommandOnlyComment,
   parseInstallerManifestMetadata,
   parseReviewFeedbackCorpus,
   type RawPrFeedbackInput,
+  reclassifyReviewFeedbackCorpus,
   selectInstallerManifestPaths,
   serializeReviewFeedbackCorpus,
 } from "../../src/domain/review-feedback";
@@ -126,12 +134,130 @@ describe("review-feedback domain logic", () => {
   test.each([
     ['@microsoft-github-policy-service agree company="Acme"', true],
     ["agree", true],
+    ["bump", true],
+    ["bump!", true],
+    ["I have read the CLA Document and I hereby sign the CLA.", true],
+    ["> Contributor\n@microsoft-github-policy-service agree", true],
+    [
+      "The current `license/cla` check reports that all CLA requirements are met. Please reconcile the stale `Needs-CLA` label. @microsoft-github-policy-service agree",
+      true,
+    ],
     ["@wingetbot run", true],
     ["[Policy] Needs-Author-Feedback", true],
     ["Fixed VCRUNTIME140.dll by static linking", false],
+    ["> Quoted feedback\nFixed by adding PrivacyUrl.", false],
     ["", true],
   ])("isAuthorNoiseComment(%j) => %s", (body, expected) => {
     expect(isAuthorNoiseComment(body)).toBe(expected);
+  });
+
+  test.each([
+    ["@wingetbot waivers Add Validation-Domain", true],
+    ["@wingetbot waivers add Policy-Test-1.2", true],
+    ["@wingetbot run - inconsistent label state", true],
+    ["@wingetbot installationmetadata exe add bws.exe --version", true],
+    ["@wingetbot waivers Add Policy-Test-1.2\nPlease also fix PrivacyUrl.", false],
+    ["Please add a privacy policy.", false],
+  ])("isWingetbotCommandOnlyComment(%j) => %s", (body, expected) => {
+    expect(isWingetbotCommandOnlyComment(body)).toBe(expected);
+  });
+
+  test.each([
+    ['Verify: <img width="900" src="https://example.com/a.png" />', true],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nPrivacy Policy: https://example.com/privacy',
+      true,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nEdit: Privacy Poilcy: https://example.com/privacy',
+      true,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nInternet Translation: <img src="https://example.com/b.png" />',
+      true,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nIn-App Purchase: Processed by Stripe.\nPrivacy Policy: https://example.com/privacy',
+      true,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nPrivacy Policy baked into application.\nEdit: Registry: <img src="https://example.com/b.png" />',
+      true,
+    ],
+    [
+      '<img src="https://example.com/a.png" /> Internet Translation: <img src="https://example.com/b.png" />',
+      true,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nHi @author, This package seems like it sends data off of the user\'s device. Does it have a privacy policy?',
+      false,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nIt appears that the shortcut and Registry data are in Turkish.',
+      false,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nInternet Translation: <img src="https://example.com/b.png" />\nShould `Microsoft.Office` be a dependency?',
+      false,
+    ],
+    [
+      'Verify <img src="https://example.com/a.png" /> The application spawned off of the VM screen.',
+      false,
+    ],
+  ])("isVerifyMemoOnlyComment(%j) => %s", (body, expected) => {
+    expect(isVerifyMemoOnlyComment(body)).toBe(expected);
+  });
+
+  test.each([
+    ["Close with reason: Stale;", true],
+    ["Close with reason: Stale", true],
+    ["Close with reason: Policy violation; scripted application is not allowed.", false],
+  ])("isStaleCloseCommandOnlyComment(%j) => %s", (body, expected) => {
+    expect(isStaleCloseCommandOnlyComment(body)).toBe(expected);
+  });
+
+  test.each([
+    ["`Adult Reference or Theme` - False Positive match with explicit in Description.", true],
+    ["`Adult Reference or Theme` - Please remove offensive wording.", false],
+  ])("isFalsePositiveNoteOnlyComment(%j) => %s", (body, expected) => {
+    expect(isFalsePositiveNoteOnlyComment(body)).toBe(expected);
+  });
+
+  test.each([
+    [
+      "Automatic Validation ended with:\n> [Policy-Test-2.7](https://example.com) `Algo Speak - Potential adult content` (Deterministic automation)",
+      true,
+    ],
+    [
+      "Automatic Validation ended with:\nEdit: My automation isn't getting a valid output from the pipeline artifacts.",
+      true,
+    ],
+    [
+      "Automatic Validation ended with:\n> Executable wave.exe returned exit code: -1073741515 | C0000135 | STATUS_DLL_NOT_FOUND",
+      false,
+    ],
+    [
+      "Automatic Validation ended with:\n> Specified hash doesn't match. Actual hash: 'AAA' Expected hash: 'BBB'",
+      false,
+    ],
+    ["Automatic Validation ended with:\n> Installation didn't complete within the timeout", false],
+  ])("isAutomaticValidationNoiseComment(%j) => %s", (body, expected) => {
+    expect(isAutomaticValidationNoiseComment(body)).toBe(expected);
+  });
+
+  test("classifyFeedbackCommentSeverity は非ブロッキング助言とブロッキング差し戻しを区別する", () => {
+    expect(
+      classifyFeedbackCommentSeverity(
+        "Thanks for contributing! No blockers have been found for this PR. One optional note: binary is unsigned.",
+      ),
+    ).toBe("non-blocking");
+    expect(
+      classifyFeedbackCommentSeverity(
+        "Required: On a clean Windows machine, the app fails to start.",
+      ),
+    ).toBe("blocking");
+    expect(isFeedbackNoiseComment("@wingetbot waivers Add Policy-Test-1.2")).toBe(true);
+    expect(isFeedbackNoiseComment("Required: add PrivacyUrl.")).toBe(false);
   });
 
   test.each([
@@ -313,27 +439,37 @@ describe("review-feedback domain logic", () => {
 
   test.each([
     {
+      name: "プライバシーポリシー・データ開示",
+      body: "This package sends data off of the user's device. Does it have a privacy policy / PrivacyUrl?",
+      expected: ["privacy-policy"],
+    },
+    {
       name: "DLL / ランタイム欠損",
-      body: "App fails because VCRUNTIME140.dll is missing on clean Windows.",
+      body: "App fails because VCRUNTIME140.dll is missing on clean Windows (STATUS_DLL_NOT_FOUND).",
       expected: ["dll-runtime"],
     },
     {
-      name: "起動・コマンド動作不良",
-      body: "PortableCommandAlias crashes with non-zero exit code on launch.",
+      name: "起動・コマンド・VM 動作不良",
+      body: "PortableCommandAlias crashes with non-zero exit code on launch due to OpenGL 1.1.",
       expected: ["launch-command"],
     },
     {
-      name: "メタデータ・URL 不備",
-      body: "PrivacyUrl returns 404 and ReleaseNotesUrl has broken link.",
+      name: "メタデータ・URL・ライセンス不備",
+      body: "ReleaseNotesUrl returns 404 and LicenseUrl has broken link.",
       expected: ["metadata-url"],
     },
     {
-      name: "マニフェスト構造・インストーラー種別",
-      body: "Please set NestedInstallerType and UpgradeBehavior for this InstallerType.",
+      name: "マニフェスト構造・インストーラー・ARP 整合",
+      body: "Please set NestedInstallerType, UpgradeBehavior, and match ARP DisplayVersion in registry.",
       expected: ["manifest-installer"],
     },
     {
-      name: "セキュリティ / 署名 / SmartScreen",
+      name: "UI 言語・Locale 不一致",
+      body: "The app interface is in Chinese while manifest declares en-US; set PackageLocale: zh-CN.",
+      expected: ["locale-language"],
+    },
+    {
+      name: "セキュリティ / 署名 / ポリシー制約",
       body: "Flagged by SmartScreen and VirusTotal because binary is unsigned.",
       expected: ["security-signing"],
     },
@@ -589,9 +725,231 @@ describe("review-feedback domain logic", () => {
 
     const md = formatReviewFeedbackMarkdown({ summary, records: [rec] });
     expect(md).toContain("# microsoft/winget-pkgs 初回提出 PR メンテナ差し戻し指摘レポート");
+    expect(md).toContain("ブロッキング差し戻しあり **1 件** / 非ブロッキング助言のみ **0 件**");
     expect(md).toContain("DLL / ランタイム欠損");
     expect(md).toContain("#445661");
     expect(md).toContain("VCRUNTIME140.dll");
     expect(md).toContain("[画像添付あり]");
+  });
+
+  test("CLOSED 直接却下トリガー・noise-only-feedback・blockingOnly・オフライン再分類が正しく動作する", () => {
+    const emptyInstaller = parseInstallerManifestMetadata([]);
+
+    // 1. CLOSED PR で Needs-Author-Feedback なしでも Scripted-Application + COLLABORATOR コメントで捕捉
+    const closedRejected = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 436234,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-10T00:00:00Z",
+        currentLabels: ["New-Package", "Scripted-Application"],
+        labeledEvents: [{ label: "Scripted-Application", createdAt: "2026-11-09T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            authorAssociation: "COLLABORATOR",
+            body: "Unfortunately, we're not currently accepting scripted applications.",
+            createdAt: "2026-11-09T01:00:00Z",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            authorAssociation: "COLLABORATOR",
+            body: "Close with reason: Stale;",
+            createdAt: "2026-11-10T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedRejected.entryType).toBe("feedback");
+    if (closedRejected.entryType === "feedback") {
+      expect(closedRejected.triggers).toEqual([
+        "closed-rejection-label",
+        "closed-maintainer-feedback",
+      ]);
+      expect(closedRejected.feedbackItems).toHaveLength(1);
+      expect(closedRejected.categories).toEqual(["security-signing"]);
+      expect(closedRejected.hasBlockingFeedback).toBe(true);
+    }
+
+    // 2. Verify スクショ単体 + waivers 単体のみの PR は noise-only-feedback として除外される
+    const noiseOnly = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 448826,
+        comments: [
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            authorAssociation: "COLLABORATOR",
+            body: 'Verify: <img src="https://example.com/x.png" /> Privacy Policy: https://example.com/privacy',
+            createdAt: "2026-11-24T00:00:00Z",
+          },
+          {
+            author: { __typename: "User", login: "stephengillie" },
+            authorAssociation: "COLLABORATOR",
+            body: "@wingetbot waivers Add Validation-Domain",
+            createdAt: "2026-11-24T01:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(noiseOnly.entryType).toBe("no-feedback");
+    if (noiseOnly.entryType === "no-feedback") {
+      expect(noiseOnly.skipReason).toBe("noise-only-feedback");
+    }
+
+    // 3. 非ブロッキング助言のみのレコードに対する blockingOnly フィルタとサマリー集計
+    const nonBlockingEntry = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 446301,
+        comments: [
+          {
+            author: { __typename: "User", login: "taras-janea" },
+            authorAssociation: "NONE",
+            body: "Thanks for contributing. No blockers have been found for this PR. Optional note: binary is unsigned.",
+            createdAt: "2026-11-24T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    }) as ReviewFeedbackRecord;
+    expect(nonBlockingEntry.hasBlockingFeedback).toBe(false);
+    expect(filterReviewFeedbackRecords([nonBlockingEntry], { blockingOnly: true })).toHaveLength(0);
+    const nbSummary = summarizeReviewFeedback({
+      repository: "microsoft/winget-pkgs",
+      records: [nonBlockingEntry],
+      generatedAt: "2026-11-27T06:00:00.000Z",
+    });
+    expect(nbSummary.blockingPrCount).toBe(0);
+    expect(nbSummary.nonBlockingOnlyPrCount).toBe(1);
+    expect(
+      formatReviewFeedbackMarkdown({ summary: nbSummary, records: [nonBlockingEntry] }),
+    ).toContain("[非ブロッキング助言]");
+
+    // 4. オフライン再分類（reclassifyReviewFeedbackCorpus）の v1 → v2 移行安全性
+    const v1NoiseFeedback: ReviewFeedbackRecord = {
+      ...(nonBlockingEntry as ReviewFeedbackRecord),
+      schemaVersion: 1,
+      number: 900001,
+      feedbackItems: [
+        {
+          source: "issue_comment",
+          author: "stephengillie",
+          authorAssociation: "COLLABORATOR",
+          createdAt: "2026-11-20T00:00:00Z",
+          body: 'Verify: <img src="https://example.com/a.png" />',
+          hasImage: true,
+        },
+      ],
+      authorReplies: [
+        {
+          author: "dev",
+          createdAt: "2026-11-21T00:00:00Z",
+          body: "bump",
+        },
+      ],
+      categories: ["uncategorized"],
+      categoryMatches: [{ category: "uncategorized", matchedKeywords: [] }],
+    };
+    const v1MixedFeedback: ReviewFeedbackRecord = {
+      ...(nonBlockingEntry as ReviewFeedbackRecord),
+      schemaVersion: 1,
+      number: 900002,
+      feedbackItems: [
+        {
+          source: "issue_comment",
+          author: "stephengillie",
+          authorAssociation: "COLLABORATOR",
+          createdAt: "2026-11-20T00:00:00Z",
+          body: "@wingetbot waivers Add Policy-Test-1.2",
+          hasImage: false,
+        },
+        {
+          source: "issue_comment",
+          author: "denelon",
+          authorAssociation: "COLLABORATOR",
+          createdAt: "2026-11-21T00:00:00Z",
+          body: "Please add a privacy policy / PrivacyUrl.",
+          hasImage: false,
+        },
+      ],
+      authorReplies: [
+        {
+          author: "dev",
+          createdAt: "2026-11-21T01:00:00Z",
+          body: "bump",
+        },
+        {
+          author: "dev",
+          createdAt: "2026-11-21T02:00:00Z",
+          body: "Added PrivacyUrl in commit abc.",
+        },
+      ],
+      categories: ["metadata-url"],
+      categoryMatches: [{ category: "metadata-url", matchedKeywords: ["PrivacyUrl"] }],
+    };
+    const v1MergedSkip: ReviewFeedbackCorpusEntry = {
+      schemaVersion: 1,
+      entryType: "no-feedback",
+      repository: "microsoft/winget-pkgs",
+      number: 900003,
+      title: "New package: Clean.Merged 1.0",
+      state: "MERGED",
+      createdAt: "2026-11-01T00:00:00Z",
+      updatedAt: "2026-11-02T00:00:00Z",
+      mergedAt: "2026-11-02T00:00:00Z",
+      closedAt: "2026-11-02T00:00:00Z",
+      skipReason: "no-rejection-trigger",
+      collectedAt: "2026-11-27T00:00:00Z",
+    };
+    const v1ClosedSkip: ReviewFeedbackCorpusEntry = {
+      ...v1MergedSkip,
+      number: 900004,
+      title: "New package: Rejected.Closed 1.0",
+      state: "CLOSED",
+      mergedAt: null,
+    };
+
+    const reclassified = reclassifyReviewFeedbackCorpus([
+      v1NoiseFeedback,
+      v1MixedFeedback,
+      v1MergedSkip,
+      v1ClosedSkip,
+    ]);
+
+    expect(reclassified.stats).toEqual({
+      totalProcessed: 4,
+      reclassifiedFeedbackCount: 1,
+      demotedToNoiseOnlyCount: 1,
+      upgradedMergedSkippedCount: 1,
+      keptLegacySkippedCount: 1,
+      removedFeedbackCommentsCount: 2,
+      removedAuthorRepliesCount: 2,
+    });
+
+    const byNum = new Map(reclassified.entries.map((e) => [e.number, e]));
+    const e1 = byNum.get(900001);
+    expect(e1?.entryType).toBe("no-feedback");
+    if (e1?.entryType === "no-feedback") {
+      expect(e1.skipReason).toBe("noise-only-feedback");
+      expect(e1.schemaVersion).toBe(CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION);
+    }
+
+    const e2 = byNum.get(900002);
+    expect(e2?.entryType).toBe("feedback");
+    if (e2?.entryType === "feedback") {
+      expect(e2.schemaVersion).toBe(CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION);
+      expect(e2.feedbackItems).toHaveLength(1);
+      expect(e2.authorReplies).toHaveLength(1);
+      expect(e2.categories).toEqual(["privacy-policy"]);
+      expect(e2.hasBlockingFeedback).toBe(true);
+    }
+
+    // MERGED スキップは v2 へ安全昇格、CLOSED 旧スキップは新トリガー再評価のため v1 維持
+    expect(byNum.get(900003)?.schemaVersion).toBe(CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION);
+    expect(byNum.get(900004)?.schemaVersion).toBe(1);
   });
 });

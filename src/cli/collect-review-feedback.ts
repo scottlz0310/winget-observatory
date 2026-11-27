@@ -11,6 +11,7 @@ import { formatJstDateTime } from "../domain/formatters";
 import {
   filterReviewFeedbackRecords,
   parseReviewFeedbackCorpus,
+  reclassifyReviewFeedbackCorpus,
   serializeReviewFeedbackCorpus,
 } from "../domain/review-feedback";
 import {
@@ -80,6 +81,8 @@ export function parseArgs(argv: string[]): CollectReviewFeedbackOptions {
   let portableOnly = false;
   let privilegedOnly = false;
   let firstTimerOnly = false;
+  let blockingOnly = false;
+  let reclassify = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -109,6 +112,10 @@ export function parseArgs(argv: string[]): CollectReviewFeedbackOptions {
       privilegedOnly = true;
     } else if (arg === "--first-timer-only") {
       firstTimerOnly = true;
+    } else if (arg === "--blocking-only") {
+      blockingOnly = true;
+    } else if (arg === "--reclassify") {
+      reclassify = true;
     } else if (arg === "--no-report") {
       noReport = true;
     } else if (arg === "--no-write") {
@@ -136,6 +143,8 @@ export function parseArgs(argv: string[]): CollectReviewFeedbackOptions {
     portableOnly,
     privilegedOnly,
     firstTimerOnly,
+    blockingOnly,
+    reclassify,
   };
 }
 
@@ -178,13 +187,22 @@ export async function runCollectReviewFeedback(
     ? resolve(process.cwd(), options.reportPath)
     : resolve(dirname(resolvedOutputPath), "review-feedback-report.md");
 
-  const existingEntries = readFeedbackCorpus(resolvedOutputPath);
+  const rawExistingEntries = readFeedbackCorpus(resolvedOutputPath);
   const progressLog = options.asJson ? () => {} : log;
 
   progressLog(`=== ${options.repository} 初回提出 PR 差し戻し指摘収集 ===`);
   progressLog(
     `対象状態: ${options.states.join(", ")} / 遡及期間: 過去 ${options.lookbackDays} 日 / 取得予算: ${options.fetchBudget} 件`,
   );
+
+  let existingEntries = rawExistingEntries;
+  if (options.reclassify && rawExistingEntries.length > 0) {
+    const reclassified = reclassifyReviewFeedbackCorpus(rawExistingEntries);
+    existingEntries = reclassified.entries;
+    progressLog(
+      `[Feedback Crawler] オフライン再分類完了: 対象 ${reclassified.stats.totalProcessed} 件 / feedback 維持 ${reclassified.stats.reclassifiedFeedbackCount} 件 / ノイズ降格 ${reclassified.stats.demotedToNoiseOnlyCount} 件 / MERGED 既存スキップ昇格 ${reclassified.stats.upgradedMergedSkippedCount} 件 / 除外コメント ${reclassified.stats.removedFeedbackCommentsCount} 件`,
+    );
+  }
 
   const { entries: allEntries, stats } = await orchestrateFeedbackCollection({
     client,
@@ -225,6 +243,7 @@ export async function runCollectReviewFeedback(
     portableOnly: options.portableOnly,
     privilegedOnly: options.privilegedOnly,
     firstTimerOnly: options.firstTimerOnly,
+    blockingOnly: options.blockingOnly,
   });
 
   const summary = summarizeReviewFeedback({
@@ -249,7 +268,7 @@ export async function runCollectReviewFeedback(
   } else {
     log("");
     log(
-      `【集計結果】対象 PR: ${summary.totalFeedbackPrs} 件（指摘 ${summary.totalFeedbackComments} 件 / 作成者返信 ${summary.totalAuthorReplies} 件）`,
+      `【集計結果】対象 PR: ${summary.totalFeedbackPrs} 件（ブロッキング: ${summary.blockingPrCount} 件 / 非ブロッキング助言のみ: ${summary.nonBlockingOnlyPrCount} 件 / 指摘 ${summary.totalFeedbackComments} 件 / 作成者返信 ${summary.totalAuthorReplies} 件）`,
     );
     for (const row of summary.categoryRanking) {
       log(`  - ${row.label} (${row.category}): ${row.count} 件 (${row.ratioPercent.toFixed(1)}%)`);

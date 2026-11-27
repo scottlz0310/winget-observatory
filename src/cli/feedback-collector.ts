@@ -425,21 +425,23 @@ export async function orchestrateFeedbackCollection(
     if (!isNewPackageTitle(input.title)) {
       continue;
     }
-    const { triggers } = detectFeedbackTriggers({
-      prAuthorLogin: input.author?.login,
-      currentLabels: input.currentLabels,
-      labeledEvents: input.labeledEvents,
-      reviews: input.reviews,
-    });
-    if (triggers.length === 0) {
-      continue;
-    }
     const feedbackItems = extractReviewFeedbackItems({
       prAuthorLogin: input.author?.login,
       reviews: input.reviews,
       comments: input.comments,
     });
     if (feedbackItems.length === 0) {
+      continue;
+    }
+    const { triggers } = detectFeedbackTriggers({
+      prAuthorLogin: input.author?.login,
+      state: input.state,
+      currentLabels: input.currentLabels,
+      labeledEvents: input.labeledEvents,
+      reviews: input.reviews,
+      feedbackItems,
+    });
+    if (triggers.length === 0) {
       continue;
     }
 
