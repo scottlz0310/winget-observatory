@@ -98,7 +98,12 @@ bun run collect:feedback --fetch-budget 0 --portable-only
 bun run collect:feedback --states merged,open,closed --lookback-days 60
 ```
 
-**主なオプション:** `--repo` / `--repository` / `--lookback-days`（既定 90）/ `--states`（`merged` / `open` / `closed` のカンマ区切り、既定 `merged`）/ `--fetch-budget`（既定 200、`0` でキャッシュ再集計のみ）/ `--fetch-limit`（既定 2000）/ `--installer-type` / `--nested-installer-type` / `--portable-only` / `--privileged-only`（`MEMBER`・`COLLABORATOR`・`OWNER` のみ限定）/ `--first-timer-only` / `--output-path`（既定 `data/review-feedback.jsonl`）/ `--report-path`（既定 `data/review-feedback-report.md`）/ `--no-report` / `--no-write` / `--as-json`
+**主なオプション:** `--repo` / `--repository` / `--lookback-days`（既定 90）/ `--states`（`merged` / `open` / `closed` のカンマ区切り、既定 `merged`）/ `--fetch-budget`（既定 200、`0` でキャッシュ再集計のみ）/ `--fetch-limit`（既定 2000）/ `--reclassify`（API ゼロで既存コーパスを最新ルールへ再分類）/ `--blocking-only`（非ブロッキング助言のみの PR を除外）/ `--installer-type` / `--nested-installer-type` / `--portable-only` / `--privileged-only`（`MEMBER`・`COLLABORATOR`・`OWNER` のみ限定）/ `--first-timer-only` / `--output-path`（既定 `data/review-feedback.jsonl`）/ `--report-path`（既定 `data/review-feedback-report.md`）/ `--no-report` / `--no-write` / `--as-json`
+
+**収集コーパスに基づく初回提出ガイド・テンプレート:**
+
+- [docs/winget-pkgs-submission-guide.md](docs/winget-pkgs-submission-guide.md) — 90 日窓 3,603 件（`MERGED` 1,462 + `CLOSED` 2,141）の分析に基づく配布形式 × アプリ種別チェックリスト・実 PR 事例付き実践ガイド
+- [docs/templates/winget-pkgs-pr-template.md](docs/templates/winget-pkgs-pr-template.md) — メンテナとの質問往復ゼロを狙う「先回り PR 本文テンプレート」（CLI 引数なし終了コード、通信・プライバシー開示、ビルド来歴・署名、Policy-Test 誤検知事前説明）
 
 ---
 

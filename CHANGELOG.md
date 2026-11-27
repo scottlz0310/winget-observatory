@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `microsoft/winget-pkgs` 初回パッケージ提出向けの実践ガイドおよび先回り PR 本文テンプレートを追加（#154）:
+  - `docs/winget-pkgs-submission-guide.md`: 精製済み 90 日窓 3,603 件（`MERGED` 1,462 件 + `CLOSED` 2,141 件、差し戻し・却下 943 件）コーパスの定量根拠（遅延中央値 +16.1 日、配布形式別未マージ脱落率、7 カテゴリ発生頻度）と実 PR リンクを整理し、共通・配布形式別（Portable/ZIP vs インストーラー）・アプリ種別（CLI / GUI・GPU / 外部通信・AI）・構造的 NG 条件（`Scripted-Application` 等）および Step 3 自動化対応チェック ID 体系を整備
+  - `docs/templates/winget-pkgs-pr-template.md`: CLI 引数なし終了コード挙動・クリーン VM 検証・ARP 実測値・外部通信/プライバシー方針・ビルド来歴/署名・`Policy-Test` 誤検知の事前説明を網羅した英語コピペ用 PR 本文テンプレートと 2 パターンの記入例を追加
+  - `README.md`: 上記ガイド・テンプレートへの導線および `collect:feedback` の `--reclassify` / `--blocking-only` オプション記載を反映
 - 初回提出（`New package:`）PR のメンテナ差し戻し指摘（地雷パターン）を GraphQL で収集・自動分類するクローラー CLI および独立ワークフローを追加（#150）:
   - `src/models/review-feedback.ts`, `src/domain/review-feedback.ts`, `src/domain/review-feedback-report.ts`: 差し戻しトリガー判定（`Needs-Author-Feedback` / `Changes-Requested` ラベル履歴・人間 `CHANGES_REQUESTED` レビュー）、レビュー本文・インラインレビューコメント・手動コメントの 3 系統抽出（Bot・自動検証ログ・CI 再実行コマンド・`[Policy]` 単体コマンド除外）、PR 作成者の手動返信（`authorReplies`）抽出、`.installer.yaml` メタデータ抽出・フィルタリング、5 カテゴリ＋`uncategorized` マルチタグ自動分類、JSONL コーパス読み書きおよび Markdown レポート生成を実装
   - `src/api/feedback-queries.ts`: GraphQL alias バッチ詳細取得・必要時ページング補完・`.installer.yaml` Blob バッチ取得を追加（REST 非使用・既存リトライ制御を継承）
