@@ -387,13 +387,14 @@ const NON_BLOCKING_FEEDBACK_PATTERN =
 /**
  * 「No blockers / No blocking issues were found」の宣言が本文にあっても、
  * それを上書きして `blocking` とみなすべき明示的な却下・実障害・必須修正の根拠パターン。
- * 任意助言（`Optional, non-blocking notes: - Please update ...`）の汎用 `please update` はここには含めない。
+ * 任意助言（`Optional, non-blocking notes: - Please update ...`）の汎用 `please update` や `should be` は含めず、
+ * 強義務（`must/need(s) to be ...`）やマージ条件を伴う必須修正（`... before merge/approval`）は逆接の有無にかかわらず保持する。
  */
 const HARD_BLOCKING_OVERRIDE_PATTERN =
-  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|can't\s+(?:be\s+)?(?:approved|accepted|proceed)|before\s+this\s+(?:package|submission|pr)\s+can\s+(?:proceed|be\s+approved)|corrections?\s+are\s+required|fails?\s+to\s+(?:start|launch|run|install|download)|returned\s+exit\s+code|install\s+failed|hash\s+(?:doesn't\s+match|verification\s+failed)|(?:url|link|download|installer|asset|endpoint|page|site)\b[^\r\n]{0,40}\b(?:returns?\s+(?:http\s+)?(?:4\d\d|5\d\d)|is\s+(?:unavailable|unreachable|broken|dead)|404s?)|http\s+(?:4\d\d|5\d\d)\b|(?:however|but)\b[^\r\n]{0,60}\b(?:please\s+(?:fix|update|remove|add|address|correct)|must\s+be|fails?\s+to|cannot))|(?:^|\n)\s*required\s*:|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
+  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed|merged?)|can't\s+(?:be\s+)?(?:approved|accepted|proceed|merged?)|before\s+this\s+(?:package|submission|pr)\s+can\s+(?:proceed|be\s+(?:approved|merged))|corrections?\s+are\s+required|(?:must|need(?:s)?\s+to)\s+be\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|(?:(?:must|need(?:s)?\s+to|please)\s+(?:remove|update|fix|change|add|correct|address|resolve|provide|include|use|verify)|(?:required|mandatory|needed))\b[^\r\n]{0,60}\bbefore\s+(?:merg(?:e|ing)|approv(?:al|ing)|this\s+(?:pr|package|submission))|fails?\s+to\s+(?:start|launch|run|install|download)|returned\s+exit\s+code|install\s+failed|hash\s+(?:doesn't\s+match|verification\s+failed)|(?:url|link|download|installer|asset|endpoint|page|site)\b[^\r\n]{0,40}\b(?:returns?\s+(?:http\s+)?(?:4\d\d|5\d\d)|is\s+(?:unavailable|unreachable|broken|dead)|404s?)|http\s+(?:4\d\d|5\d\d)\b|(?:however|but)\b[^\r\n]{0,60}\b(?:please\s+(?:fix|update|remove|add|address|correct)|must\s+be|fails?\s+to|cannot))|(?:^|\n)\s*required\s*:|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
 
 const EXPLICIT_BLOCKING_ISSUE_PATTERN = new RegExp(
-  `${HARD_BLOCKING_OVERRIDE_PATTERN.source}|\\b(?:(?:must|need(?:s)?\\s+to|should)\\s+be\\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch))`,
+  `${HARD_BLOCKING_OVERRIDE_PATTERN.source}|\\b(?:should\\s+be\\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch))`,
   "i",
 );
 

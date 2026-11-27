@@ -1237,5 +1237,70 @@ describe("review-feedback domain logic", () => {
     expect(
       filterReviewFeedbackRecords([optionalNotesWithLabel], { blockingOnly: true }),
     ).toHaveLength(0);
+
+    // 否定文の後段に逆接なしでマージ条件としての必須修正が明記された場合は blocking を保持する
+    // （ラベルなし CLOSED で収集され、Needs-Author-Feedback 経由でも --blocking-only に残る）
+    const mandatoryFixBody =
+      "No blocking issues were found in the manifest description.\n\nThe installer hash must be corrected before merge.";
+    expect(classifyFeedbackCommentSeverity(mandatoryFixBody)).toBe("blocking");
+    expect(
+      classifyFeedbackCommentSeverity(
+        "No blocking issues were found in the manifest description.\n\nPlease update the installer hash before merge.",
+      ),
+    ).toBe("blocking");
+
+    const closedMandatoryFixWithoutLabel = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900014,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: mandatoryFixBody,
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedMandatoryFixWithoutLabel.entryType).toBe("feedback");
+    if (closedMandatoryFixWithoutLabel.entryType === "feedback") {
+      expect(closedMandatoryFixWithoutLabel.triggers).toEqual(["closed-maintainer-feedback"]);
+      expect(closedMandatoryFixWithoutLabel.hasBlockingFeedback).toBe(true);
+      expect(
+        filterReviewFeedbackRecords([closedMandatoryFixWithoutLabel], { blockingOnly: true }),
+      ).toHaveLength(1);
+    }
+
+    const closedMandatoryFixWithLabel = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900015,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "Needs-Author-Feedback", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: mandatoryFixBody,
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    }) as ReviewFeedbackRecord;
+    expect(closedMandatoryFixWithLabel.hasBlockingFeedback).toBe(true);
+    expect(
+      filterReviewFeedbackRecords([closedMandatoryFixWithLabel], { blockingOnly: true }),
+    ).toHaveLength(1);
   });
 });
