@@ -7,6 +7,8 @@ import {
 } from "./manifest-rules";
 import { runNetworkChecks } from "./network-checks";
 import { inspectPeFile } from "./pe-inspector";
+import { evaluateSandboxResult, loadSandboxRunResultFile } from "./sandbox-evaluator";
+import { prepareSandboxWorkspace, type SandboxPrepareOptions } from "./sandbox-plan";
 import type {
   FetchLike,
   GateFinding,
@@ -14,15 +16,22 @@ import type {
   GateSummary,
   PeArchitecture,
   PeInspectionResult,
+  SandboxPrepareResult,
 } from "./types";
 
 export interface ManifestGateOptions {
   manifestDir: string;
   binaryPath?: string;
+  sandboxResultPath?: string;
   offline?: boolean;
   verifySha256?: boolean;
   minManifestVersion?: string;
   timeoutMs?: number;
+}
+
+export interface SandboxEvalOptions {
+  manifestDir: string;
+  resultPath: string;
 }
 
 export interface BinaryGateOptions {
@@ -248,6 +257,12 @@ export async function runManifestGate(
     );
   }
 
+  if (options.sandboxResultPath) {
+    const resolvedResultPath = resolve(options.sandboxResultPath);
+    const sandboxResult = loadSandboxRunResultFile(resolvedResultPath);
+    findings.push(...evaluateSandboxResult(bundle, sandboxResult, resolvedResultPath));
+  }
+
   const summary = summarizeFindings(findings);
   return {
     passed: summary.fail === 0,
@@ -255,8 +270,47 @@ export async function runManifestGate(
     checkedAt: now.toISOString(),
     summary,
     findings,
-    nextSteps: buildNextSteps(findings, true),
+    nextSteps: buildNextSteps(findings, !options.sandboxResultPath),
   };
+}
+
+export function runSandboxPrepare(options: SandboxPrepareOptions): SandboxPrepareResult {
+  const bundle = loadManifestBundle(options.manifestDir);
+  return prepareSandboxWorkspace(bundle, options);
+}
+
+export function runSandboxEval(options: SandboxEvalOptions, deps: GateRunnerDeps = {}): GateReport {
+  const now = (deps.now ?? (() => new Date()))();
+  const bundle = loadManifestBundle(options.manifestDir);
+  const resolvedResultPath = resolve(options.resultPath);
+  const sandboxResult = loadSandboxRunResultFile(resolvedResultPath);
+  const findings = evaluateSandboxResult(bundle, sandboxResult, resolvedResultPath);
+  const summary = summarizeFindings(findings);
+  return {
+    passed: summary.fail === 0,
+    target: bundle.manifestDir,
+    checkedAt: now.toISOString(),
+    summary,
+    findings,
+    nextSteps: buildNextSteps(findings, false),
+  };
+}
+
+export function formatSandboxPrepareText(result: SandboxPrepareResult): string {
+  const lines: string[] = [
+    `[verify-gate] SANDBOX PREPARED — ${result.packageIdentifier ?? result.manifestDir}`,
+    `Output:   ${result.outputDir}`,
+    `WSB:      ${result.wsbPath}`,
+    `Sandbox:  ${result.sandboxScriptPath}`,
+    `Launcher: ${result.hostLauncherPath}`,
+    `Result:   ${result.resultJsonPath}`,
+    `Probes:   ${result.probeCommands.length > 0 ? result.probeCommands.join(", ") : "(none inferred)"}`,
+    `Verify:   ${result.verifyCommands.length > 0 ? result.verifyCommands.join(", ") : "(default --version/--help)"}`,
+    "",
+    "Next Steps:",
+    ...result.nextSteps.map((step) => `- ${step}`),
+  ];
+  return lines.join("\n");
 }
 
 export function runBinaryGate(options: BinaryGateOptions, deps: GateRunnerDeps = {}): GateReport {

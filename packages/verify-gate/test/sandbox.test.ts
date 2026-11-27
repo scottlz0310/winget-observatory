@@ -1,0 +1,1126 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runCli } from "../src/cli";
+import { runManifestGate, runSandboxEval, runSandboxPrepare } from "../src/gate-runner";
+import { loadManifestBundle } from "../src/manifest-loader";
+import { handleJsonRpcMessage } from "../src/mcp-server";
+import {
+  diffArpSnapshots,
+  evaluateSandboxResult,
+  parseSandboxRunResult,
+} from "../src/sandbox-evaluator";
+import {
+  buildInsideSandboxScript,
+  buildWsbConfigurationXml,
+  escapePowerShellSingleQuoted,
+  escapeXml,
+  inferProbeCommandsFromBundle,
+} from "../src/sandbox-plan";
+import type { ArpRegistryEntry, SandboxRunResult } from "../src/types";
+
+const VALID_SHA = "A".repeat(64);
+
+function writeInstallerManifest(
+  dir: string,
+  options: {
+    installerType?: string;
+    nestedInstallerType?: string;
+    commands?: string[];
+    appsAndFeaturesYaml?: string[];
+    productCode?: string;
+    upgradeBehavior?: string;
+  } = {},
+): void {
+  const installerType = options.installerType ?? "inno";
+  const lines = [
+    "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+    "PackageIdentifier: Example.MyApp",
+    "PackageVersion: 1.2.3",
+    "Installers:",
+    "  - Architecture: x64",
+    `    InstallerType: ${installerType}`,
+    ...(options.nestedInstallerType
+      ? [
+          `    NestedInstallerType: ${options.nestedInstallerType}`,
+          "    NestedInstallerFiles:",
+          "      - RelativeFilePath: myapp.exe",
+          "        PortableCommandAlias: myapp",
+        ]
+      : []),
+    ...(options.commands && options.commands.length > 0
+      ? ["    Commands:", ...options.commands.map((c) => `      - ${c}`)]
+      : []),
+    ...(options.upgradeBehavior ? [`    UpgradeBehavior: ${options.upgradeBehavior}`] : []),
+    ...(options.productCode ? [`    ProductCode: "${options.productCode}"`] : []),
+    ...(options.appsAndFeaturesYaml ?? []),
+    "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe",
+    `    InstallerSha256: ${VALID_SHA}`,
+    "ManifestType: installer",
+    "ManifestVersion: 1.12.0",
+    "",
+  ];
+  writeFileSync(
+    join(dir, "Example.MyApp.yaml"),
+    [
+      "# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json",
+      "PackageIdentifier: Example.MyApp",
+      "PackageVersion: 1.2.3",
+      "DefaultLocale: en-US",
+      "ManifestType: version",
+      "ManifestVersion: 1.12.0",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(join(dir, "Example.MyApp.installer.yaml"), lines.join("\n"), "utf8");
+  writeFileSync(
+    join(dir, "Example.MyApp.locale.en-US.yaml"),
+    [
+      "# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json",
+      "PackageIdentifier: Example.MyApp",
+      "PackageVersion: 1.2.3",
+      "PackageLocale: en-US",
+      "Publisher: Example Corp",
+      "PublisherUrl: https://github.com/example",
+      "PackageName: MyApp",
+      "PackageUrl: https://github.com/example/myapp",
+      "License: MIT",
+      "LicenseUrl: https://github.com/example/myapp/blob/main/LICENSE",
+      "ShortDescription: Example desktop application",
+      "ManifestType: defaultLocale",
+      "ManifestVersion: 1.12.0",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
+function makeBaseSandboxResult(overrides: Partial<SandboxRunResult> = {}): SandboxRunResult {
+  const existingArp: ArpRegistryEntry = {
+    registryKeyPath: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ExistingApp",
+    hive: "HKLM",
+    view: "64bit",
+    keyName: "ExistingApp",
+    displayName: "Existing App",
+    publisher: "OS Vendor",
+    displayVersion: "1.0.0",
+  };
+  const installedArp: ArpRegistryEntry = {
+    registryKeyPath: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MyApp_is1",
+    hive: "HKLM",
+    view: "64bit",
+    keyName: "MyApp_is1",
+    displayName: "MyApp",
+    publisher: "Example Corp",
+    displayVersion: "1.2.3",
+    productCode: "{11111111-2222-3333-4444-555555555555}",
+    upgradeCode: "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
+  };
+  return {
+    schemaVersion: 1,
+    packageIdentifier: "Example.MyApp",
+    packageVersion: "1.2.3",
+    installedArchitecture: "x64",
+    executedAt: "2026-11-27T14:00:00.000Z",
+    localManifestFilesEnabled: true,
+    install: {
+      command: "winget install --manifest C:\\Users\\WDAGUtilityAccount\\Desktop\\manifest",
+      exitCode: 0,
+    },
+    uninstall: {
+      command: "winget uninstall --id Example.MyApp --silent --disable-interactivity",
+      exitCode: 0,
+    },
+    arpBefore: [existingArp],
+    arpAfterInstall: [existingArp, installedArp],
+    arpAfterUninstall: [existingArp],
+    cliProbes: [
+      { command: "myapp", args: [], exitCode: 0, timedOut: false, stdoutSnippet: "ok" },
+      {
+        command: "myapp",
+        args: ["--version"],
+        exitCode: 0,
+        timedOut: false,
+        stdoutSnippet: "1.2.3",
+      },
+      { command: "myapp", args: ["--help"], exitCode: 0, timedOut: false, stdoutSnippet: "Usage" },
+    ],
+    ...overrides,
+  };
+}
+
+describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () => {
+  test("escapeXml と escapePowerShellSingleQuoted は特殊文字を安全にエスケープし制御文字パスを拒否する", () => {
+    expect(escapeXml(`<a & "b" 'c'>`)).toBe("&lt;a &amp; &quot;b&quot; &apos;c&apos;&gt;");
+    expect(escapePowerShellSingleQuoted("it's a 'test'")).toBe("it''s a ''test''");
+    expect(() =>
+      buildWsbConfigurationXml({
+        manifestHostDir: "C:\\bad\npath",
+        outputHostDir: "C:\\out",
+      }),
+    ).toThrow("制御文字");
+
+    const xml = buildWsbConfigurationXml({
+      manifestHostDir: "C:\\work\\a&b",
+      outputHostDir: "C:\\out\\dir",
+      enableVgpu: true,
+    });
+    expect(xml).toContain("<VGpu>Enable</VGpu>");
+    expect(xml).toContain("<HostFolder>C:\\work\\a&amp;b</HostFolder>");
+    expect(xml).toContain("<ReadOnly>true</ReadOnly>");
+  });
+
+  test("prepareSandboxWorkspace は .wsb・UTF-8 BOM PowerShell スクリプト・ランチャーを生成しコマンドを推論する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-prep-"));
+    try {
+      const manifestDir = join(tmpDir, "manifest");
+      const outDir = join(tmpDir, "out");
+      const wingetRoot = join(tmpDir, "winget-pkgs");
+      mkdirSync(manifestDir, { recursive: true });
+      writeInstallerManifest(manifestDir, {
+        installerType: "zip",
+        nestedInstallerType: "portable",
+        commands: ["myapp-cli"],
+      });
+
+      const bundle = loadManifestBundle(manifestDir);
+      expect(inferProbeCommandsFromBundle(bundle)).toEqual(["myapp-cli", "myapp"]);
+
+      const prepared = runSandboxPrepare({
+        manifestDir,
+        outDir,
+        wingetPkgsRoot: wingetRoot,
+        probeCommands: ["extra-cmd"],
+        skipUninstall: true,
+      });
+
+      expect(prepared.packageIdentifier).toBe("Example.MyApp");
+      expect(prepared.probeCommands).toEqual(["myapp-cli", "myapp", "extra-cmd"]);
+      expect(existsSync(prepared.wsbPath)).toBe(true);
+      expect(existsSync(prepared.sandboxScriptPath)).toBe(true);
+      expect(existsSync(prepared.hostLauncherPath)).toBe(true);
+      expect(prepared.recommendedOfficialCommand).toContain("SandboxTest.ps1");
+
+      const wsbText = readFileSync(prepared.wsbPath, "utf8");
+      expect(wsbText).toContain("<VGpu>Disable</VGpu>");
+      expect(wsbText).toContain("verify-inside-sandbox.ps1");
+
+      const scriptBytes = readFileSync(prepared.sandboxScriptPath);
+      expect(scriptBytes[0]).toBe(0xef);
+      expect(scriptBytes[1]).toBe(0xbb);
+      expect(scriptBytes[2]).toBe(0xbf);
+      const scriptText = scriptBytes.toString("utf8");
+      expect(scriptText).toContain("Ensure-WinGetInstalled");
+      expect(scriptText).toContain("Repair-WinGetPackageManager");
+      expect(scriptText).toContain("Select-ManifestInstallerUrl");
+      expect(scriptText).toContain(
+        "'https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe'",
+      );
+      expect(scriptText).toContain("winget settings --enable LocalManifestFiles");
+      expect(scriptText).toContain("installedArchitecture = $installedArchitecture");
+      expect(scriptText).toContain("$SkipUninstall = $true");
+      expect(scriptText).toContain("'extra-cmd'");
+
+      // Windows 環境では生成した Select-ManifestInstallerUrl を実 PowerShell で実行し、
+      // 依存パッケージ URL の除外および RFC 3986 §6.2.2.1 準拠の URL 照合を検証
+      if (process.platform === "win32") {
+        const psMatch = scriptText.match(/function Select-ManifestInstallerUrl[\s\S]*?\n\}/);
+        expect(psMatch).not.toBeNull();
+        const probePs = [
+          psMatch?.[0] ?? "",
+          "$known = @('https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe')",
+          '$both = "Found dependency`nDownloading https://aka.ms/vs/17/release/vc_redist.x64.exe`nSuccessfully installed`nDownloading https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe`nSuccessfully installed"',
+          '$depOnly = "Downloading https://aka.ms/vs/17/release/vc_redist.x64.exe`nSuccessfully installed"',
+          "$r1 = Select-ManifestInstallerUrl -InstallOutput $both -KnownManifestUrls $known",
+          "$r2 = Select-ManifestInstallerUrl -InstallOutput $depOnly -KnownManifestUrls $known",
+          "$caseCandidates = @('https://example.invalid/app.exe', 'https://example.invalid/App.exe')",
+          '$dlLower = "Downloading https://example.invalid/app.exe`nSuccessfully installed"',
+          '$dlUpper = "Downloading https://example.invalid/App.exe`nSuccessfully installed"',
+          '$dlHostCase = "Downloading HTTPS://EXAMPLE.INVALID/app.exe`nSuccessfully installed"',
+          "$r3 = Select-ManifestInstallerUrl -InstallOutput $dlLower -KnownManifestUrls $caseCandidates",
+          "$r4 = Select-ManifestInstallerUrl -InstallOutput $dlUpper -KnownManifestUrls $caseCandidates",
+          "$r5 = Select-ManifestInstallerUrl -InstallOutput $dlHostCase -KnownManifestUrls $caseCandidates",
+          "$queryCandidates = @('https://example.invalid/dl?token=abc', 'https://example.invalid/dl?Token=AbC')",
+          '$dlQuery = "Downloading https://example.invalid/dl?token=abc`nSuccessfully installed"',
+          "$r6 = Select-ManifestInstallerUrl -InstallOutput $dlQuery -KnownManifestUrls $queryCandidates",
+          'Write-Output ("R1=" + $r1)',
+          "Write-Output (\"R2=\" + ($(if ($null -eq $r2) { 'NULL' } else { $r2 })))",
+          'Write-Output ("R3=" + $r3)',
+          'Write-Output ("R4=" + $r4)',
+          'Write-Output ("R5=" + $r5)',
+          'Write-Output ("R6=" + $r6)',
+        ].join("\n");
+        const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", probePs], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        expect(proc.exitCode).toBe(0);
+        const psOut = new TextDecoder().decode(proc.stdout);
+        expect(psOut).toContain(
+          "R1=https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe",
+        );
+        expect(psOut).toContain("R2=NULL");
+        expect(psOut).toContain("R3=https://example.invalid/app.exe");
+        expect(psOut).toContain("R4=https://example.invalid/App.exe");
+        expect(psOut).toContain("R5=https://example.invalid/app.exe");
+        expect(psOut).toContain("R6=https://example.invalid/dl?token=abc");
+      }
+
+      // シングルクォートを含む特殊引数でも安全にエスケープされる
+      const quotedScript = buildInsideSandboxScript({
+        packageIdentifier: "O'Reilly.Tool",
+        packageVersion: "1.0.0",
+        probeCommands: ["my'cmd"],
+      });
+      expect(quotedScript).toContain("'O''Reilly.Tool'");
+      expect(quotedScript).toContain("'my''cmd'");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { name: "不正 JSON", raw: "{broken", expectedError: "解析" },
+    { name: "トップレベル配列", raw: "[]", expectedError: "オブジェクト" },
+    {
+      name: "未対応 schemaVersion",
+      raw: JSON.stringify({ schemaVersion: 2 }),
+      expectedError: "schemaVersion",
+    },
+    {
+      name: "localManifestFilesEnabled 非 boolean",
+      raw: JSON.stringify({ schemaVersion: 1, localManifestFilesEnabled: "yes" }),
+      expectedError: "localManifestFilesEnabled",
+    },
+    {
+      name: "executedAt 欠落",
+      raw: JSON.stringify({ schemaVersion: 1, localManifestFilesEnabled: true }),
+      expectedError: "executedAt",
+    },
+    {
+      name: "arpBefore 非配列",
+      raw: JSON.stringify({
+        schemaVersion: 1,
+        localManifestFilesEnabled: true,
+        executedAt: "2026-11-27T00:00:00Z",
+        arpBefore: {},
+      }),
+      expectedError: "arpBefore",
+    },
+    {
+      name: "install.exitCode 非整数",
+      raw: JSON.stringify({
+        schemaVersion: 1,
+        localManifestFilesEnabled: true,
+        executedAt: "2026-11-27T00:00:00Z",
+        arpBefore: [],
+        arpAfterInstall: [],
+        install: { command: "winget install", exitCode: "0" },
+      }),
+      expectedError: "exitCode",
+    },
+    {
+      name: "不正 hive",
+      raw: JSON.stringify({
+        schemaVersion: 1,
+        localManifestFilesEnabled: true,
+        executedAt: "2026-11-27T00:00:00Z",
+        arpBefore: [{ hive: "HKCR", view: "64bit", keyName: "a" }],
+        arpAfterInstall: [],
+        install: { command: "winget install", exitCode: 0 },
+      }),
+      expectedError: "hive",
+    },
+    {
+      name: "cliProbes の timedOut 非 boolean",
+      raw: JSON.stringify({
+        schemaVersion: 1,
+        localManifestFilesEnabled: true,
+        executedAt: "2026-11-27T00:00:00Z",
+        arpBefore: [],
+        arpAfterInstall: [],
+        install: { command: "winget install", exitCode: 0 },
+        cliProbes: [{ command: "x", args: [], exitCode: 0, timedOut: "no" }],
+      }),
+      expectedError: "timedOut",
+    },
+  ])("parseSandboxRunResult は不正入力を明示エラーで拒否する: $name", ({ raw, expectedError }) => {
+    expect(() => parseSandboxRunResult(raw)).toThrow(expectedError);
+  });
+
+  test("UTF-8 BOM 付き sandbox-result.json の読み込みと ARP 差分抽出が動作する", () => {
+    const base = makeBaseSandboxResult();
+    const parsed = parseSandboxRunResult(`\uFEFF${JSON.stringify(base)}`);
+    expect(parsed.packageIdentifier).toBe("Example.MyApp");
+
+    const diff = diffArpSnapshots(parsed.arpBefore, parsed.arpAfterInstall);
+    expect(diff.added).toHaveLength(1);
+    expect(diff.added[0]?.keyName).toBe("MyApp_is1");
+    expect(diff.updated).toHaveLength(0);
+  });
+
+  test("クリーンな Sandbox 結果（ARP 一致・アンインストール残骸なし・CLI 成功）は全 pass になる", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-ok-"));
+    try {
+      writeInstallerManifest(tmpDir, {
+        installerType: "inno",
+        upgradeBehavior: "uninstallPrevious",
+        appsAndFeaturesYaml: [
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          '        UpgradeCode: "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"',
+        ],
+      });
+      const bundle = loadManifestBundle(tmpDir);
+      const findings = evaluateSandboxResult(bundle, makeBaseSandboxResult());
+
+      expect(findings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(findings.filter((f) => f.status === "warn")).toHaveLength(0);
+      expect(findings.some((f) => f.id === "CMN-SBX-01" && f.status === "pass")).toBe(true);
+      expect(findings.some((f) => f.id === "NG-03" && f.status === "pass")).toBe(true);
+      expect(findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+      expect(findings.some((f) => f.id === "PKG-INST-03" && f.status === "pass")).toBe(true);
+      expect(findings.some((f) => f.id === "APP-CLI-01" && f.status === "pass")).toBe(true);
+      expect(findings.some((f) => f.id === "APP-CLI-02" && f.status === "pass")).toBe(true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("依存パッケージ（VCRedist）が同時に ARP 登録されてもアプリ本体の ARP を選択して正しく照合する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-multi-arp-"));
+    try {
+      writeInstallerManifest(tmpDir, {
+        installerType: "inno",
+        upgradeBehavior: "uninstallPrevious",
+      });
+      const bundle = loadManifestBundle(tmpDir);
+      const vcRedistArp: ArpRegistryEntry = {
+        registryKeyPath: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\VCRedist",
+        hive: "HKLM",
+        view: "64bit",
+        keyName: "{00000000-0000-0000-0000-000000000001}",
+        displayName: "Microsoft Visual C++ 2015-2022 Redistributable (x64)",
+        publisher: "Microsoft Corporation",
+        displayVersion: "14.40.33810.0",
+      };
+      const base = makeBaseSandboxResult();
+      const result = makeBaseSandboxResult({
+        arpAfterInstall: [base.arpBefore[0], vcRedistArp, base.arpAfterInstall[1]],
+        arpAfterUninstall: [base.arpBefore[0], vcRedistArp],
+      });
+      const findings = evaluateSandboxResult(bundle, result);
+      expect(findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+      // 依存パッケージの ARP だけが残っても対象アプリの残骸と誤認しないこと (PKG-INST-03: pass)
+      expect(findings.some((f) => f.id === "PKG-INST-03" && f.status === "pass")).toBe(true);
+      expect(findings.some((f) => f.id === "PKG-INST-03" && f.status === "fail")).toBe(false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("PackageVersion 不一致・未記録の旧版 sandbox-result.json ではポータブルでも合格にしない", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-ver-"));
+    try {
+      writeInstallerManifest(tmpDir, { installerType: "portable" });
+      const bundle = loadManifestBundle(tmpDir);
+      const base = makeBaseSandboxResult({
+        arpAfterInstall: [makeBaseSandboxResult().arpBefore[0]],
+        arpAfterUninstall: [makeBaseSandboxResult().arpBefore[0]],
+        cliProbes: [],
+      });
+
+      const oldVerFindings = evaluateSandboxResult(bundle, { ...base, packageVersion: "1.0.0" });
+      expect(oldVerFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(true);
+
+      const missingVerFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        packageVersion: undefined,
+      });
+      expect(missingVerFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(
+        true,
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("複数アーキテクチャで異なる ProductCode / AppsAndFeaturesEntries を持つ場合、選択アーキテクチャのみを検証する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-multiarch-"));
+    try {
+      writeInstallerManifest(tmpDir, { installerType: "inno" });
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: arm64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-arm64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const bundle = loadManifestBundle(tmpDir);
+      // x64 実行結果なら arm64 の ProductCode を要求せず合格する
+      const x64Findings = evaluateSandboxResult(
+        bundle,
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(x64Findings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(x64Findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+
+      // installedArchitecture 未記録ではどのアーキテクチャか特定できないため fail
+      const noArchFindings = evaluateSandboxResult(
+        bundle,
+        makeBaseSandboxResult({ installedArchitecture: undefined, cliProbes: [] }),
+      );
+      expect(noArchFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(true);
+
+      // x64 と neutral が異なる ProductCode を併記している場合、x64 実行時は x64 のみ照合し neutral を要求しない
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: neutral",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{77777777-6666-5555-4444-333333333333}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-neutral.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const x64NeutralFindings = evaluateSandboxResult(
+        loadManifestBundle(tmpDir),
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(x64NeutralFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(x64NeutralFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(
+        true,
+      );
+
+      // x64 OS（WOW64）上で x86 のみマニフェストをインストールした結果も CMN-SBX-02 / PKG-INST-01 で合格する
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x86",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const wow64Findings = evaluateSandboxResult(
+        loadManifestBundle(tmpDir),
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(wow64Findings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(wow64Findings.some((f) => f.id === "CMN-SBX-02" && f.status === "pass")).toBe(true);
+      expect(wow64Findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+
+      // MinimumOSVersion で x64 が除外され x86 へ切り替わるケース（osVersion / selectedInstallerUrl / 未記録 fail-closed）
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    MinimumOSVersion: 10.0.22621.0",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: x86",
+          "    MinimumOSVersion: 10.0.17763.0",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          `    InstallerSha256: ${"B".repeat(64)}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const minOsBundle = loadManifestBundle(tmpDir);
+      // 1) osVersion が 10.0.19045.0 なら x64 が除外され x86 が選択されて合格
+      const minOsFallbackFindings = evaluateSandboxResult(
+        minOsBundle,
+        makeBaseSandboxResult({
+          installedArchitecture: "x64",
+          osVersion: "10.0.19045.0",
+          cliProbes: [],
+        }),
+      );
+      expect(minOsFallbackFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(minOsFallbackFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(
+        true,
+      );
+
+      // 2) selectedInstallerUrl で x86 URL が記録されていれば osVersion なしでも一意特定して合格
+      const selectedUrlFindings = evaluateSandboxResult(
+        minOsBundle,
+        makeBaseSandboxResult({
+          installedArchitecture: "x64",
+          selectedInstallerUrl:
+            "https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          cliProbes: [],
+        }),
+      );
+      expect(selectedUrlFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(selectedUrlFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(
+        true,
+      );
+
+      // 3) osVersion も selectedInstallerUrl も未記録なら推定せず fail-closed (CMN-SBX-02: fail)
+      const ambiguousMinOsFindings = evaluateSandboxResult(
+        minOsBundle,
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(ambiguousMinOsFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(
+        true,
+      );
+
+      // UnsupportedOSArchitectures で x64 が除外され x86 へ切り替わるケース
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    UnsupportedOSArchitectures:",
+          "      - x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: x86",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          `    InstallerSha256: ${"B".repeat(64)}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const unsupportedArchFindings = evaluateSandboxResult(
+        loadManifestBundle(tmpDir),
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(unsupportedArchFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(
+        unsupportedArchFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass"),
+      ).toBe(true);
+
+      // パスの大文字・小文字だけが異なる 2 候補（x64=/app.exe, x86=/App.exe）で誤照合しないこと
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://example.invalid/app.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: x86",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://example.invalid/App.exe",
+          `    InstallerSha256: ${"B".repeat(64)}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const caseSensitiveBundle = loadManifestBundle(tmpDir);
+      // 1) /app.exe（x64）は x64 の ProductCode と照合され pass（scheme/host 大文字小文字差も許容）
+      for (const url of ["https://example.invalid/app.exe", "HTTPS://EXAMPLE.INVALID/app.exe"]) {
+        const x64Findings = evaluateSandboxResult(
+          caseSensitiveBundle,
+          makeBaseSandboxResult({
+            installedArchitecture: "x64",
+            selectedInstallerUrl: url,
+            cliProbes: [],
+          }),
+        );
+        expect(x64Findings.filter((f) => f.status === "fail")).toHaveLength(0);
+        expect(x64Findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+      }
+      // 2) /App.exe（x86）は x86 の ProductCode（{9999...}）と照合されるため、x64 の ARP とは不一致（fail）
+      const x86MismatchFindings = evaluateSandboxResult(
+        caseSensitiveBundle,
+        makeBaseSandboxResult({
+          installedArchitecture: "x64",
+          selectedInstallerUrl: "https://example.invalid/App.exe",
+          cliProbes: [],
+        }),
+      );
+      expect(x86MismatchFindings.some((f) => f.id === "PKG-INST-01" && f.status === "fail")).toBe(
+        true,
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI 自動プローブは --version / --help の片方成功で pass し、明示指定があるコマンドは必須プローブ結果で判定する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-cli-mode-"));
+    try {
+      writeInstallerManifest(tmpDir, { installerType: "portable" });
+      const bundle = loadManifestBundle(tmpDir);
+      const base = makeBaseSandboxResult({
+        arpAfterInstall: [makeBaseSandboxResult().arpBefore[0]],
+        arpAfterUninstall: [makeBaseSandboxResult().arpBefore[0]],
+      });
+
+      // --version のみ成功、--help は未対応(非0) → APP-CLI-02 pass
+      const partialFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          { command: "myapp", args: [], exitCode: 2, timedOut: false, required: false },
+          { command: "myapp", args: ["--version"], exitCode: 0, timedOut: false, required: false },
+          { command: "myapp", args: ["--help"], exitCode: 1, timedOut: false, required: false },
+        ],
+      });
+      expect(partialFindings.some((f) => f.id === "APP-CLI-02" && f.status === "pass")).toBe(true);
+      expect(partialFindings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(false);
+
+      // 自動プローブ 2 件が非 0 でも、同一コマンドの明示指定（required: true）が 0 なら APP-CLI-02 pass
+      const overridePassFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          { command: "myapp", args: [], exitCode: 2, timedOut: false, required: false },
+          { command: "myapp", args: ["--version"], exitCode: 1, timedOut: false, required: false },
+          { command: "myapp", args: ["--help"], exitCode: 1, timedOut: false, required: false },
+          { command: "myapp", args: ["status"], exitCode: 0, timedOut: false, required: true },
+        ],
+      });
+      expect(overridePassFindings.some((f) => f.id === "APP-CLI-02" && f.status === "pass")).toBe(
+        true,
+      );
+      expect(overridePassFindings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(
+        false,
+      );
+
+      // 自動プローブ側で 0xC0000135（DLL 欠損）が起きた場合は明示指定成功でも PKG-PORT-01 fail を維持する
+      const dllFailWithOverride = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          {
+            command: "myapp",
+            args: ["--version"],
+            exitCode: -1073741515,
+            timedOut: false,
+            required: false,
+          },
+          { command: "myapp", args: ["status"], exitCode: 0, timedOut: false, required: true },
+        ],
+      });
+      expect(dllFailWithOverride.some((f) => f.id === "PKG-PORT-01" && f.status === "fail")).toBe(
+        true,
+      );
+
+      // 利用者明示指定（required: true）の検証コマンドが失敗 → APP-CLI-02 fail
+      const requiredFailFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          { command: "myapp", args: ["--version"], exitCode: 0, timedOut: false, required: false },
+          { command: "myapp", args: ["status"], exitCode: 1, timedOut: false, required: true },
+        ],
+      });
+      expect(requiredFailFindings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(
+        true,
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("LocalManifestFiles 無効・PackageIdentifier 不一致・ARP 不一致・uninstall 残骸・CLI exit 2 / 0xC0000135 を適切に検出する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-fail-"));
+    try {
+      writeInstallerManifest(tmpDir, {
+        installerType: "inno",
+        appsAndFeaturesYaml: [
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+        ],
+      });
+      const bundle = loadManifestBundle(tmpDir);
+      const base = makeBaseSandboxResult();
+      const brokenResult = makeBaseSandboxResult({
+        packageIdentifier: "Other.Package",
+        localManifestFilesEnabled: false,
+        arpAfterInstall: [
+          base.arpBefore[0],
+          {
+            ...base.arpAfterInstall[1],
+            displayVersion: "1.2.3.0",
+            productCode: "{99999999-9999-9999-9999-999999999999}",
+          },
+        ],
+        // アンインストール後も残存している
+        arpAfterUninstall: [base.arpBefore[0], base.arpAfterInstall[1]],
+        cliProbes: [
+          { command: "myapp", args: [], exitCode: 2, timedOut: false },
+          { command: "myapp-hang", args: [], exitCode: null, timedOut: true },
+          {
+            command: "myapp-missing",
+            args: [],
+            exitCode: null,
+            timedOut: false,
+            error: "not found",
+          },
+          { command: "myapp-dll", args: ["--version"], exitCode: -1073741515, timedOut: false },
+          { command: "myapp", args: ["--help"], exitCode: 1, timedOut: false },
+        ],
+      });
+
+      const findings = evaluateSandboxResult(bundle, brokenResult);
+      expect(findings.some((f) => f.id === "CMN-SBX-01" && f.status === "fail")).toBe(true);
+      expect(findings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(true);
+      expect(findings.some((f) => f.id === "PKG-INST-01" && f.status === "fail")).toBe(true);
+      expect(findings.some((f) => f.id === "PKG-INST-03" && f.status === "fail")).toBe(true);
+      expect(findings.some((f) => f.id === "PKG-PORT-01" && f.status === "fail")).toBe(true);
+      expect(
+        findings.some((f) => f.id === "APP-CLI-01" && f.status === "warn" && f.title.includes("2")),
+      ).toBe(true);
+      expect(
+        findings.some(
+          (f) => f.id === "APP-CLI-01" && f.status === "warn" && f.title.includes("タイムアウト"),
+        ),
+      ).toBe(true);
+      expect(findings.some((f) => f.id === "APP-CLI-01" && f.status === "fail")).toBe(true);
+      expect(findings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("install 失敗・ポータブル ARP なし・暗黙 ARP バージョン不一致・uninstall 失敗を正しく判定する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-edge-"));
+    try {
+      // 1. ポータブル + ARP 差分なし + install 失敗
+      writeInstallerManifest(tmpDir, { installerType: "portable" });
+      const portableBundle = loadManifestBundle(tmpDir);
+      const installFailFindings = evaluateSandboxResult(
+        portableBundle,
+        makeBaseSandboxResult({
+          install: { command: "winget install -m ...", exitCode: 1603, logSnippet: "Fatal error" },
+          uninstall: undefined,
+          arpAfterInstall: [makeBaseSandboxResult().arpBefore[0]],
+          cliProbes: [],
+        }),
+      );
+      expect(installFailFindings.some((f) => f.id === "NG-03" && f.status === "fail")).toBe(true);
+
+      const portablePassFindings = evaluateSandboxResult(
+        portableBundle,
+        makeBaseSandboxResult({
+          arpAfterInstall: [makeBaseSandboxResult().arpBefore[0]],
+          arpAfterUninstall: [makeBaseSandboxResult().arpBefore[0]],
+          cliProbes: [],
+        }),
+      );
+      expect(portablePassFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(
+        true,
+      );
+
+      // 2. インストーラー系（AppsAndFeaturesEntries 未宣言）で DisplayVersion 不一致 & DisplayName 差異 & uninstall 失敗
+      writeInstallerManifest(tmpDir, {
+        installerType: "inno",
+        productCode: "{11111111-2222-3333-4444-555555555555}",
+      });
+      const instBundle = loadManifestBundle(tmpDir);
+      const base = makeBaseSandboxResult();
+      const implicitFindings = evaluateSandboxResult(
+        instBundle,
+        makeBaseSandboxResult({
+          arpAfterInstall: [
+            base.arpBefore[0],
+            {
+              ...base.arpAfterInstall[1],
+              displayName: "MyApp Desktop",
+              displayVersion: "9.9.9",
+              productCode: "{22222222-2222-3333-4444-555555555555}",
+            },
+          ],
+          uninstall: { command: "winget uninstall", exitCode: 1 },
+          cliProbes: [],
+        }),
+      );
+      expect(implicitFindings.some((f) => f.id === "PKG-INST-01" && f.status === "fail")).toBe(
+        true,
+      );
+      expect(implicitFindings.some((f) => f.id === "PKG-INST-01" && f.status === "warn")).toBe(
+        true,
+      );
+      expect(implicitFindings.some((f) => f.id === "PKG-INST-03" && f.status === "fail")).toBe(
+        true,
+      );
+
+      // 3. インストーラー系で ARP 差分 0 件は warn
+      const noArpFindings = evaluateSandboxResult(
+        instBundle,
+        makeBaseSandboxResult({
+          arpAfterInstall: [base.arpBefore[0]],
+          uninstall: undefined,
+          cliProbes: [],
+        }),
+      );
+      expect(noArpFindings.some((f) => f.id === "PKG-INST-01" && f.status === "warn")).toBe(true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI (sandbox prepare / eval / check --sandbox-result) と MCP (prepare_sandbox / evaluate_sandbox / verify_manifest) が統合動作する", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-e2e-"));
+    try {
+      const manifestDir = join(tmpDir, "manifest");
+      const outDir = join(tmpDir, "sandbox-out");
+      mkdirSync(manifestDir, { recursive: true });
+      writeInstallerManifest(manifestDir, {
+        installerType: "inno",
+        upgradeBehavior: "uninstallPrevious",
+      });
+
+      const resultPath = join(tmpDir, "sandbox-result.json");
+      writeFileSync(resultPath, JSON.stringify(makeBaseSandboxResult()), "utf8");
+
+      // gate-runner 統合
+      const integrated = await runManifestGate({
+        manifestDir,
+        sandboxResultPath: resultPath,
+        offline: true,
+      });
+      expect(integrated.passed).toBe(true);
+      expect(integrated.findings.some((f) => f.id === "CMN-SBX-01" && f.status === "pass")).toBe(
+        true,
+      );
+      expect(integrated.nextSteps.some((s) => s.includes("SandboxTest.ps1"))).toBe(false);
+
+      const standaloneEval = runSandboxEval({ manifestDir, resultPath });
+      expect(standaloneEval.passed).toBe(true);
+
+      // CLI sandbox prepare / eval / check --sandbox-result
+      const out: string[] = [];
+      const err: string[] = [];
+      const io = { stdout: (t: string) => out.push(t), stderr: (t: string) => err.push(t) };
+
+      expect(
+        await runCli(
+          [
+            "sandbox",
+            "prepare",
+            manifestDir,
+            "--out",
+            outDir,
+            "--probe-command",
+            "myapp",
+            "--vgpu",
+          ],
+          { io },
+        ),
+      ).toBe(0);
+      expect(out[0]).toContain("[verify-gate] SANDBOX PREPARED");
+
+      expect(
+        await runCli(["sandbox", "eval", manifestDir, "--result", resultPath, "--json"], { io }),
+      ).toBe(0);
+      expect(JSON.parse(out[1] ?? "{}").passed).toBe(true);
+
+      expect(
+        await runCli(
+          ["check", manifestDir, "--sandbox-result", resultPath, "--offline", "--json"],
+          { io },
+        ),
+      ).toBe(0);
+      expect(JSON.parse(out[2] ?? "{}").passed).toBe(true);
+
+      // CLI 引数エラー系は終了コード 2
+      expect(await runCli(["sandbox", "unknown"], { io })).toBe(2);
+      expect(await runCli(["sandbox", "prepare", manifestDir], { io })).toBe(2);
+      expect(await runCli(["sandbox", "eval", manifestDir], { io })).toBe(2);
+
+      // MCP prepare_sandbox / evaluate_sandbox / verify_manifest(sandboxResultPath)
+      const prepRes = await handleJsonRpcMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "prepare_sandbox",
+          arguments: { manifestDir, outDir: join(tmpDir, "mcp-out"), probeCommands: ["myapp"] },
+        },
+      });
+      expect(((prepRes?.result ?? {}) as { isError: boolean }).isError).toBe(false);
+
+      const evalRes = await handleJsonRpcMessage({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "evaluate_sandbox",
+          arguments: { manifestDir, resultPath },
+        },
+      });
+      const evalPayload = evalRes?.result as {
+        isError: boolean;
+        structuredContent: { passed: boolean };
+      };
+      expect(evalPayload.isError).toBe(false);
+      expect(evalPayload.structuredContent.passed).toBe(true);
+
+      const manifestWithSbxRes = await handleJsonRpcMessage({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "verify_manifest",
+          arguments: { manifestDir, sandboxResultPath: resultPath, offline: true },
+        },
+      });
+      expect(
+        (
+          (manifestWithSbxRes?.result ?? {}) as {
+            structuredContent: { passed: boolean };
+          }
+        ).structuredContent.passed,
+      ).toBe(true);
+
+      // MCP 不正パラメータエラー (-32602)
+      const badPrep = await handleJsonRpcMessage({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "prepare_sandbox", arguments: { manifestDir } },
+      });
+      expect(badPrep?.error?.code).toBe(-32602);
+
+      const badProbes = await handleJsonRpcMessage({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: {
+          name: "prepare_sandbox",
+          arguments: { manifestDir, outDir, probeCommands: [123] },
+        },
+      });
+      expect(badProbes?.error?.code).toBe(-32602);
+
+      const badEval = await handleJsonRpcMessage({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: { name: "evaluate_sandbox", arguments: { manifestDir } },
+      });
+      expect(badEval?.error?.code).toBe(-32602);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

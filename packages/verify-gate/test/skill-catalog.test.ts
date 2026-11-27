@@ -17,7 +17,7 @@ describe("SkillCatalog (SSoT & Skills over MCP resources)", () => {
     expect(skill.frontmatter.license).toBe("MIT");
     expect(skill.frontmatter.metadata).toEqual({
       author: "scottlz0310",
-      version: "0.1.0",
+      version: "0.2.0",
       guide: "references/submission-guide.md",
       template: "templates/pr-template.md",
     });

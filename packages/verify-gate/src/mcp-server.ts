@@ -1,10 +1,16 @@
 import { createInterface } from "node:readline";
-import { type GateRunnerDeps, runBinaryGate, runManifestGate } from "./gate-runner";
+import {
+  type GateRunnerDeps,
+  runBinaryGate,
+  runManifestGate,
+  runSandboxEval,
+  runSandboxPrepare,
+} from "./gate-runner";
 import { SkillCatalog } from "./skill-catalog";
 import type { PeArchitecture } from "./types";
 
 export const MCP_SERVER_NAME = "winget-verify-gate";
-export const MCP_SERVER_VERSION = "0.1.0";
+export const MCP_SERVER_VERSION = "0.2.0";
 export const MCP_DEFAULT_PROTOCOL_VERSION = "2025-11-25";
 export const MCP_SKILLS_EXTENSION_ID = "io.modelcontextprotocol/skills";
 
@@ -40,6 +46,7 @@ const MCP_TOOLS = [
       properties: {
         manifestDir: { type: "string" },
         binaryPath: { type: "string" },
+        sandboxResultPath: { type: "string" },
         offline: { type: "boolean" },
         verifySha256: { type: "boolean" },
         minManifestVersion: { type: "string" },
@@ -58,6 +65,37 @@ const MCP_TOOLS = [
         expectedArchitecture: { type: "string", enum: ["x64", "x86", "arm64"] },
       },
       required: ["binaryPath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "prepare_sandbox",
+    description: "Generate Windows Sandbox (.wsb and PowerShell) files for manifest testing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        manifestDir: { type: "string" },
+        outDir: { type: "string" },
+        wingetPkgsRoot: { type: "string" },
+        probeCommands: { type: "array", items: { type: "string" } },
+        verifyCommands: { type: "array", items: { type: "string" } },
+        skipUninstall: { type: "boolean" },
+        enableVgpu: { type: "boolean" },
+      },
+      required: ["manifestDir", "outDir"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "evaluate_sandbox",
+    description: "Evaluate Windows Sandbox ARP diff and CLI probe results against a manifest.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        manifestDir: { type: "string" },
+        resultPath: { type: "string" },
+      },
+      required: ["manifestDir", "resultPath"],
       additionalProperties: false,
     },
   },
@@ -163,6 +201,7 @@ export async function handleJsonRpcMessage(
             {
               manifestDir,
               binaryPath: asNonEmptyString(args.binaryPath) ?? undefined,
+              sandboxResultPath: asNonEmptyString(args.sandboxResultPath) ?? undefined,
               offline: args.offline,
               verifySha256: args.verifySha256,
               minManifestVersion: asNonEmptyString(args.minManifestVersion) ?? undefined,
@@ -206,6 +245,100 @@ export async function handleJsonRpcMessage(
           structuredContent: report,
           isError: false,
         });
+      }
+
+      if (toolName === "prepare_sandbox") {
+        const manifestDir = asNonEmptyString(args.manifestDir);
+        const outDir = asNonEmptyString(args.outDir);
+        if (!manifestDir || !outDir) {
+          return makeError(
+            id,
+            -32602,
+            "prepare_sandbox requires string parameters 'manifestDir' and 'outDir'",
+          );
+        }
+        if (args.skipUninstall !== undefined && typeof args.skipUninstall !== "boolean") {
+          return makeError(id, -32602, "prepare_sandbox parameter 'skipUninstall' must be boolean");
+        }
+        if (args.enableVgpu !== undefined && typeof args.enableVgpu !== "boolean") {
+          return makeError(id, -32602, "prepare_sandbox parameter 'enableVgpu' must be boolean");
+        }
+        let probeCommands: string[] | undefined;
+        if (args.probeCommands !== undefined) {
+          if (
+            !Array.isArray(args.probeCommands) ||
+            !args.probeCommands.every((item) => typeof item === "string")
+          ) {
+            return makeError(
+              id,
+              -32602,
+              "prepare_sandbox parameter 'probeCommands' must be string[]",
+            );
+          }
+          probeCommands = args.probeCommands;
+        }
+        let verifyCommands: string[] | undefined;
+        if (args.verifyCommands !== undefined) {
+          if (
+            !Array.isArray(args.verifyCommands) ||
+            !args.verifyCommands.every((item) => typeof item === "string")
+          ) {
+            return makeError(
+              id,
+              -32602,
+              "prepare_sandbox parameter 'verifyCommands' must be string[]",
+            );
+          }
+          verifyCommands = args.verifyCommands;
+        }
+        try {
+          const prepared = runSandboxPrepare({
+            manifestDir,
+            outDir,
+            wingetPkgsRoot: asNonEmptyString(args.wingetPkgsRoot) ?? undefined,
+            probeCommands,
+            verifyCommands,
+            skipUninstall: args.skipUninstall,
+            enableVgpu: args.enableVgpu,
+          });
+          return makeResult(id, {
+            content: [{ type: "text", text: JSON.stringify(prepared, null, 2) }],
+            structuredContent: prepared,
+            isError: false,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return makeResult(id, {
+            content: [{ type: "text", text: message }],
+            isError: true,
+          });
+        }
+      }
+
+      if (toolName === "evaluate_sandbox") {
+        const manifestDir = asNonEmptyString(args.manifestDir);
+        const resultPath = asNonEmptyString(args.resultPath);
+        if (!manifestDir || !resultPath) {
+          return makeError(
+            id,
+            -32602,
+            "evaluate_sandbox requires string parameters 'manifestDir' and 'resultPath'",
+          );
+        }
+        try {
+          const report = runSandboxEval({ manifestDir, resultPath }, deps.gateDeps);
+          return makeResult(id, {
+            content: [{ type: "text", text: JSON.stringify(report, null, 2) }],
+            structuredContent: report,
+            isError: false,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return makeResult(id, {
+            content: [{ type: "text", text: message }],
+            isError: true,
+          });
+        }
       }
 
       return makeError(id, -32602, `Unknown tool: ${toolName}`);

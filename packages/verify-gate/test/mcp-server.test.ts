@@ -52,7 +52,12 @@ describe("MCP STDIO server (io.modelcontextprotocol/skills) & CLI", () => {
     const tools = (
       (toolsRes?.result ?? {}) as { tools: Array<{ name: string; description: string }> }
     ).tools;
-    expect(tools.map((t) => t.name)).toEqual(["verify_manifest", "verify_binary"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "verify_manifest",
+      "verify_binary",
+      "prepare_sandbox",
+      "evaluate_sandbox",
+    ]);
     for (const tool of tools) {
       expect(tool.description.length).toBeLessThanOrEqual(100);
     }
