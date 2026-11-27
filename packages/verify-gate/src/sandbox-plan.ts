@@ -103,6 +103,30 @@ function compareDottedVersion(a: string, b: string): number {
   return 0;
 }
 
+const URL_PARTS_REGEX = /^(https?):\/\/([^/?#]*)(.*)$/i;
+
+/**
+ * RFC 3986 §6.2.2.1 に従い URL を比較する。
+ * scheme と host は大文字・小文字を区別せず、userinfo・path・query・fragment は厳密に区別する。
+ */
+export function urlsMatchRfc3986(a: string, b: string): boolean {
+  if (a === b) return true;
+  const ma = URL_PARTS_REGEX.exec(a);
+  const mb = URL_PARTS_REGEX.exec(b);
+  if (!ma || !mb) return false;
+  if (ma[1].toLowerCase() !== mb[1].toLowerCase()) return false;
+  if (ma[3] !== mb[3]) return false;
+  const authA = ma[2];
+  const authB = mb[2];
+  const atA = authA.lastIndexOf("@");
+  const atB = authB.lastIndexOf("@");
+  const userA = atA >= 0 ? authA.slice(0, atA) : "";
+  const userB = atB >= 0 ? authB.slice(0, atB) : "";
+  const hostA = atA >= 0 ? authA.slice(atA + 1) : authA;
+  const hostB = atB >= 0 ? authB.slice(atB + 1) : authB;
+  return userA === userB && hostA.toLowerCase() === hostB.toLowerCase();
+}
+
 /**
  * WinGet のアーキテクチャ適用優先順（GetApplicableArchitectures 相当、WOW64 含む）に従い、
  * 指定 OS アーキテクチャで選択される最優先のインストーラーアーキテクチャを返す。
@@ -254,15 +278,24 @@ export function extractExpectedArpSpec(
 
   // 1. 実行時記録（InstallerSha256 / InstallerUrl）が提供されていれば直接一致で一意特定
   if (selectedSha || selectedUrl) {
-    const matched = allEntries.filter((entry) => {
+    const matchEntry = (entry: Record<string, unknown>, strictUrl: boolean): boolean => {
       const entrySha = asNonEmptyString(entry.InstallerSha256)?.toLowerCase();
       const entryUrl = asNonEmptyString(entry.InstallerUrl);
+      const urlMatched =
+        selectedUrl !== undefined &&
+        entryUrl !== null &&
+        (strictUrl ? entryUrl === selectedUrl : urlsMatchRfc3986(entryUrl, selectedUrl));
       if (selectedSha && selectedUrl) {
-        return entrySha === selectedSha && entryUrl === selectedUrl;
+        return entrySha === selectedSha && urlMatched;
       }
       if (selectedSha) return entrySha === selectedSha;
-      return entryUrl === selectedUrl;
-    });
+      return urlMatched;
+    };
+    const exactMatched = allEntries.filter((entry) => matchEntry(entry, true));
+    const matched =
+      exactMatched.length > 0
+        ? exactMatched
+        : allEntries.filter((entry) => matchEntry(entry, false));
     if (matched.length === 0) {
       selectionStatus = "unmatched_selected_installer";
       selectionReason = `記録されたインストーラー（url=${selectedUrl ?? "(none)"}, sha256=${selectedSha ?? "(none)"}）がマニフェストに一致しません。`;
@@ -652,13 +685,42 @@ export function buildInsideSandboxScript(options: {
     "",
     "function Select-ManifestInstallerUrl([string]$InstallOutput, [string[]]$KnownManifestUrls) {",
     "  if ([string]::IsNullOrWhiteSpace($InstallOutput) -or $KnownManifestUrls.Count -eq 0) { return $null }",
-    "  $matches = [regex]::Matches($InstallOutput, 'Downloading\\s+(https?://\\S+)')",
+    "  $urlPartsPattern = '^((?i:https?))://([^/?#]*)(.*)$'",
+    "  $dlMatches = [regex]::Matches($InstallOutput, 'Downloading\\s+((?i:https?)://\\S+)')",
     "  $selected = $null",
-    "  foreach ($m in $matches) {",
+    "  foreach ($m in $dlMatches) {",
     "    $candidate = $m.Groups[1].Value.Trim()",
+    "    $exact = $null",
     "    foreach ($known in $KnownManifestUrls) {",
-    "      if ([string]::Equals($candidate, $known, [System.StringComparison]::OrdinalIgnoreCase)) {",
+    "      if ([string]::Equals($candidate, $known, [System.StringComparison]::Ordinal)) {",
+    "        $exact = $known",
+    "        break",
+    "      }",
+    "    }",
+    "    if ($null -ne $exact) {",
+    "      $selected = $exact",
+    "      continue",
+    "    }",
+    "    $cm = [regex]::Match($candidate, $urlPartsPattern)",
+    "    if (-not $cm.Success) { continue }",
+    "    $cScheme = $cm.Groups[1].Value",
+    "    $cAuth = $cm.Groups[2].Value",
+    "    $cRest = $cm.Groups[3].Value",
+    "    $cAt = $cAuth.LastIndexOf('@')",
+    "    $cUser = if ($cAt -ge 0) { $cAuth.Substring(0, $cAt) } else { '' }",
+    "    $cHost = if ($cAt -ge 0) { $cAuth.Substring($cAt + 1) } else { $cAuth }",
+    "    foreach ($known in $KnownManifestUrls) {",
+    "      $km = [regex]::Match($known, $urlPartsPattern)",
+    "      if (-not $km.Success) { continue }",
+    "      if (-not [string]::Equals($cScheme, $km.Groups[1].Value, [System.StringComparison]::OrdinalIgnoreCase)) { continue }",
+    "      if (-not [string]::Equals($cRest, $km.Groups[3].Value, [System.StringComparison]::Ordinal)) { continue }",
+    "      $kAuth = $km.Groups[2].Value",
+    "      $kAt = $kAuth.LastIndexOf('@')",
+    "      $kUser = if ($kAt -ge 0) { $kAuth.Substring(0, $kAt) } else { '' }",
+    "      $kHost = if ($kAt -ge 0) { $kAuth.Substring($kAt + 1) } else { $kAuth }",
+    "      if ([string]::Equals($cUser, $kUser, [System.StringComparison]::Ordinal) -and [string]::Equals($cHost, $kHost, [System.StringComparison]::OrdinalIgnoreCase)) {",
     "        $selected = $known",
+    "        break",
     "      }",
     "    }",
     "  }",

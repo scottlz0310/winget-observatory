@@ -224,7 +224,7 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       expect(scriptText).toContain("'extra-cmd'");
 
       // Windows 環境では生成した Select-ManifestInstallerUrl を実 PowerShell で実行し、
-      // 依存パッケージ URL が先に Downloading 出力されても対象マニフェスト URL のみ抽出されることを検証
+      // 依存パッケージ URL の除外および RFC 3986 §6.2.2.1 準拠の URL 照合を検証
       if (process.platform === "win32") {
         const psMatch = scriptText.match(/function Select-ManifestInstallerUrl[\s\S]*?\n\}/);
         expect(psMatch).not.toBeNull();
@@ -235,8 +235,22 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
           '$depOnly = "Downloading https://aka.ms/vs/17/release/vc_redist.x64.exe`nSuccessfully installed"',
           "$r1 = Select-ManifestInstallerUrl -InstallOutput $both -KnownManifestUrls $known",
           "$r2 = Select-ManifestInstallerUrl -InstallOutput $depOnly -KnownManifestUrls $known",
+          "$caseCandidates = @('https://example.invalid/app.exe', 'https://example.invalid/App.exe')",
+          '$dlLower = "Downloading https://example.invalid/app.exe`nSuccessfully installed"',
+          '$dlUpper = "Downloading https://example.invalid/App.exe`nSuccessfully installed"',
+          '$dlHostCase = "Downloading HTTPS://EXAMPLE.INVALID/app.exe`nSuccessfully installed"',
+          "$r3 = Select-ManifestInstallerUrl -InstallOutput $dlLower -KnownManifestUrls $caseCandidates",
+          "$r4 = Select-ManifestInstallerUrl -InstallOutput $dlUpper -KnownManifestUrls $caseCandidates",
+          "$r5 = Select-ManifestInstallerUrl -InstallOutput $dlHostCase -KnownManifestUrls $caseCandidates",
+          "$queryCandidates = @('https://example.invalid/dl?token=abc', 'https://example.invalid/dl?Token=AbC')",
+          '$dlQuery = "Downloading https://example.invalid/dl?token=abc`nSuccessfully installed"',
+          "$r6 = Select-ManifestInstallerUrl -InstallOutput $dlQuery -KnownManifestUrls $queryCandidates",
           'Write-Output ("R1=" + $r1)',
           "Write-Output (\"R2=\" + ($(if ($null -eq $r2) { 'NULL' } else { $r2 })))",
+          'Write-Output ("R3=" + $r3)',
+          'Write-Output ("R4=" + $r4)',
+          'Write-Output ("R5=" + $r5)',
+          'Write-Output ("R6=" + $r6)',
         ].join("\n");
         const proc = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", probePs], {
           stdout: "pipe",
@@ -248,6 +262,10 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
           "R1=https://github.com/example/myapp/releases/download/v1.2.3/myapp-setup.exe",
         );
         expect(psOut).toContain("R2=NULL");
+        expect(psOut).toContain("R3=https://example.invalid/app.exe");
+        expect(psOut).toContain("R4=https://example.invalid/App.exe");
+        expect(psOut).toContain("R5=https://example.invalid/app.exe");
+        expect(psOut).toContain("R6=https://example.invalid/dl?token=abc");
       }
 
       // シングルクォートを含む特殊引数でも安全にエスケープされる
@@ -680,6 +698,67 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       expect(
         unsupportedArchFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass"),
       ).toBe(true);
+
+      // パスの大文字・小文字だけが異なる 2 候補（x64=/app.exe, x86=/App.exe）で誤照合しないこと
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://example.invalid/app.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: x86",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://example.invalid/App.exe",
+          `    InstallerSha256: ${"B".repeat(64)}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const caseSensitiveBundle = loadManifestBundle(tmpDir);
+      // 1) /app.exe（x64）は x64 の ProductCode と照合され pass（scheme/host 大文字小文字差も許容）
+      for (const url of ["https://example.invalid/app.exe", "HTTPS://EXAMPLE.INVALID/app.exe"]) {
+        const x64Findings = evaluateSandboxResult(
+          caseSensitiveBundle,
+          makeBaseSandboxResult({
+            installedArchitecture: "x64",
+            selectedInstallerUrl: url,
+            cliProbes: [],
+          }),
+        );
+        expect(x64Findings.filter((f) => f.status === "fail")).toHaveLength(0);
+        expect(x64Findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+      }
+      // 2) /App.exe（x86）は x86 の ProductCode（{9999...}）と照合されるため、x64 の ARP とは不一致（fail）
+      const x86MismatchFindings = evaluateSandboxResult(
+        caseSensitiveBundle,
+        makeBaseSandboxResult({
+          installedArchitecture: "x64",
+          selectedInstallerUrl: "https://example.invalid/App.exe",
+          cliProbes: [],
+        }),
+      );
+      expect(x86MismatchFindings.some((f) => f.id === "PKG-INST-01" && f.status === "fail")).toBe(
+        true,
+      );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
