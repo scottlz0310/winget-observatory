@@ -1,15 +1,13 @@
 /**
- * 初回提出（New package:）PR の差し戻し指摘抽出・マニフェスト解析・カテゴリ自動分類・
- * フィルタリング・JSONL シリアライズに関する純粋ドメインロジック。
+ * 初回提出（New package:）PR の差し戻し指摘抽出・マニフェスト解析・
+ * フィルタリング・オフライン再分類・JSONL シリアライズに関する純粋ドメインロジック。
  * 外部 I/O を行わず、src/models と同一ドメイン内モジュールのみに依存する。
  */
 
 import type {
-  FeedbackCategoryMatch,
   FeedbackTriggerKind,
   InstallerManifestMetadata,
   ReviewFeedbackAuthorReply,
-  ReviewFeedbackCategoryId,
   ReviewFeedbackComment,
   ReviewFeedbackCorpusEntry,
   ReviewFeedbackFilterOptions,
@@ -23,12 +21,46 @@ import {
   hasDeterministicAutomationManualEdit,
   isAutomationComment,
   isBotActor,
-  isCiRerunCommandComment,
   isSameActorLogin,
 } from "./intervention";
+import {
+  CATEGORY_LABELS,
+  categorizeFeedback,
+  classifyFeedbackCommentSeverity,
+  FEEDBACK_CATEGORY_RULES,
+  type FeedbackCategoryRule,
+  hasEmbeddedImage,
+  isActionableClosedRejectionComment,
+  isAuthorNoiseComment,
+  isAutomaticValidationNoiseComment,
+  isFalsePositiveNoteOnlyComment,
+  isFeedbackNoiseComment,
+  isPolicyCommandOnlyComment,
+  isStaleCloseCommandOnlyComment,
+  isVerifyMemoOnlyComment,
+  isWingetbotCommandOnlyComment,
+} from "./review-feedback-rules";
 
-/** 現行のレビュー指摘コーパススキーマバージョン */
-export const CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION = 1;
+export {
+  CATEGORY_LABELS,
+  categorizeFeedback,
+  classifyFeedbackCommentSeverity,
+  FEEDBACK_CATEGORY_RULES,
+  type FeedbackCategoryRule,
+  hasEmbeddedImage,
+  isActionableClosedRejectionComment,
+  isAuthorNoiseComment,
+  isAutomaticValidationNoiseComment,
+  isFalsePositiveNoteOnlyComment,
+  isFeedbackNoiseComment,
+  isPolicyCommandOnlyComment,
+  isStaleCloseCommandOnlyComment,
+  isVerifyMemoOnlyComment,
+  isWingetbotCommandOnlyComment,
+};
+
+/** 現行のレビュー指摘コーパススキーマバージョン（v2: 定型ノイズ除外・深刻度・7 カテゴリ・CLOSED 却下トリガー） */
+export const CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION = 2;
 
 /** 差し戻し履歴として検知するラベル一覧 */
 export const FEEDBACK_TRIGGER_LABELS: readonly string[] = [
@@ -36,100 +68,16 @@ export const FEEDBACK_TRIGGER_LABELS: readonly string[] = [
   "Changes-Requested",
 ] as const;
 
+/** CLOSED（未マージ終了）PR で直接却下トリガーとして検知するラベル一覧 */
+export const CLOSED_REJECTION_LABELS: ReadonlySet<string> = new Set([
+  "Blocking-Issue",
+  "Scripted-Application",
+  "Interactive-Only-Installer",
+  "DriverInstall",
+]);
+
 const NEEDS_AUTHOR_FEEDBACK_LABEL = "Needs-Author-Feedback";
 const CHANGES_REQUESTED_LABEL = "Changes-Requested";
-
-/** カテゴリ定義（表示ラベルとキーワードルール） */
-export interface FeedbackCategoryRule {
-  id: Exclude<ReviewFeedbackCategoryId, "uncategorized">;
-  label: string;
-  patterns: ReadonlyArray<{ keyword: string; regex: RegExp }>;
-}
-
-export const FEEDBACK_CATEGORY_RULES: readonly FeedbackCategoryRule[] = [
-  {
-    id: "dll-runtime",
-    label: "DLL / ランタイム欠損",
-    patterns: [
-      { keyword: "VCRUNTIME140", regex: /\bvcruntime\d*/i },
-      { keyword: "MSVCP140", regex: /\bmsvcp\d*/i },
-      { keyword: "ucrtbase", regex: /\bucrtbase\b/i },
-      {
-        keyword: "VCRedist",
-        regex: /\b(?:vcredist|vc\+\+|visual\s+c\+\+|c\+\+\s+redistributable)\b/i,
-      },
-      { keyword: ".dll", regex: /(?:\.dll\b|\bdll\b)/i },
-      { keyword: "missing", regex: /\bmissing\b/i },
-      { keyword: "not found", regex: /\bnot\s+found\b/i },
-      {
-        keyword: "runtime",
-        regex: /\b(?:c\s+runtime|runtime\s+(?:missing|required|dependency|dll))\b/i,
-      },
-    ],
-  },
-  {
-    id: "launch-command",
-    label: "起動・コマンド動作不良",
-    patterns: [
-      { keyword: "fails to start", regex: /\bfails?\s+to\s+(?:start|launch|run)\b/i },
-      { keyword: "launch", regex: /\blaunch(?:es|ing|ed)?\b/i },
-      { keyword: "exit code", regex: /\bexit\s+code\b/i },
-      { keyword: "crash", regex: /\bcrash(?:es|ed|ing)?\b/i },
-      { keyword: "PortableCommandAlias", regex: /\bPortableCommandAlias\b/i },
-      { keyword: "Commands", regex: /\bCommands\b/ },
-    ],
-  },
-  {
-    id: "metadata-url",
-    label: "メタデータ・URL 不備",
-    patterns: [
-      { keyword: "PrivacyUrl", regex: /\bPrivacyUrl\b/i },
-      { keyword: "ReleaseNotesUrl", regex: /\bReleaseNotesUrl\b/i },
-      { keyword: "PublisherSupportUrl", regex: /\bPublisherSupportUrl\b/i },
-      { keyword: "PublisherUrl", regex: /\bPublisherUrl\b/i },
-      { keyword: "LicenseUrl", regex: /\bLicenseUrl\b/i },
-      { keyword: "PackageUrl", regex: /\bPackageUrl\b/i },
-      { keyword: "404", regex: /\b404\b/ },
-      { keyword: "redirect", regex: /\bredirect(?:s|ed|ing)?\b/i },
-      { keyword: "broken link", regex: /\b(?:dead|broken)\s+(?:link|url)\b/i },
-    ],
-  },
-  {
-    id: "manifest-installer",
-    label: "マニフェスト構造・インストーラー種別",
-    patterns: [
-      { keyword: "NestedInstallerType", regex: /\bNestedInstallerType\b/i },
-      { keyword: "InstallerType", regex: /\bInstallerType\b/i },
-      { keyword: "Architecture", regex: /\bArchitecture\b/i },
-      { keyword: "UpgradeBehavior", regex: /\bUpgradeBehavior\b/i },
-      { keyword: "Scope", regex: /\bScope\b/ },
-      { keyword: "InstallerSwitches", regex: /\bInstallerSwitches\b/i },
-      { keyword: "InstallerSha256", regex: /\bInstallerSha256\b/i },
-      { keyword: "ManifestVersion", regex: /\bManifestVersion\b/i },
-      { keyword: "AppsAndFeaturesEntries", regex: /\bAppsAndFeaturesEntries\b/i },
-    ],
-  },
-  {
-    id: "security-signing",
-    label: "セキュリティ / 署名 / SmartScreen",
-    patterns: [
-      { keyword: "SmartScreen", regex: /\bsmartscreen\b/i },
-      { keyword: "VirusTotal", regex: /\bvirustotal\b/i },
-      { keyword: "defender", regex: /\bdefender\b/i },
-      { keyword: "malware", regex: /\b(?:malware|trojan|virus)\b/i },
-      { keyword: "signature", regex: /\b(?:signature|unsigned|code\s*sign(?:ing|ed)?)\b/i },
-    ],
-  },
-] as const;
-
-export const CATEGORY_LABELS: Record<ReviewFeedbackCategoryId, string> = {
-  "dll-runtime": "DLL / ランタイム欠損",
-  "launch-command": "起動・コマンド動作不良",
-  "metadata-url": "メタデータ・URL 不備",
-  "manifest-installer": "マニフェスト構造・インストーラー種別",
-  "security-signing": "セキュリティ / 署名 / SmartScreen",
-  uncategorized: "未分類（その他・新種候補）",
-};
 
 /**
  * PR タイトルが初回パッケージ提出（`New package:`）で始まるかを判定する（大小文字無視・前後空白許容）。
@@ -144,8 +92,7 @@ export function isNewPackageTitle(title: string | null | undefined): boolean {
 /**
  * 状態ごとの GitHub Search クエリ条件文字列を構築する。
  * - `merged`: 指定期間内にマージされた `New-Package` + タイトル `New package:` PR（ラベル履歴はバッチ詳細で判定）
- * - `open` / `closed`: 指定期間内に更新された `New-Package` + タイトル `New package:` + `Needs-Author-Feedback` ラベル PR
- *   （`changesRequestedOnly` 指定時は `review:changes_requested` 用の補助クエリも構築可能）
+ * - `open` / `closed`: 指定期間内に更新された `New-Package` + タイトル `New package:` PR
  */
 export function buildFeedbackSearchQueryParts(params: {
   repository: string;
@@ -176,55 +123,6 @@ export function buildFeedbackSearchQueryParts(params: {
   }
 
   return parts;
-}
-
-/**
- * `[Policy] Needs-Author-Feedback` 等の Policy Bot 向け単体コマンドコメントか判定する。
- * 説明文が併記されている場合は false を返す。
- */
-export function isPolicyCommandOnlyComment(body: string | null | undefined): boolean {
-  if (typeof body !== "string") {
-    return false;
-  }
-  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
-  if (!normalized) {
-    return true;
-  }
-  return /^\[Policy\]\s+[^\r\n]+$/i.test(normalized);
-}
-
-/**
- * PR 作成者の定型コマンドコメント（CLA 同意・CI 再実行コマンド単体等）か判定する。
- */
-export function isAuthorNoiseComment(body: string | null | undefined): boolean {
-  if (typeof body !== "string") {
-    return true;
-  }
-  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
-  if (!normalized) {
-    return true;
-  }
-  if (isCiRerunCommandComment(normalized) || isPolicyCommandOnlyComment(normalized)) {
-    return true;
-  }
-  // Microsoft CLA 同意コマンド（例: `@microsoft-github-policy-service agree ...` または単独の `agree`）
-  if (/^@microsoft-github-policy-service\s+agree\b/i.test(normalized)) {
-    return true;
-  }
-  if (/^agree$/i.test(normalized)) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * コメント本文に画像添付（HTML `<img>` または Markdown `![]()`）が含まれるかを判定する。
- */
-export function hasEmbeddedImage(body: string | null | undefined): boolean {
-  if (typeof body !== "string") {
-    return false;
-  }
-  return /<img\b[^>]*\bsrc=/i.test(body) || /!\[[^\]]*\]\([^)]+\)/.test(body);
 }
 
 /** 詳細 PR 評価用の入力型 */
@@ -280,14 +178,23 @@ export interface RawPrFeedbackInput {
   filePaths: readonly string[];
 }
 
+function isClosedRejectionLabel(label: string): boolean {
+  return CLOSED_REJECTION_LABELS.has(label) || /^Policy-Test-/i.test(label);
+}
+
 /**
- * 差し戻しトリガー（`Needs-Author-Feedback` / `Changes-Requested` ラベル履歴、人間 `CHANGES_REQUESTED` レビュー）を判定する。
+ * 差し戻し・却下トリガーを判定する。
+ * - 全状態共通: `Needs-Author-Feedback` / `Changes-Requested` ラベル履歴、人間 `CHANGES_REQUESTED` レビュー
+ * - `CLOSED`（未マージ終了）のみ追加: 却下系ラベル（`Blocking-Issue` / `Scripted-Application` / `Interactive-Only-Installer` / `Policy-Test-*` 等）、
+ *   または特権ロール（`MEMBER` / `COLLABORATOR` / `OWNER`）による実質的な人間指摘コメント
  */
 export function detectFeedbackTriggers(params: {
   prAuthorLogin?: string | null;
+  state?: ReviewFeedbackPrState;
   currentLabels: readonly string[];
   labeledEvents: ReadonlyArray<{ label: string }>;
   reviews: readonly RawPrReviewInput[];
+  feedbackItems?: readonly ReviewFeedbackComment[];
 }): {
   triggers: FeedbackTriggerKind[];
   historicalFeedbackLabels: string[];
@@ -318,6 +225,25 @@ export function detectFeedbackTriggers(params: {
     triggers.push("changes-requested-review");
   }
 
+  if (params.state === "CLOSED") {
+    const matchedClosedLabels = [...allLabels].filter(isClosedRejectionLabel);
+    if (matchedClosedLabels.length > 0) {
+      triggers.push("closed-rejection-label");
+      for (const label of matchedClosedLabels) {
+        historicalSet.add(label);
+      }
+    }
+
+    const hasPrivilegedRejectionFeedback = (params.feedbackItems ?? []).some(
+      (item) =>
+        isPrivilegedAuthorAssociation(item.authorAssociation) &&
+        isActionableClosedRejectionComment(item.body),
+    );
+    if (hasPrivilegedRejectionFeedback) {
+      triggers.push("closed-maintainer-feedback");
+    }
+  }
+
   return {
     triggers,
     historicalFeedbackLabels: [...historicalSet],
@@ -333,11 +259,7 @@ function normalizeBody(body: string | null | undefined): string {
   return (body ?? "").replace(/\r\n/g, "\n").trim();
 }
 
-/**
- * PR の reviews・インラインレビューコメント・通常コメントから、第三者人間による指摘コメントを抽出する。
- * Bot・PR 作成者本人・未編集自動検証ログ・CI 再実行コマンド単体・`[Policy]` 単体コマンドは除外する。
- */
-export function extractReviewFeedbackItems(params: {
+function extractRawThirdPartyHumanItems(params: {
   prAuthorLogin?: string | null;
   reviews: readonly RawPrReviewInput[];
   comments: readonly RawPrCommentInput[];
@@ -349,13 +271,7 @@ export function extractReviewFeedbackItems(params: {
       !isBotActor(review.author) && !isSameActorLogin(review.author?.login, params.prAuthorLogin);
 
     const reviewBody = normalizeBody(review.body);
-    if (
-      isHumanThirdPartyReview &&
-      reviewBody.length > 0 &&
-      !isPolicyCommandOnlyComment(reviewBody) &&
-      !isCiRerunCommandComment(reviewBody) &&
-      !isAutomationComment(reviewBody)
-    ) {
+    if (isHumanThirdPartyReview && reviewBody.length > 0 && !isAutomationComment(reviewBody)) {
       items.push({
         source: "review",
         author: review.author?.login?.trim() || DELETED_ACTOR_LABEL,
@@ -364,6 +280,7 @@ export function extractReviewFeedbackItems(params: {
         ...(review.state ? { reviewState: review.state } : {}),
         body: reviewBody,
         hasImage: hasEmbeddedImage(reviewBody),
+        severity: classifyFeedbackCommentSeverity(reviewBody),
       });
     }
 
@@ -375,12 +292,7 @@ export function extractReviewFeedbackItems(params: {
         continue;
       }
       const inlineBody = normalizeBody(inlineComment.body);
-      if (
-        !inlineBody ||
-        isPolicyCommandOnlyComment(inlineBody) ||
-        isCiRerunCommandComment(inlineBody) ||
-        isAutomationComment(inlineBody)
-      ) {
+      if (!inlineBody || isAutomationComment(inlineBody)) {
         continue;
       }
       items.push({
@@ -393,13 +305,14 @@ export function extractReviewFeedbackItems(params: {
         ...(inlineComment.path ? { path: inlineComment.path } : {}),
         body: inlineBody,
         hasImage: hasEmbeddedImage(inlineBody),
+        severity: classifyFeedbackCommentSeverity(inlineBody),
       });
     }
   }
 
   for (const comment of params.comments) {
     const body = normalizeBody(comment.body);
-    if (!body || isPolicyCommandOnlyComment(body) || isCiRerunCommandComment(body)) {
+    if (!body) {
       continue;
     }
 
@@ -416,6 +329,7 @@ export function extractReviewFeedbackItems(params: {
         createdAt: comment.lastEditedAt ?? comment.createdAt ?? "",
         body,
         hasImage: hasEmbeddedImage(body),
+        severity: classifyFeedbackCommentSeverity(body),
       });
       continue;
     }
@@ -434,6 +348,7 @@ export function extractReviewFeedbackItems(params: {
       createdAt: comment.createdAt ?? "",
       body,
       hasImage: hasEmbeddedImage(body),
+      severity: classifyFeedbackCommentSeverity(body),
     });
   }
 
@@ -442,7 +357,22 @@ export function extractReviewFeedbackItems(params: {
 }
 
 /**
- * PR 作成者本人による手動返信コメントを抽出する（CLA 同意・CI 再実行コマンド等は除外）。
+ * PR の reviews・インラインレビューコメント・通常コメントから、第三者人間による実質的な指摘コメントを抽出する。
+ * Bot・PR 作成者本人・未編集自動検証ログ・定型ボットコマンド（`@wingetbot waivers` / `[Policy]` 等）・
+ * `Verify:` スクショ/メモ単体・`Close with reason: Stale;` 単体・Policy-Test 誤検知転載は除外する。
+ */
+export function extractReviewFeedbackItems(params: {
+  prAuthorLogin?: string | null;
+  reviews: readonly RawPrReviewInput[];
+  comments: readonly RawPrCommentInput[];
+}): ReviewFeedbackComment[] {
+  return extractRawThirdPartyHumanItems(params).filter(
+    (item) => !isFeedbackNoiseComment(item.body),
+  );
+}
+
+/**
+ * PR 作成者本人による手動返信コメントを抽出する（CLA 同意・引用付き CLA・`bump` 単体・CI 再実行コマンド等は除外）。
  */
 export function extractAuthorReplies(params: {
   prAuthorLogin?: string | null;
@@ -566,49 +496,12 @@ export function parseInstallerManifestMetadata(
 }
 
 /**
- * 指摘コメント群（および任意で作成者返信群）をルールベースでカテゴリ分類する（マルチタグ対応）。
- * どのルールにも該当しない場合は `uncategorized` を付与する。
+ * 指摘コメント配列からブロッキング差し戻し指摘を 1 件以上含むかを判定する。
  */
-export function categorizeFeedback(params: {
-  feedbackItems: readonly ReviewFeedbackComment[];
-  authorReplies?: readonly ReviewFeedbackAuthorReply[];
-}): {
-  categories: ReviewFeedbackCategoryId[];
-  categoryMatches: FeedbackCategoryMatch[];
-} {
-  const combinedTexts = [
-    ...params.feedbackItems.map((item) => item.body),
-    ...(params.authorReplies ?? []).map((reply) => reply.body),
-  ];
-  const corpus = combinedTexts.join("\n\n");
-
-  const categoryMatches: FeedbackCategoryMatch[] = [];
-  for (const rule of FEEDBACK_CATEGORY_RULES) {
-    const matchedKeywords: string[] = [];
-    for (const pattern of rule.patterns) {
-      if (pattern.regex.test(corpus)) {
-        matchedKeywords.push(pattern.keyword);
-      }
-    }
-    if (matchedKeywords.length > 0) {
-      categoryMatches.push({
-        category: rule.id,
-        matchedKeywords,
-      });
-    }
-  }
-
-  if (categoryMatches.length === 0) {
-    return {
-      categories: ["uncategorized"],
-      categoryMatches: [{ category: "uncategorized", matchedKeywords: [] }],
-    };
-  }
-
-  return {
-    categories: categoryMatches.map((m) => m.category),
-    categoryMatches,
-  };
+export function hasBlockingFeedbackItems(feedbackItems: readonly ReviewFeedbackComment[]): boolean {
+  return feedbackItems.some(
+    (item) => (item.severity ?? classifyFeedbackCommentSeverity(item.body)) === "blocking",
+  );
 }
 
 /**
@@ -641,11 +534,20 @@ export function buildReviewFeedbackEntry(params: {
   }
 
   const prAuthorLogin = pr.author?.login ?? null;
+  const rawHumanItems = extractRawThirdPartyHumanItems({
+    prAuthorLogin,
+    reviews: pr.reviews,
+    comments: pr.comments,
+  });
+  const feedbackItems = rawHumanItems.filter((item) => !isFeedbackNoiseComment(item.body));
+
   const { triggers, historicalFeedbackLabels } = detectFeedbackTriggers({
     prAuthorLogin,
+    state: pr.state,
     currentLabels: pr.currentLabels,
     labeledEvents: pr.labeledEvents,
     reviews: pr.reviews,
+    feedbackItems,
   });
 
   if (triggers.length === 0) {
@@ -665,13 +567,10 @@ export function buildReviewFeedbackEntry(params: {
     };
   }
 
-  const feedbackItems = extractReviewFeedbackItems({
-    prAuthorLogin,
-    reviews: pr.reviews,
-    comments: pr.comments,
-  });
-
   if (feedbackItems.length === 0) {
+    const hasOnlyNonCommandNoise = rawHumanItems.some(
+      (item) => !isPolicyCommandOnlyComment(item.body) && isFeedbackNoiseComment(item.body),
+    );
     return {
       schemaVersion: CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
       entryType: "no-feedback",
@@ -683,7 +582,7 @@ export function buildReviewFeedbackEntry(params: {
       updatedAt: pr.updatedAt,
       mergedAt: pr.mergedAt,
       closedAt: pr.closedAt,
-      skipReason: "no-human-feedback",
+      skipReason: hasOnlyNonCommandNoise ? "noise-only-feedback" : "no-human-feedback",
       collectedAt,
     };
   }
@@ -727,14 +626,181 @@ export function buildReviewFeedbackEntry(params: {
     authorReplies,
     categories,
     categoryMatches,
+    hasBlockingFeedback: hasBlockingFeedbackItems(feedbackItems),
     collectedAt,
   };
 }
 
+export interface ReclassifyCorpusResult {
+  entries: ReviewFeedbackCorpusEntry[];
+  stats: {
+    totalProcessed: number;
+    reclassifiedFeedbackCount: number;
+    demotedToNoiseOnlyCount: number;
+    upgradedMergedSkippedCount: number;
+    keptLegacySkippedCount: number;
+    keptLegacyFeedbackCount: number;
+    removedFeedbackCommentsCount: number;
+    removedAuthorRepliesCount: number;
+  };
+}
+
 /**
- * フィルタ条件（ポータブル形式・インストーラー種別・特権ロール限定・初回作者限定）をレコード群へ適用する。
- * `privilegedOnly` が有効な場合は、特権ロール（MEMBER / COLLABORATOR / OWNER）の指摘コメントのみに絞り込み、
- * 残存コメント 0 件の PR を除外してカテゴリを再計算する。
+ * 既存コーパスエントリを GitHub API 再取得なしで現行ルール（v2）へオフライン再評価する。
+ * - `MERGED` の `feedback` / `no-feedback` は v2 でトリガーが拡大していないため安全に v2 へ昇格し、
+ *   残存指摘が 0 件になった `feedback` は `no-feedback`（`skipReason: "noise-only-feedback"`）へ降格する。
+ * - `CLOSED` / `OPEN` の旧版（`schemaVersion < 2`）は、タイムラインの `labeledEvents` 全履歴を保持していないため、
+ *   `feedback` については保存済みラベル・コメントから確定可能な `closed-*` トリガー・深刻度・カテゴリを再計算しつつ、
+ *   `schemaVersion` は旧値のまま維持して次回収集時の API 再取得対象に残す（`no-feedback` も同様に旧値維持）。
+ */
+export function reclassifyReviewFeedbackCorpus(
+  entries: readonly ReviewFeedbackCorpusEntry[],
+): ReclassifyCorpusResult {
+  const result: ReviewFeedbackCorpusEntry[] = [];
+  let reclassifiedFeedbackCount = 0;
+  let demotedToNoiseOnlyCount = 0;
+  let upgradedMergedSkippedCount = 0;
+  let keptLegacySkippedCount = 0;
+  let keptLegacyFeedbackCount = 0;
+  let removedFeedbackCommentsCount = 0;
+  let removedAuthorRepliesCount = 0;
+
+  for (const entry of entries) {
+    if (entry.entryType === "no-feedback") {
+      if (
+        entry.state === "MERGED" &&
+        entry.schemaVersion < CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION
+      ) {
+        upgradedMergedSkippedCount++;
+        result.push({
+          ...entry,
+          schemaVersion: CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
+        });
+      } else {
+        if (entry.schemaVersion < CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION) {
+          keptLegacySkippedCount++;
+        }
+        result.push(entry);
+      }
+      continue;
+    }
+
+    const canPromoteSchemaVersion =
+      entry.state === "MERGED" || entry.schemaVersion >= CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION;
+    const nextSchemaVersion = canPromoteSchemaVersion
+      ? CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION
+      : entry.schemaVersion;
+
+    const cleanedFeedbackItems: ReviewFeedbackComment[] = [];
+    for (const item of entry.feedbackItems) {
+      if (isFeedbackNoiseComment(item.body)) {
+        removedFeedbackCommentsCount++;
+        continue;
+      }
+      cleanedFeedbackItems.push({
+        ...item,
+        severity: classifyFeedbackCommentSeverity(item.body),
+      });
+    }
+
+    const cleanedAuthorReplies: ReviewFeedbackAuthorReply[] = [];
+    for (const reply of entry.authorReplies) {
+      if (isAuthorNoiseComment(reply.body)) {
+        removedAuthorRepliesCount++;
+        continue;
+      }
+      cleanedAuthorReplies.push(reply);
+    }
+
+    if (cleanedFeedbackItems.length === 0) {
+      demotedToNoiseOnlyCount++;
+      if (!canPromoteSchemaVersion) {
+        keptLegacySkippedCount++;
+      }
+      result.push({
+        schemaVersion: nextSchemaVersion,
+        entryType: "no-feedback",
+        repository: entry.repository,
+        number: entry.number,
+        title: entry.title,
+        state: entry.state,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+        mergedAt: entry.mergedAt,
+        closedAt: entry.closedAt,
+        skipReason: "noise-only-feedback",
+        collectedAt: entry.collectedAt,
+      });
+      continue;
+    }
+
+    // 保存済みラベル・指摘コメントから確定可能なトリガー・履歴ラベルを補完再計算する
+    let nextTriggers = [...entry.triggers];
+    let nextHistoricalLabels = [...entry.historicalFeedbackLabels];
+    if (entry.state === "CLOSED") {
+      const triggerSet = new Set<FeedbackTriggerKind>(nextTriggers);
+      const labelSet = new Set<string>(nextHistoricalLabels);
+      const savedClosedRejectionLabels = [
+        ...new Set([...entry.currentLabels, ...entry.historicalFeedbackLabels]),
+      ].filter(isClosedRejectionLabel);
+      if (savedClosedRejectionLabels.length > 0) {
+        triggerSet.add("closed-rejection-label");
+        for (const label of savedClosedRejectionLabels) {
+          labelSet.add(label);
+        }
+      }
+      const hasPrivilegedRejectionFeedback = cleanedFeedbackItems.some(
+        (item) =>
+          isPrivilegedAuthorAssociation(item.authorAssociation) &&
+          isActionableClosedRejectionComment(item.body),
+      );
+      if (hasPrivilegedRejectionFeedback) {
+        triggerSet.add("closed-maintainer-feedback");
+      }
+      nextTriggers = [...triggerSet];
+      nextHistoricalLabels = [...labelSet];
+    }
+
+    const { categories, categoryMatches } = categorizeFeedback({
+      feedbackItems: cleanedFeedbackItems,
+      authorReplies: cleanedAuthorReplies,
+    });
+    reclassifiedFeedbackCount++;
+    if (!canPromoteSchemaVersion) {
+      keptLegacyFeedbackCount++;
+    }
+    result.push({
+      ...entry,
+      schemaVersion: nextSchemaVersion,
+      triggers: nextTriggers,
+      historicalFeedbackLabels: nextHistoricalLabels,
+      feedbackItems: cleanedFeedbackItems,
+      authorReplies: cleanedAuthorReplies,
+      categories,
+      categoryMatches,
+      hasBlockingFeedback: hasBlockingFeedbackItems(cleanedFeedbackItems),
+    });
+  }
+
+  return {
+    entries: result,
+    stats: {
+      totalProcessed: entries.length,
+      reclassifiedFeedbackCount,
+      demotedToNoiseOnlyCount,
+      upgradedMergedSkippedCount,
+      keptLegacySkippedCount,
+      keptLegacyFeedbackCount,
+      removedFeedbackCommentsCount,
+      removedAuthorRepliesCount,
+    },
+  };
+}
+
+/**
+ * フィルタ条件（ポータブル形式・インストーラー種別・特権ロール限定・初回作者限定・ブロッキング限定）をレコード群へ適用する。
+ * `privilegedOnly` または `blockingOnly` が有効な場合は、条件を満たす指摘コメントのみに絞り込み、
+ * 残存コメント 0 件の PR を除外してカテゴリと `hasBlockingFeedback` を再計算する。
  */
 export function filterReviewFeedbackRecords(
   records: readonly ReviewFeedbackRecord[],
@@ -770,22 +836,32 @@ export function filterReviewFeedbackRecords(
       continue;
     }
 
-    if (options.privilegedOnly) {
-      const privilegedItems = record.feedbackItems.filter((item) =>
-        isPrivilegedAuthorAssociation(item.authorAssociation),
-      );
-      if (privilegedItems.length === 0) {
+    if (options.privilegedOnly || options.blockingOnly) {
+      const scopedItems = record.feedbackItems.filter((item) => {
+        if (options.privilegedOnly && !isPrivilegedAuthorAssociation(item.authorAssociation)) {
+          return false;
+        }
+        if (options.blockingOnly) {
+          const sev = item.severity ?? classifyFeedbackCommentSeverity(item.body);
+          if (sev !== "blocking") {
+            return false;
+          }
+        }
+        return true;
+      });
+      if (scopedItems.length === 0) {
         continue;
       }
       const { categories, categoryMatches } = categorizeFeedback({
-        feedbackItems: privilegedItems,
+        feedbackItems: scopedItems,
         authorReplies: record.authorReplies,
       });
       filtered.push({
         ...record,
-        feedbackItems: privilegedItems,
+        feedbackItems: scopedItems,
         categories,
         categoryMatches,
+        hasBlockingFeedback: hasBlockingFeedbackItems(scopedItems),
       });
       continue;
     }

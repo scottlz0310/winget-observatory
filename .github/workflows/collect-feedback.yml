@@ -23,6 +23,11 @@ on:
         description: "1 回の実行で新規詳細取得する PR 上限（0 でキャッシュ集計のみ）"
         required: false
         default: "200"
+      reclassify:
+        description: "既存コーパスを API 再取得なしで現行ルールへオフライン再分類するか"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: collect-review-feedback
@@ -63,14 +68,20 @@ jobs:
           LOOKBACK_DAYS: ${{ inputs.lookback_days || '90' }}
           STATES: ${{ inputs.states || 'merged' }}
           FETCH_BUDGET: ${{ inputs.fetch_budget || '200' }}
+          RECLASSIFY: ${{ inputs.reclassify && 'true' || 'false' }}
         run: |
+          EXTRA_ARGS=()
+          if [ "$RECLASSIFY" = "true" ]; then
+            EXTRA_ARGS+=(--reclassify)
+          fi
           bun run src/cli/collect-review-feedback.ts \
             --repo "$WINGET_REPOSITORY" \
             --lookback-days "$LOOKBACK_DAYS" \
             --states "$STATES" \
             --fetch-budget "$FETCH_BUDGET" \
             --output-path "data/review-feedback.jsonl" \
-            --report-path "data/review-feedback-report.md"
+            --report-path "data/review-feedback-report.md" \
+            "${EXTRA_ARGS[@]}"
 
       - name: Upload review feedback corpus and report to Dropbox
         if: always() && steps.download_dropbox.outcome == 'success'

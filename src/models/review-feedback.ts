@@ -13,17 +13,24 @@ export type ReviewFeedbackStateFilter = "merged" | "open" | "closed";
 export type FeedbackTriggerKind =
   | "needs-author-feedback-label"
   | "changes-requested-label"
-  | "changes-requested-review";
+  | "changes-requested-review"
+  | "closed-rejection-label"
+  | "closed-maintainer-feedback";
 
 /** 抽出した指摘コメントのソース種別 */
 export type FeedbackCommentSource = "review" | "review_comment" | "issue_comment";
 
-/** 地雷カテゴリ ID（Issue #150 の 5 カテゴリ + 未分類） */
+/** 指摘コメントの深刻度（ブロッキング差し戻し vs 非ブロッキング助言） */
+export type FeedbackCommentSeverity = "blocking" | "non-blocking";
+
+/** 地雷カテゴリ ID（7 カテゴリ + 未分類） */
 export type ReviewFeedbackCategoryId =
+  | "privacy-policy"
   | "dll-runtime"
   | "launch-command"
   | "metadata-url"
   | "manifest-installer"
+  | "locale-language"
   | "security-signing"
   | "uncategorized";
 
@@ -45,6 +52,8 @@ export interface ReviewFeedbackComment {
   body: string;
   /** スクリーンショット等の画像添付を含むか（HTML img / Markdown image 判定） */
   hasImage: boolean;
+  /** ブロッキング差し戻しか非ブロッキング助言か（v2 以降で付与、v1 互換時は未設定） */
+  severity?: FeedbackCommentSeverity;
 }
 
 /** PR 作成者による手動返信コメント（修正内容・原因説明の文脈保持用） */
@@ -133,6 +142,8 @@ export interface ReviewFeedbackRecord {
   categories: ReviewFeedbackCategoryId[];
   /** カテゴリ別のマッチキーワード詳細 */
   categoryMatches: FeedbackCategoryMatch[];
+  /** ブロッキングな差し戻し指摘を 1 件以上含むか（false の場合は非ブロッキング助言のみ） */
+  hasBlockingFeedback?: boolean;
   /** このレコードを収集した日時（ISO 8601） */
   collectedAt: string;
 }
@@ -160,7 +171,11 @@ export interface ReviewFeedbackSkippedRecord {
   /** クローズ日時 */
   closedAt: string | null;
   /** スキップ理由 */
-  skipReason: "not-new-package-title" | "no-rejection-trigger" | "no-human-feedback";
+  skipReason:
+    | "not-new-package-title"
+    | "no-rejection-trigger"
+    | "no-human-feedback"
+    | "noise-only-feedback";
   /** 記録日時（ISO 8601） */
   collectedAt: string;
 }
@@ -190,6 +205,8 @@ export interface ReviewFeedbackSummary {
   repository: string;
   generatedAt: string;
   totalFeedbackPrs: number;
+  blockingPrCount: number;
+  nonBlockingOnlyPrCount: number;
   totalFeedbackComments: number;
   totalAuthorReplies: number;
   portablePrCount: number;
@@ -213,6 +230,8 @@ export interface ReviewFeedbackFilterOptions {
   privilegedOnly?: boolean;
   /** 初回提出者（isFirstTimeAuthor === true）の PR のみに限定するか */
   firstTimerOnly?: boolean;
+  /** ブロッキングな指摘コメントのみに限定するか（非ブロッキング助言のみの PR を除外） */
+  blockingOnly?: boolean;
 }
 
 /** CLI 実行オプション */
@@ -232,5 +251,7 @@ export interface CollectReviewFeedbackOptions {
   portableOnly: boolean;
   privilegedOnly: boolean;
   firstTimerOnly: boolean;
+  blockingOnly: boolean;
+  reclassify: boolean;
   now?: Date;
 }

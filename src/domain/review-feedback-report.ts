@@ -12,13 +12,19 @@ import type {
   ReviewFeedbackSummary,
 } from "../models/review-feedback";
 import { formatJstDate, formatJstDateTime, round1 } from "./formatters";
-import { CATEGORY_LABELS } from "./review-feedback";
+import {
+  CATEGORY_LABELS,
+  classifyFeedbackCommentSeverity,
+  hasBlockingFeedbackItems,
+} from "./review-feedback";
 
 const ALL_CATEGORY_IDS: readonly ReviewFeedbackCategoryId[] = [
+  "privacy-policy",
   "dll-runtime",
   "launch-command",
   "metadata-url",
   "manifest-installer",
+  "locale-language",
   "security-signing",
   "uncategorized",
 ] as const;
@@ -27,6 +33,8 @@ const TRIGGER_LABELS: Record<FeedbackTriggerKind, string> = {
   "needs-author-feedback-label": "Needs-Author-Feedback ラベル履歴",
   "changes-requested-label": "Changes-Requested ラベル履歴",
   "changes-requested-review": "CHANGES_REQUESTED レビュー",
+  "closed-rejection-label": "CLOSED 却下系ラベル（Blocking / Policy / Scripted 等）",
+  "closed-maintainer-feedback": "CLOSED メンテナ指摘コメント",
 };
 
 /**
@@ -50,6 +58,8 @@ export function summarizeReviewFeedback(params: {
     "needs-author-feedback-label": 0,
     "changes-requested-label": 0,
     "changes-requested-review": 0,
+    "closed-rejection-label": 0,
+    "closed-maintainer-feedback": 0,
   };
 
   const categoryPrs = new Map<ReviewFeedbackCategoryId, ReviewFeedbackRecord[]>();
@@ -62,6 +72,8 @@ export function summarizeReviewFeedback(params: {
   const installerTypeMap = new Map<string, number>();
   const nestedTypeMap = new Map<string, number>();
 
+  let blockingPrCount = 0;
+  let nonBlockingOnlyPrCount = 0;
   let totalFeedbackComments = 0;
   let totalAuthorReplies = 0;
   let portablePrCount = 0;
@@ -71,6 +83,15 @@ export function summarizeReviewFeedback(params: {
 
   for (const rec of sortedRecords) {
     stateCounts[rec.state]++;
+    const hasBlocking =
+      rec.hasBlockingFeedback !== undefined
+        ? rec.hasBlockingFeedback
+        : hasBlockingFeedbackItems(rec.feedbackItems);
+    if (hasBlocking) {
+      blockingPrCount++;
+    } else {
+      nonBlockingOnlyPrCount++;
+    }
     totalFeedbackComments += rec.feedbackItems.length;
     totalAuthorReplies += rec.authorReplies.length;
     if (rec.installer.isPortable) {
@@ -147,6 +168,8 @@ export function summarizeReviewFeedback(params: {
     repository,
     generatedAt,
     totalFeedbackPrs,
+    blockingPrCount,
+    nonBlockingOnlyPrCount,
     totalFeedbackComments,
     totalAuthorReplies,
     portablePrCount,
@@ -188,6 +211,9 @@ export function formatReviewFeedbackMarkdown(params: {
   lines.push(`- 生成日時: ${formatJstDateTime(summary.generatedAt)} (${summary.generatedAt})`);
   lines.push(
     `- 抽出 PR 件数: **${summary.totalFeedbackPrs} 件**（MERGED: ${summary.stateCounts.MERGED} / OPEN: ${summary.stateCounts.OPEN} / CLOSED: ${summary.stateCounts.CLOSED}）`,
+  );
+  lines.push(
+    `- 深刻度内訳: ブロッキング差し戻しあり **${summary.blockingPrCount} 件** / 非ブロッキング助言のみ **${summary.nonBlockingOnlyPrCount} 件**`,
   );
   lines.push(
     `- 指摘コメント総数: ${summary.totalFeedbackComments} 件 / 作成者返信総数: ${summary.totalAuthorReplies} 件`,
@@ -277,8 +303,10 @@ export function formatReviewFeedbackMarkdown(params: {
       for (const item of rec.feedbackItems.slice(0, 3)) {
         const pathNote = item.path ? ` \`${item.path}\`` : "";
         const imgNote = item.hasImage ? " [画像添付あり]" : "";
+        const severity = item.severity ?? classifyFeedbackCommentSeverity(item.body);
+        const sevNote = severity === "non-blocking" ? " [非ブロッキング助言]" : "";
         lines.push(
-          `  - 指摘 (${item.source}, @${item.author} [${item.authorAssociation}]${pathNote}${imgNote}): ${formatExcerpt(item.body)}`,
+          `  - 指摘 (${item.source}, @${item.author} [${item.authorAssociation}]${pathNote}${imgNote}${sevNote}): ${formatExcerpt(item.body)}`,
         );
       }
 

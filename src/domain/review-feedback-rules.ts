@@ -1,0 +1,573 @@
+/**
+ * 差し戻し指摘コーパス向けのコメントノイズ除外・深刻度判定・カテゴリ自動分類ルール群。
+ * 外部 I/O を行わず、src/models と同一ドメイン内モジュールのみに依存する。
+ */
+
+import type {
+  FeedbackCategoryMatch,
+  FeedbackCommentSeverity,
+  ReviewFeedbackAuthorReply,
+  ReviewFeedbackCategoryId,
+  ReviewFeedbackComment,
+} from "../models/review-feedback";
+import { isCiRerunCommandComment } from "./intervention";
+
+/** カテゴリ定義（表示ラベルとキーワードルール） */
+export interface FeedbackCategoryRule {
+  id: Exclude<ReviewFeedbackCategoryId, "uncategorized">;
+  label: string;
+  patterns: ReadonlyArray<{ keyword: string; regex: RegExp }>;
+}
+
+export const FEEDBACK_CATEGORY_RULES: readonly FeedbackCategoryRule[] = [
+  {
+    id: "privacy-policy",
+    label: "プライバシーポリシー・データ開示",
+    patterns: [
+      { keyword: "PrivacyUrl", regex: /\bPrivacyUrl\b/i },
+      { keyword: "privacy policy", regex: /\bprivacy\s+polic(?:y|ies)\b/i },
+      { keyword: "sends data", regex: /\bsends?\s+data\b/i },
+      { keyword: "telemetry", regex: /\btelemetry\b/i },
+      {
+        keyword: "product-disclosure",
+        regex: /\b(?:product-disclosure|privacy\s+behavior|data\s+collection)\b/i,
+      },
+    ],
+  },
+  {
+    id: "dll-runtime",
+    label: "DLL / ランタイム欠損",
+    patterns: [
+      { keyword: "VCRUNTIME140", regex: /\bvcruntime\d*/i },
+      { keyword: "MSVCP140", regex: /\bmsvcp\d*/i },
+      { keyword: "ucrtbase", regex: /\bucrtbase\b/i },
+      {
+        keyword: "VCRedist",
+        regex: /\b(?:vcredist|vc\+\+|visual\s+c\+\+|c\+\+\s+redistributable)\b/i,
+      },
+      {
+        keyword: "STATUS_DLL_NOT_FOUND",
+        regex: /\b(?:STATUS_DLL_NOT_FOUND|0xC0000135|C0000135)\b|-1073741515\b/i,
+      },
+      {
+        keyword: ".NET Runtime",
+        regex: /(?:\.net\s+(?:desktop\s+)?runtime|dotnet\s+runtime)\b/i,
+      },
+      { keyword: ".dll", regex: /(?:\.dll\b|\bdll\b)/i },
+      { keyword: "missing", regex: /\bmissing\b/i },
+      { keyword: "not found", regex: /\bnot\s+found\b/i },
+      {
+        keyword: "runtime",
+        regex: /\b(?:c\s+runtime|runtime\s+(?:missing|required|dependency|dll))\b/i,
+      },
+    ],
+  },
+  {
+    id: "launch-command",
+    label: "起動・コマンド・VM 動作不良",
+    patterns: [
+      { keyword: "fails to start", regex: /\bfails?\s+to\s+(?:start|launch|run)\b/i },
+      { keyword: "launch", regex: /\blaunch(?:es|ing|ed)?\b/i },
+      { keyword: "exit code", regex: /\bexit\s+code\b/i },
+      { keyword: "crash", regex: /\bcrash(?:es|ed|ing)?\b/i },
+      { keyword: "OpenGL", regex: /\b(?:opengl|basic\s+display\s+adapter)\b/i },
+      {
+        keyword: "without arguments",
+        regex: /\b(?:without\s+arguments|no\s+arguments|Validation-Executable-Error)\b/i,
+      },
+      { keyword: "timeout", regex: /\b(?:within\s+the\s+timeout|timed?\s+out)\b/i },
+      { keyword: "spawned off", regex: /\b(?:spawned\s+off|doesn't\s+show\s+ui)\b/i },
+      { keyword: "PortableCommandAlias", regex: /\bPortableCommandAlias\b/i },
+      { keyword: "Commands", regex: /\bCommands\b/ },
+    ],
+  },
+  {
+    id: "metadata-url",
+    label: "メタデータ・URL・ライセンス不備",
+    patterns: [
+      { keyword: "ReleaseNotesUrl", regex: /\bReleaseNotesUrl\b/i },
+      { keyword: "PublisherSupportUrl", regex: /\bPublisherSupportUrl\b/i },
+      { keyword: "PublisherUrl", regex: /\bPublisherUrl\b/i },
+      { keyword: "LicenseUrl", regex: /\bLicenseUrl\b/i },
+      { keyword: "PackageUrl", regex: /\bPackageUrl\b/i },
+      { keyword: "License/Copyright", regex: /\b(?:License|Copyright|CopyrightUrl)\s*:/ },
+      { keyword: "provenance", regex: /\b(?:provenance|version-specific|immutable)\b/i },
+      { keyword: "404", regex: /\b404\b/ },
+      { keyword: "unavailable", regex: /\b(?:unavailable|unreachable)\b/i },
+      { keyword: "redirect", regex: /\bredirect(?:s|ed|ing)?\b/i },
+      { keyword: "broken link", regex: /\b(?:dead|broken)\s+(?:link|url)\b/i },
+    ],
+  },
+  {
+    id: "manifest-installer",
+    label: "マニフェスト構造・インストーラー・ARP 整合",
+    patterns: [
+      { keyword: "NestedInstallerType", regex: /\bNestedInstallerType\b/i },
+      { keyword: "InstallerType", regex: /\bInstallerType\b/i },
+      { keyword: "Architecture", regex: /\bArchitecture\b/i },
+      { keyword: "UpgradeBehavior", regex: /\bUpgradeBehavior\b/i },
+      { keyword: "Scope", regex: /\bScope\b/ },
+      { keyword: "InstallerSwitches", regex: /\bInstallerSwitches\b/i },
+      { keyword: "InstallerSha256", regex: /\bInstallerSha256\b/i },
+      { keyword: "ManifestVersion", regex: /\b(?:ManifestVersion|1\.28\.0)\b/i },
+      { keyword: "AppsAndFeaturesEntries", regex: /\bAppsAndFeaturesEntries\b/i },
+      {
+        keyword: "ARP/Registry",
+        regex: /\b(?:ARP|DisplayName|DisplayVersion|ProductCode|registry)\b/i,
+      },
+      { keyword: "silent/unattended", regex: /\b(?:silent|unattended|Interactive-Only)\b/i },
+    ],
+  },
+  {
+    id: "locale-language",
+    label: "UI 言語・Locale 不一致",
+    patterns: [
+      { keyword: "PackageLocale", regex: /\bPackageLocale\b/i },
+      { keyword: "DefaultLocale", regex: /\bDefaultLocale\b/i },
+      {
+        keyword: "UI language",
+        regex:
+          /\b(?:interface\s+is\s+in|application\s+looks\s+to\s+be\s+in|shortcut\s+and\s+registry\s+data\s+are\s+in)\b/i,
+      },
+      {
+        keyword: "locale mismatch",
+        regex: /\b(?:zh-CN|zh-TW|ja-JP|ko-KR|tr-TR|non-english)\b/i,
+      },
+    ],
+  },
+  {
+    id: "security-signing",
+    label: "セキュリティ / 署名 / ポリシー制約",
+    patterns: [
+      { keyword: "SmartScreen", regex: /\bsmartscreen\b/i },
+      { keyword: "VirusTotal", regex: /\bvirustotal\b/i },
+      { keyword: "defender", regex: /\bdefender\b/i },
+      { keyword: "malware", regex: /\b(?:malware|trojan|virus)\b/i },
+      { keyword: "signature", regex: /\b(?:signature|unsigned|code\s*sign(?:ing|ed)?)\b/i },
+      {
+        keyword: "Scripted-Application",
+        regex: /\b(?:Scripted-Application|scripted\s+applications?)\b/i,
+      },
+      { keyword: "Policy-Test", regex: /\bPolicy(?:-Test-|\s+\d+\.\d+)\b/i },
+    ],
+  },
+] as const;
+
+export const CATEGORY_LABELS: Record<ReviewFeedbackCategoryId, string> = {
+  "privacy-policy": "プライバシーポリシー・データ開示",
+  "dll-runtime": "DLL / ランタイム欠損",
+  "launch-command": "起動・コマンド・VM 動作不良",
+  "metadata-url": "メタデータ・URL・ライセンス不備",
+  "manifest-installer": "マニフェスト構造・インストーラー・ARP 整合",
+  "locale-language": "UI 言語・Locale 不一致",
+  "security-signing": "セキュリティ / 署名 / ポリシー制約",
+  uncategorized: "未分類（その他・新種候補）",
+};
+
+/**
+ * `[Policy] Needs-Author-Feedback` 等の Policy Bot 向け単体コマンドコメントか判定する。
+ * 説明文が併記されている場合は false を返す。
+ */
+export function isPolicyCommandOnlyComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!normalized) {
+    return true;
+  }
+  return /^\[Policy\]\s+[^\r\n]+$/i.test(normalized);
+}
+
+/**
+ * `@wingetbot waivers Add ...` / `@wingetbot run ...` / `@wingetbot installationmetadata ...` のような
+ * ボット操作用の単一行コマンドコメントか判定する（説明文が併記された複数行コメントは false）。
+ */
+export function isWingetbotCommandOnlyComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^@wingetbot\s+(?:waivers|run|installationmetadata)\b[^\r\n]*$/i.test(normalized);
+}
+
+const VERIFY_MEMO_SIMPLE_LINE_PATTERNS: readonly RegExp[] = [
+  /^(?:Edit\s*[:;]\s*)?Privacy\s+Po(?:li|il)cy\s*:\s*https?:\/\/\S+\s*$/i,
+  /^(?:Edit\s*[:;]\s*)?Privacy\s+Policy\s+(?:baked\s+into\s+application\.?|in\s+(?:PackageUrl|InstallerUrl)\s*:?)\s*$/i,
+  /^(?:Edit\s*[:;]\s*)?Internet\s+Translation\s*:?\s*$/i,
+  /^(?:Edit\s*[:;]\s*)?Registry\s*:?\s*$/i,
+  /^Edit\s*[:;]?\s*$/i,
+];
+
+const KNOWN_PAYMENT_PROCESSOR_PATTERN =
+  "(?:Stripe|PayPal|Paddle|Lemon\\s+Squeezy|Link|Gumroad|FastSpring|Braintree|Square|Buy\\s+Me\\s+a\\s+Coffee|Patreon|Ko-fi|Polar|GitHub\\s+Sponsors)";
+
+const PAYMENT_PROCESSOR_LIST_PATTERN = `${KNOWN_PAYMENT_PROCESSOR_PATTERN}(?:\\s*(?:,|/|&|and)\\s*(?:a\\s+)?${KNOWN_PAYMENT_PROCESSOR_PATTERN}(?:\\s+company)?)*`;
+
+const VERIFY_MEMO_IN_APP_PURCHASE_PATTERN = new RegExp(
+  `^(?:Edit\\s*[:;]\\s*)?In-App\\s+Purchase\\s*:\\s*(?:(?:Processed\\s+by|Payment\\s+processors?\\s+(?:is|are)|Processor\\s+(?:is|appears\\s+to\\s+be))\\s+${PAYMENT_PROCESSOR_LIST_PATTERN}|${PAYMENT_PROCESSOR_LIST_PATTERN}\\s+is\\s+processor|https?:\\/\\/\\S+)\\.?\\:?\\s*$`,
+  "i",
+);
+
+function isVerifyMemoOnlyLine(line: string): boolean {
+  if (VERIFY_MEMO_SIMPLE_LINE_PATTERNS.some((re) => re.test(line))) {
+    return true;
+  }
+  return VERIFY_MEMO_IN_APP_PURCHASE_PATTERN.test(line);
+}
+
+/**
+ * `Verify: <img ...>` のような動作確認スクリーンショット単体、または定型確認メモ
+ * （`Privacy Policy: <URL>` / `Internet Translation:` / `In-App Purchase:` 等）のみで構成された
+ * 承認前確認コメントか判定する。質問文や障害指摘が併記されている場合は false を返す。
+ */
+export function isVerifyMemoOnlyComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  const normalized = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const startsWithVerify = /^Verify\b/i.test(normalized);
+  const startsWithImage = /^(?:<img\b[^>]*>|!\[[^\]]*\]\([^)]+\))/i.test(normalized);
+  if (!startsWithVerify && !startsWithImage) {
+    return false;
+  }
+
+  const withoutImages = normalized
+    .replace(/<img\b[^>]*>/gi, "\n")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "\n");
+
+  // `Internet Translation: Privacy Policy: https://...` のように 1 行に複数メモが並ぶケースを分割して検査
+  const splitTokens = withoutImages
+    .replace(/^Verify\s*:?\s*/i, "")
+    .replace(
+      /(?:^|\s)((?:Edit\s*[:;]\s*)?(?:Internet\s+Translation\s*:?|Privacy\s+Po(?:li|il)cy\s*:|Privacy\s+Policy\s+(?:baked\s+into|in\s+(?:PackageUrl|InstallerUrl))|In-App\s+Purchase\s*:|Registry\s*:))/gi,
+      "\n$1",
+    );
+
+  const lines = splitTokens
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return startsWithVerify;
+  }
+
+  // 画像開始（Verify なし）の場合は定型メモ行（Internet Translation 等）が 1 つ以上明示されているときのみ除外
+  return lines.every(isVerifyMemoOnlyLine);
+}
+
+/**
+ * `Close with reason: Stale;` のような非フィードバック系の定型クローズコマンド単体か判定する。
+ */
+export function isStaleCloseCommandOnlyComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+  return /^Close\s+with\s+reason\s*:\s*Stale\s*;?$/i.test(normalized);
+}
+
+/**
+ * `` `Adult Reference or Theme` - False Positive match with ... `` のような単一行の誤検知メモか判定する。
+ */
+export function isFalsePositiveNoteOnlyComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+  return /^`[^`\r\n]+`\s*-\s*False\s+Positive\s+match\b[^\r\n]*$/i.test(normalized);
+}
+
+const AUTOMATIC_VALIDATION_REAL_FAILURE_PATTERN =
+  /\b(?:exit\s+code|STATUS_DLL_NOT_FOUND|0xC0000135|C0000135|hash\s+doesn't\s+match|hash\s+verification\s+failed|within\s+the\s+timeout|Zip\s+file\s+expired)\b|-1073741515\b/i;
+
+const AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN =
+  /^(?:Edit\s*[:;]\s*)?My\s+automation\s+isn't\s+getting\s+a\s+valid\s+output\s+from\s+the\s+pipeline\s+artifacts\.?$/i;
+
+const AUTOMATIC_VALIDATION_POLICY_TEST_QUOTE_LINE_PATTERN =
+  /^>\s*(?:\[Policy-Test-[^\]]+\]\([^)]+\)\s+`[^`\r\n]+`(?:\s+in\s+[^\r\n(]+)?(?:\s*\(Deterministic\s+automation[^)\r\n]*\))?|All\s+banking\s+applications\s+require\s+review\.?)\s*$/i;
+
+function isAutomaticValidationPolicyTestQuoteLine(line: string): boolean {
+  if (!AUTOMATIC_VALIDATION_POLICY_TEST_QUOTE_LINE_PATTERN.test(line)) {
+    return false;
+  }
+  // `(Deterministic automation...)` マーカーを含む場合はその閉じ括弧で終端していること（後ろへの追記を拒否）
+  if (/\(Deterministic\s+automation/i.test(line) && !/\)\s*$/.test(line)) {
+    return false;
+  }
+  // Policy-Test 転載行と同じ行に人間による修正依頼・HTTP エラー報告が混在していれば保持
+  if (EXPLICIT_BLOCKING_ISSUE_PATTERN.test(line)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * `Automatic Validation ended with:` で始まるコメントのうち、
+ * 行単位で定型の Policy-Test 転載行または自動検証出力エラー行のみで構成されているかを判定する。
+ * 定型出力の終端以降への追記・別 `>` 行や非引用行の修正依頼・実障害ログが 1 行でも含まれる場合は false（保持）を返す。
+ */
+export function isAutomaticValidationNoiseComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  const normalized = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  const lines = normalized.split("\n");
+  const firstLine = lines[0]?.trim() ?? "";
+  const headerMatch = /^Automatic\s+Validation\s+ended\s+with\s*:(.*)$/i.exec(firstLine);
+  if (!headerMatch) {
+    return false;
+  }
+  if (AUTOMATIC_VALIDATION_REAL_FAILURE_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  const remainingLines: string[] = [];
+  const headerRest = headerMatch[1].trim();
+  if (headerRest) {
+    remainingLines.push(headerRest);
+  }
+  for (const rawLine of lines.slice(1)) {
+    const trimmed = rawLine.trim();
+    if (trimmed) {
+      remainingLines.push(trimmed);
+    }
+  }
+  if (remainingLines.length === 0) {
+    return false;
+  }
+
+  return remainingLines.every(
+    (line) =>
+      AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN.test(line) ||
+      isAutomaticValidationPolicyTestQuoteLine(line),
+  );
+}
+
+/**
+ * 第三者人間のコメントが、差し戻し指摘ではなく定型運用ノイズ（ボットコマンド・確認スクショ単体・
+ * Stale クローズコマンド・Policy-Test 誤検知転載等）かを統合判定する。
+ */
+export function isFeedbackNoiseComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return true;
+  }
+  const normalized = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!normalized) {
+    return true;
+  }
+  return (
+    isPolicyCommandOnlyComment(normalized) ||
+    isCiRerunCommandComment(normalized) ||
+    isWingetbotCommandOnlyComment(normalized) ||
+    isVerifyMemoOnlyComment(normalized) ||
+    isStaleCloseCommandOnlyComment(normalized) ||
+    isFalsePositiveNoteOnlyComment(normalized) ||
+    isAutomaticValidationNoiseComment(normalized)
+  );
+}
+
+const NON_BLOCKING_FEEDBACK_PATTERN =
+  /\b(?:No\s+blockers\s+have\s+been\s+found\s+for\s+this\s+PR|No\s+blocking\s+issues?\s+(?:were|was|have\s+been)?\s*found)\b/i;
+
+/**
+ * 必須修正表現の直前に否定語（`does not` / `doesn't` / `no` / `never` / `nothing` / `no longer` /
+ * 否定主語＋be動詞 `no corrections are` 等）がある場合に誤一致を防ぐ否定後読み。
+ */
+const NEGATION_LOOKBEHIND =
+  "(?<!\\b(?:not|no|never|nothing)\\s+|n't\\s+|\\bno\\s+(?:longer|further)\\s+|\\b(?:no(?:\\s+\\w+){1,3}|nothing)\\s+(?:is|are|was|were)\\s+)";
+
+/**
+ * 「No blockers / No blocking issues were found」の宣言が本文にあっても、
+ * それを上書きして `blocking` とみなすべき明示的な却下・実障害・必須修正の根拠パターン。
+ * 任意助言（`Optional, non-blocking notes: - Please update ...`）の汎用 `please update` や `should be`、
+ * および否定された修正不要表現（`does not need to be updated` / `not required before merge` 等）は含めず、
+ * 肯定された強義務（`must/need(s) to be ...`）やマージ条件を伴う必須修正は逆接の有無にかかわらず保持する。
+ */
+const HARD_BLOCKING_OVERRIDE_PATTERN = new RegExp(
+  [
+    "\\b(?:not\\s+(?:currently\\s+)?accepting|cannot\\s+(?:be\\s+)?(?:approved|accepted|proceed|merged?)|can't\\s+(?:be\\s+)?(?:approved|accepted|proceed|merged?)|before\\s+this\\s+(?:package|submission|pr)\\s+can\\s+(?:proceed|be\\s+(?:approved|merged)))",
+    `${NEGATION_LOOKBEHIND}\\bcorrections?\\s+are\\s+required\\b`,
+    `${NEGATION_LOOKBEHIND}\\b(?:must|need(?:s)?\\s+to)\\s+be\\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)\\b`,
+    `${NEGATION_LOOKBEHIND}\\b(?:(?:must|need(?:s)?\\s+to|please)\\s+(?:remove|update|fix|change|add|correct|address|resolve|provide|include|use|verify)|(?:required|mandatory|needed))\\b[^\\r\\n]{0,60}\\bbefore\\s+(?:merg(?:e|ing)|approv(?:al|ing)|this\\s+(?:pr|package|submission))\\b`,
+    "\\b(?:fails?\\s+to\\s+(?:start|launch|run|install|download)|returned\\s+exit\\s+code|install\\s+failed|hash\\s+(?:doesn't\\s+match|verification\\s+failed)|(?:url|link|download|installer|asset|endpoint|page|site)\\b[^\\r\\n]{0,40}\\b(?:returns?\\s+(?:http\\s+)?(?:4\\d\\d|5\\d\\d)|is\\s+(?:unavailable|unreachable|broken|dead)|404s?)|http\\s+(?:4\\d\\d|5\\d\\d)\\b|(?:however|but)\\b[^\\r\\n]{0,60}\\b(?:please\\s+(?:fix|update|remove|add|address|correct)|must\\s+be|fails?\\s+to|cannot))",
+    "(?:^|\\n)\\s*required\\s*:",
+    "Close\\s+with\\s+reason\\s*:\\s*(?!Stale\\b)",
+  ].join("|"),
+  "i",
+);
+
+const EXPLICIT_BLOCKING_ISSUE_PATTERN = new RegExp(
+  `${HARD_BLOCKING_OVERRIDE_PATTERN.source}|\\b(?:should\\s+be\\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch))`,
+  "i",
+);
+
+const CLOSED_REJECTION_ACTIONABLE_PATTERN = new RegExp(
+  `${EXPLICIT_BLOCKING_ISSUE_PATTERN.source}|\\b(?:is\\s+not\\s+recommended|deprecated\\s+manifest|manifest\\s+version\\s+has\\s+been\\s+depreciated|policy\\s+\\d+\\.\\d+|policy-test-\\d|Manual\\s+Validation\\s+ended\\s+with\\s*:|Automatic\\s+Validation\\s+ended\\s+with\\s*:)`,
+  "i",
+);
+
+/**
+ * 指摘コメントがブロッキング差し戻しか、任意・非ブロッキング助言かを判定する。
+ * 本文に「No blockers / No blocking issues were found」が含まれていても、
+ * 明示的な却下宣言・実障害報告・必須修正（`Required:` / `fails to start` / 逆接の必須修正等）が
+ * 併記されている場合は `blocking` を優先し、任意助言内の汎用提案（`Optional, non-blocking notes: - Please update ...`）は `non-blocking` を維持する。
+ */
+export function classifyFeedbackCommentSeverity(
+  body: string | null | undefined,
+): FeedbackCommentSeverity {
+  if (typeof body !== "string") {
+    return "blocking";
+  }
+  if (HARD_BLOCKING_OVERRIDE_PATTERN.test(body)) {
+    return "blocking";
+  }
+  if (NON_BLOCKING_FEEDBACK_PATTERN.test(body)) {
+    return "non-blocking";
+  }
+  return "blocking";
+}
+
+/**
+ * `CLOSED`（未マージ終了）PR の特権メンテナコメントが、単なる挨拶や任意助言・否定文（「ブロッキングなし」等）ではなく、
+ * 明確な却下・修正要求・実障害指摘の根拠を含むかを判定する。
+ */
+export function isActionableClosedRejectionComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string" || isFeedbackNoiseComment(body)) {
+    return false;
+  }
+  if (classifyFeedbackCommentSeverity(body) === "non-blocking") {
+    return false;
+  }
+  return CLOSED_REJECTION_ACTIONABLE_PATTERN.test(body);
+}
+
+/**
+ * PR 作成者の定型コマンドコメント（CLA 同意・引用付き CLA 同意・`bump` 単体・CI 再実行コマンド単体等）か判定する。
+ */
+export function isAuthorNoiseComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return true;
+  }
+  const normalized = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  if (!normalized) {
+    return true;
+  }
+  if (
+    isCiRerunCommandComment(normalized) ||
+    isPolicyCommandOnlyComment(normalized) ||
+    isWingetbotCommandOnlyComment(normalized)
+  ) {
+    return true;
+  }
+  if (/^bump[.!?]*$/i.test(normalized)) {
+    return true;
+  }
+  // Microsoft CLA 同意コマンド（単独・引用付き・定型 CLA 同意文）
+  if (/^@microsoft-github-policy-service\s+agree\b/i.test(normalized)) {
+    return true;
+  }
+  if (/^agree$/i.test(normalized)) {
+    return true;
+  }
+  if (
+    /^I\s+have\s+read\s+the\s+CLA\s+Document\s+and\s+I\s+hereby\s+sign\s+the\s+CLA\.?$/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /license\/cla.*Needs-CLA/i.test(normalized) &&
+    /@microsoft-github-policy-service\s+agree\b/i.test(normalized)
+  ) {
+    return true;
+  }
+  // Markdown 引用行を除いた実質テキストが空、または CLA 同意コマンドのみの場合
+  const nonQuoted = normalized
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith(">"))
+    .join("\n")
+    .trim();
+  if (
+    nonQuoted.length === 0 ||
+    /^@microsoft-github-policy-service\s+agree\b/i.test(nonQuoted) ||
+    /^agree$/i.test(nonQuoted)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * コメント本文に画像添付（HTML `<img>` または Markdown `![]()`）が含まれるかを判定する。
+ */
+export function hasEmbeddedImage(body: string | null | undefined): boolean {
+  if (typeof body !== "string") {
+    return false;
+  }
+  return /<img\b[^>]*\bsrc=/i.test(body) || /!\[[^\]]*\]\([^)]+\)/.test(body);
+}
+
+/**
+ * 指摘コメント群（および任意で作成者返信群）をルールベースでカテゴリ分類する（マルチタグ対応）。
+ * どのルールにも該当しない場合は `uncategorized` を付与する。
+ */
+export function categorizeFeedback(params: {
+  feedbackItems: readonly ReviewFeedbackComment[];
+  authorReplies?: readonly ReviewFeedbackAuthorReply[];
+}): {
+  categories: ReviewFeedbackCategoryId[];
+  categoryMatches: FeedbackCategoryMatch[];
+} {
+  const combinedTexts = [
+    ...params.feedbackItems.map((item) => item.body),
+    ...(params.authorReplies ?? []).map((reply) => reply.body),
+  ];
+  const corpus = combinedTexts.join("\n\n");
+
+  const categoryMatches: FeedbackCategoryMatch[] = [];
+  for (const rule of FEEDBACK_CATEGORY_RULES) {
+    const matchedKeywords: string[] = [];
+    for (const pattern of rule.patterns) {
+      if (pattern.regex.test(corpus)) {
+        matchedKeywords.push(pattern.keyword);
+      }
+    }
+    if (matchedKeywords.length > 0) {
+      categoryMatches.push({
+        category: rule.id,
+        matchedKeywords,
+      });
+    }
+  }
+
+  if (categoryMatches.length === 0) {
+    return {
+      categories: ["uncategorized"],
+      categoryMatches: [{ category: "uncategorized", matchedKeywords: [] }],
+    };
+  }
+
+  return {
+    categories: categoryMatches.map((m) => m.category),
+    categoryMatches,
+  };
+}

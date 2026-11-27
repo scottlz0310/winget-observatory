@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 差し戻し指摘コーパス（`collect-review-feedback`）のノイズ分離精度・カテゴリ分類・`CLOSED` 直接却下捕捉・オフライン再評価を強化（`schemaVersion = 2`）:
+  - `src/domain/review-feedback-rules.ts`, `src/domain/review-feedback.ts`, `src/models/review-feedback.ts`: `@wingetbot waivers/run/installationmetadata` 単体コマンド、`Verify:` スクショ・確認メモ単体、`Close with reason: Stale;` 単体、`False Positive match` メモ単体、実障害を含まない `Automatic Validation ended with:` Policy-Test 誤検知転載、および作成者側の引用付き CLA 同意・`bump` 単体を除外し、非ブロッキング助言（`No blockers have been found for this PR.`）を `severity: "non-blocking"` / `hasBlockingFeedback` で区別。カテゴリを 7 種＋`uncategorized`（`privacy-policy`・`locale-language` 新設および `STATUS_DLL_NOT_FOUND` / `OpenGL` / `ARP` / `DisplayVersion` / `Scripted-Application` 等キーワード拡充）へ拡張し、`CLOSED` PR の却下系ラベル・特権メンテナ指摘トリガー（`closed-rejection-label` / `closed-maintainer-feedback`）と既存コーパスの API ゼロ再評価（`reclassifyReviewFeedbackCorpus`）を追加
+  - `src/domain/review-feedback-report.ts`, `src/cli/feedback-collector.ts`, `src/cli/collect-review-feedback.ts`, `.github/workflows/collect-feedback.yml`: `--reclassify`（オフライン再分類）と `--blocking-only` オプション、およびレポート上の深刻度内訳（ブロッキング差し戻し vs 非ブロッキング助言のみ）表示を追加
+
 - `src/api/github.ts`, `src/api/retry.ts`: GitHub GraphQL の一時エラー（502/503/504/429 等）の既定リトライ回数を 3 回から 6 回へ引き上げ（初回含め計 7 回試行。502/503/504 で Retry-After がない場合の待機は約 2→4→8→16→32→64 秒。Retry-After 指定・429・セカンダリレート制限では待機が変わる）。`explore-depths` の GraphQL が 502 を 4 回連続で返して Observe が失敗した事象（各リクエストが約 10 秒でゲートウェイタイムアウトし、待機合計が約 15 秒と短かった）への対処。既存の `maxRetryDelayMs`（180 秒）上限と Retry-After 優先の挙動は変更なし
 - `.github/workflows/observe.yml`: GitHub Pages デプロイが `No artifacts named "github-pages" were found` で稀に失敗する問題へ対処（#142）。`upload-pages-artifact` 直後はアーティファクトのメタデータが API へ反映される前に `deploy-pages` が走ることがあるため、デプロイを別ジョブ `deploy`（`needs: observe`）へ分離し、`deploy-pages` 直前に指数バックオフ（1→2→4→8→16→30→60 秒。期限切れ artifact は数えない）でアーティファクト登録を待つ手順を追加（反映済みなら 1 回目で通過。タイムアウト時は artifact 一覧をログ出力）。デプロイのみ失敗した場合は「失敗したジョブのみ再実行」で収集をやり直さず復旧できる。`actions: read` はデプロイジョブにのみ付与
 - 肥大化していたテストファイル上位 5 本の関心事別分割および循環インポート検知テストの追加（#134 Step 4/4）:

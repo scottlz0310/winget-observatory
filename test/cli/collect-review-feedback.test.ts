@@ -17,6 +17,8 @@ describe("collect-review-feedback parseArgs", () => {
     expect(defaults.fetchBudget).toBe(200);
     expect(defaults.portableOnly).toBe(false);
     expect(defaults.privilegedOnly).toBe(false);
+    expect(defaults.blockingOnly).toBe(false);
+    expect(defaults.reclassify).toBe(false);
 
     const parsed = parseArgs([
       "--repo",
@@ -36,6 +38,8 @@ describe("collect-review-feedback parseArgs", () => {
       "--portable-only",
       "--privileged-only",
       "--first-timer-only",
+      "--blocking-only",
+      "--reclassify",
       "--output-path",
       "out/corpus.jsonl",
       "--report-path",
@@ -56,6 +60,8 @@ describe("collect-review-feedback parseArgs", () => {
       portableOnly: true,
       privilegedOnly: true,
       firstTimerOnly: true,
+      blockingOnly: true,
+      reclassify: true,
       outputPath: "out/corpus.jsonl",
       reportPath: "out/report.md",
       noReport: true,
@@ -441,7 +447,7 @@ describe("runCollectReviewFeedback integration", () => {
       expect(result.records).toHaveLength(1);
       expect(result.records[0].number).toBe(450002);
       expect(result.records[0].isFirstTimeAuthor).toBe(false);
-      expect(result.records[0].categories).toEqual(["metadata-url"]);
+      expect(result.records[0].categories).toEqual(["privacy-policy", "metadata-url"]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -964,6 +970,314 @@ describe("runCollectReviewFeedback integration", () => {
       expect(run3.records.map((r) => r.number)).toEqual([
         500103, 500102, 500101, 500003, 500002, 500001,
       ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("--reclassify --fetch-budget 0 は既存 v1 コーパスを API ゼロで v2 へ再分類・永続化し --blocking-only で絞り込める", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-feedback-reclassify-"));
+    const outputPath = join(tmpDir, "review-feedback.jsonl");
+    const reportPath = join(tmpDir, "review-feedback-report.md");
+
+    const v1Entries = [
+      {
+        schemaVersion: 1,
+        entryType: "feedback",
+        repository: "microsoft/winget-pkgs",
+        number: 448826,
+        title: "New package: Noise.Only version 1.0.0",
+        url: "https://github.com/microsoft/winget-pkgs/pull/448826",
+        state: "MERGED",
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-11-24T00:00:00Z",
+        mergedAt: "2026-11-24T00:00:00Z",
+        closedAt: "2026-11-24T00:00:00Z",
+        author: "u1",
+        authorAssociation: "NONE",
+        commitCount: 1,
+        triggers: ["needs-author-feedback-label"],
+        currentLabels: ["New-Package"],
+        historicalFeedbackLabels: ["Needs-Author-Feedback"],
+        installer: {
+          files: ["manifests/n/Noise/Only/1.0.0/Noise.Only.installer.yaml"],
+          installerTypes: ["inno"],
+          nestedInstallerTypes: [],
+          architectures: ["x64"],
+          scopes: [],
+          isPortable: false,
+        },
+        feedbackItems: [
+          {
+            source: "issue_comment",
+            author: "stephengillie",
+            authorAssociation: "COLLABORATOR",
+            createdAt: "2026-11-23T00:00:00Z",
+            body: 'Verify: <img src="https://example.com/a.png" /> Privacy Policy: https://example.com/privacy',
+            hasImage: true,
+          },
+        ],
+        authorReplies: [],
+        categories: ["uncategorized"],
+        categoryMatches: [{ category: "uncategorized", matchedKeywords: [] }],
+        collectedAt: "2026-11-27T00:00:00Z",
+      },
+      {
+        schemaVersion: 1,
+        entryType: "feedback",
+        repository: "microsoft/winget-pkgs",
+        number: 446301,
+        title: "New package: Advice.Only version 1.0.0",
+        url: "https://github.com/microsoft/winget-pkgs/pull/446301",
+        state: "MERGED",
+        createdAt: "2026-10-02T00:00:00Z",
+        updatedAt: "2026-11-25T00:00:00Z",
+        mergedAt: "2026-11-25T00:00:00Z",
+        closedAt: "2026-11-25T00:00:00Z",
+        author: "u2",
+        authorAssociation: "NONE",
+        commitCount: 1,
+        triggers: ["needs-author-feedback-label"],
+        currentLabels: ["New-Package"],
+        historicalFeedbackLabels: ["Needs-Author-Feedback"],
+        installer: {
+          files: [],
+          installerTypes: ["inno"],
+          nestedInstallerTypes: [],
+          architectures: ["x64"],
+          scopes: [],
+          isPortable: false,
+        },
+        feedbackItems: [
+          {
+            source: "issue_comment",
+            author: "taras-janea",
+            authorAssociation: "NONE",
+            createdAt: "2026-11-24T00:00:00Z",
+            body: "No blockers have been found for this PR. Optional note: adding PrivacyUrl helps.",
+            hasImage: false,
+          },
+        ],
+        authorReplies: [],
+        categories: ["metadata-url"],
+        categoryMatches: [{ category: "metadata-url", matchedKeywords: ["PrivacyUrl"] }],
+        collectedAt: "2026-11-27T00:00:00Z",
+      },
+      {
+        schemaVersion: 1,
+        entryType: "feedback",
+        repository: "microsoft/winget-pkgs",
+        number: 446778,
+        title: "New package: Real.Blocker version 1.0.0",
+        url: "https://github.com/microsoft/winget-pkgs/pull/446778",
+        state: "MERGED",
+        createdAt: "2026-10-03T00:00:00Z",
+        updatedAt: "2026-11-25T00:00:00Z",
+        mergedAt: "2026-11-25T00:00:00Z",
+        closedAt: "2026-11-25T00:00:00Z",
+        author: "u3",
+        authorAssociation: "NONE",
+        commitCount: 2,
+        triggers: ["needs-author-feedback-label"],
+        currentLabels: ["New-Package"],
+        historicalFeedbackLabels: ["Needs-Author-Feedback"],
+        installer: {
+          files: [],
+          installerTypes: ["inno"],
+          nestedInstallerTypes: [],
+          architectures: ["x64"],
+          scopes: [],
+          isPortable: false,
+        },
+        feedbackItems: [
+          {
+            source: "issue_comment",
+            author: "stephengillie",
+            authorAssociation: "COLLABORATOR",
+            createdAt: "2026-11-24T00:00:00Z",
+            body: 'Verify: <img src="https://example.com/a.png" /> Hi @u3, This package sends data off device. Does it have a privacy policy?',
+            hasImage: true,
+          },
+        ],
+        authorReplies: [],
+        categories: ["uncategorized"],
+        categoryMatches: [{ category: "uncategorized", matchedKeywords: [] }],
+        collectedAt: "2026-11-27T00:00:00Z",
+      },
+    ];
+    writeFileSync(outputPath, `${v1Entries.map((e) => JSON.stringify(e)).join("\n")}\n`, "utf-8");
+
+    const unusedClient = {
+      searchIssuesDetailed: async () => {
+        throw new Error("API must not be called when fetchBudget === 0");
+      },
+      graphql: async () => {
+        throw new Error("GraphQL must not be called when fetchBudget === 0");
+      },
+      getRateLimit: async () => {
+        throw new Error("RateLimit must not be called when fetchBudget === 0");
+      },
+    };
+
+    try {
+      const res = await runCollectReviewFeedback(
+        {
+          ...parseArgs([
+            "--reclassify",
+            "--fetch-budget",
+            "0",
+            "--output-path",
+            outputPath,
+            "--report-path",
+            reportPath,
+          ]),
+          now: new Date("2026-11-27T06:00:00.000Z"),
+        },
+        unusedClient,
+        () => {},
+      );
+
+      expect(res.records.map((r) => r.number)).toEqual([446778, 446301]);
+      expect(res.summary.blockingPrCount).toBe(1);
+      expect(res.summary.nonBlockingOnlyPrCount).toBe(1);
+      expect(res.records[0].categories).toEqual(["privacy-policy"]);
+
+      const saved = parseReviewFeedbackCorpus(readFileSync(outputPath, "utf-8"));
+      const demoted = saved.find((e) => e.number === 448826);
+      expect(demoted?.entryType).toBe("no-feedback");
+      if (demoted?.entryType === "no-feedback") {
+        expect(demoted.skipReason).toBe("noise-only-feedback");
+        expect(demoted.schemaVersion).toBe(2);
+      }
+
+      // --blocking-only で非ブロッキング助言のみの #446301 が除外される
+      const blockingOnlyRes = await runCollectReviewFeedback(
+        {
+          ...parseArgs([
+            "--fetch-budget",
+            "0",
+            "--blocking-only",
+            "--no-write",
+            "--output-path",
+            outputPath,
+          ]),
+          now: new Date("2026-11-27T06:05:00.000Z"),
+        },
+        unusedClient,
+        () => {},
+      );
+      expect(blockingOnlyRes.records.map((r) => r.number)).toEqual([446778]);
+      expect(blockingOnlyRes.summary.blockingPrCount).toBe(1);
+      expect(blockingOnlyRes.summary.nonBlockingOnlyPrCount).toBe(0);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("CLOSED PR で Needs-Author-Feedback なしでも却下ラベル・メンテナコメントがあれば Blob と作者情報込みで収集される", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "winget-feedback-closed-direct-"));
+    const outputPath = join(tmpDir, "review-feedback.jsonl");
+    let blobCalls = 0;
+
+    const mockClient = {
+      searchIssuesDetailed: async (): Promise<GitHubDetailedSearchResult> => ({
+        totalCount: 1,
+        items: [
+          {
+            number: 436234,
+            title: "New package: DiamTek.JVM version 1.1.1",
+            html_url: "https://github.com/microsoft/winget-pkgs/pull/436234",
+            created_at: "2026-10-10T00:00:00Z",
+            updated_at: "2026-11-10T00:00:00Z",
+            author: "TheHawk09",
+          },
+        ],
+        pageInfo: { hasNextPage: false, endCursor: null },
+      }),
+      graphql: async <T = unknown>(query: string): Promise<T> => {
+        if (query.includes("GetPullRequestFeedbackBatch")) {
+          return {
+            repository: {
+              pr0: {
+                number: 436234,
+                title: "New package: DiamTek.JVM version 1.1.1",
+                url: "https://github.com/microsoft/winget-pkgs/pull/436234",
+                state: "CLOSED",
+                createdAt: "2026-10-10T00:00:00Z",
+                updatedAt: "2026-11-10T00:00:00Z",
+                mergedAt: null,
+                closedAt: "2026-11-10T00:00:00Z",
+                headRefOid: VALID_OID,
+                author: { __typename: "User", login: "TheHawk09" },
+                authorAssociation: "NONE",
+                commits: { totalCount: 1 },
+                labels: { nodes: [{ name: "New-Package" }, { name: "Scripted-Application" }] },
+                files: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [{ path: "manifests/d/DiamTek/JVM/1.1.1/DiamTek.JVM.installer.yaml" }],
+                },
+                reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                comments: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      author: { __typename: "User", login: "stephengillie" },
+                      authorAssociation: "COLLABORATOR",
+                      body: "Unfortunately, we're not currently accepting scripted applications.",
+                      createdAt: "2026-11-09T00:00:00Z",
+                    },
+                  ],
+                },
+                timelineItems: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      __typename: "LabeledEvent",
+                      createdAt: "2026-11-09T00:00:00Z",
+                      label: { name: "Scripted-Application" },
+                    },
+                  ],
+                },
+              },
+            },
+          } as T;
+        }
+        if (query.includes("GetInstallerManifestBlobs")) {
+          blobCalls++;
+          return {
+            repository: {
+              b0: { text: "InstallerType: portable\nManifestVersion: 1.28.0\n" },
+            },
+          } as T;
+        }
+        if (query.includes("u_0: search")) {
+          return { u_0: { issueCount: 0 } } as T;
+        }
+        throw new Error(`Unexpected query: ${query}`);
+      },
+      getRateLimit: async () => ({
+        graphql: { limit: 5000, remaining: 4990, resetAt: null },
+      }),
+    };
+
+    try {
+      const res = await runCollectReviewFeedback(
+        {
+          ...parseArgs(["--states", "closed", "--output-path", outputPath, "--no-report"]),
+          now: new Date("2026-11-27T06:00:00.000Z"),
+        },
+        mockClient,
+        () => {},
+      );
+      expect(blobCalls).toBe(1);
+      expect(res.records).toHaveLength(1);
+      expect(res.records[0].triggers).toEqual([
+        "closed-rejection-label",
+        "closed-maintainer-feedback",
+      ]);
+      expect(res.records[0].installer.isPortable).toBe(true);
+      expect(res.records[0].isFirstTimeAuthor).toBe(true);
+      expect(res.records[0].categories).toEqual(["security-signing"]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
