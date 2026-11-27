@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-27
+
 ### Added
 
 - `@scottlz0310/winget-verify-gate` の npm パッケージ公開・GitHub Releases 単体実行バイナリ配布および導入導線を整備:
@@ -406,7 +408,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.3.0...v0.4.0
