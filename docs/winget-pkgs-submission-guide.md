@@ -6,18 +6,18 @@
 
 ---
 
-## 1. 実データから見る「差し戻しコスト」と全体傾向
+## 1. 実データから見る全体傾向と差し戻し・却下の実態
 
-### 1.1 差し戻し 1 回あたりの遅延コスト（`MERGED` 1,462 件実測）
+### 1.1 マージ済み PR の観測上の中央値差（`MERGED` 1,462 件実測）
 
-| 区分                                                 |     件数 | 起票→マージ中央値 | 無傷 PR との差 |
-| ---------------------------------------------------- | -------: | ----------------: | -------------: |
-| 差し戻しなし（無傷 PR / 定型運用ノイズのみ含む）     | 1,076 件 |       **30.3 日** |           基準 |
-| 差し戻しあり全体（`feedback` 全体）                  |   386 件 |       **46.4 日** |   **+16.1 日** |
-| うちブロッキング差し戻しあり                         |   333 件 |       **44.7 日** |   **+14.4 日** |
-| うち非ブロッキング助言のみ（長期滞留後の最終確認等） |    53 件 |       **53.4 日** |   **+23.1 日** |
+| 区分                                                 |     件数 | 起票→マージ中央値 | 差し戻しなしとの差 |
+| ---------------------------------------------------- | -------: | ----------------: | -----------------: |
+| 差し戻しなし（無傷 PR / 定型運用ノイズのみ含む）     | 1,076 件 |       **30.3 日** |               基準 |
+| 差し戻しあり全体（`feedback` 全体）                  |   386 件 |       **46.4 日** |       **+16.1 日** |
+| うちブロッキング差し戻しあり                         |   333 件 |       **44.7 日** |       **+14.4 日** |
+| うち非ブロッキング助言のみ（長期滞留後の最終確認等） |    53 件 |       **53.4 日** |       **+23.1 日** |
 
-初回提出で 1 つでも不備を踏むと、修正コミットによるキュー順位の後退と再検証待ちが重なり、**マージ中央値が約 2 週間以上（+16.1 日）遅延**します。さらに未マージで終了（`CLOSED`）した差し戻し・却下 PR は **557 件**にのぼり、直せば通ったはずの PR でも放置・再提出失敗で脱落しています。
+マージ済み PR を差し戻し・助言の有無で比較すると、`feedback` あり全体（386 件）の起票→マージ中央値は **46.4 日**、なし（1,076 件）は **30.3 日** で、観測上 **+16.1 日の中央値差** があります。なお、本集計には差し戻し時刻やキュー順位の前後比較が含まれていないため、差し戻しが待ち時間を延ばしたのか、長く滞留した PR ほど後から指摘・助言を受けたのかの因果関係まではこの表だけで切り分けられません（特に非ブロッキング助言のみの中央値が 53.4 日と高い点も長期滞留後の確認を反映している可能性があります）。一方で、未マージで終了（`CLOSED`）した差し戻し・却下 PR も **557 件** 観測されており、初回提出前に頻出論点を潰しておく実務的価値は明確です。
 
 ### 1.2 カテゴリ別発生頻度（統合 943 件・マルチタグ集計）
 
@@ -51,14 +51,14 @@
 
 自分のパッケージに該当する行・列のチェック ID をすべて通過させてから PR を作成してください。各 ID の検査区分（`[機械検査可]` / `[Sandbox検証]` / `[自己確認]`）は、Step 3 のプリフライト診断スクリプトおよび AI Skill 化とそのまま対応しています。
 
-| 対象条件                                                                     | 適用するチェック ID                                           |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| **全パッケージ共通（必須）**                                                 | `CMN-01` 〜 `CMN-07` ＋ 提出前ストップ条件 `NG-01` 〜 `NG-04` |
-| **配布形式: Portable / ZIP 系** (`portable` / `zip`)                         | `PKG-PORT-01` 〜 `PKG-PORT-05`                                |
-| **配布形式: インストーラー系** (`inno` / `nullsoft` / `wix` / `msi` / `exe`) | `PKG-INST-01` 〜 `PKG-INST-06`                                |
-| **アプリ種別: CLI ツール**                                                   | `APP-CLI-01` 〜 `APP-CLI-03`                                  |
-| **アプリ種別: GUI / GPU / WebView2 アプリ**                                  | `APP-GUI-01` 〜 `APP-GUI-03`                                  |
-| **アプリ種別: 外部通信・AI・認証・課金あり**                                 | `APP-NET-01` 〜 `APP-NET-03`                                  |
+| 対象条件                                                                                                                                                          | 適用するチェック ID                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **全パッケージ共通（必須）**                                                                                                                                      | `CMN-01` 〜 `CMN-07` ＋ 提出前ストップ条件 `NG-01` 〜 `NG-04`                             |
+| **配布形式: Portable / ポータブル内包 ZIP** (`portable`、または `zip` + `NestedInstallerType: portable`)                                                          | `PKG-PORT-01` 〜 `PKG-PORT-05`                                                            |
+| **配布形式: インストーラー系（ZIP 内包インストーラー含む）** (`inno` / `nullsoft` / `wix` / `msi` / `exe`、および `zip` + 非 `portable` の `NestedInstallerType`) | `PKG-INST-01` 〜 `PKG-INST-06`（`zip` 配布時は `PKG-PORT-02` の内包パス・形式整合も併用） |
+| **アプリ種別: CLI ツール**                                                                                                                                        | `APP-CLI-01` 〜 `APP-CLI-03`                                                              |
+| **アプリ種別: GUI / GPU / WebView2 アプリ**                                                                                                                       | `APP-GUI-01` 〜 `APP-GUI-03`                                                              |
+| **アプリ種別: 外部通信・AI・認証・課金あり**                                                                                                                      | `APP-NET-01` 〜 `APP-NET-03`                                                              |
 
 ---
 
@@ -117,9 +117,9 @@
 
 ## 4. 配布形式別チェックリスト
 
-### 4.1 Portable / ZIP 系（`portable` / `zip`）
+### 4.1 Portable / ポータブル内包 ZIP 系（`portable` / `zip` + `NestedInstallerType: portable`）
 
-> 差し戻し 299 件（`MERGED` 107 / `CLOSED` 192）。`portable` 単独の未マージ脱落率は **73.7%** と全配布形式中で最悪。
+> 差し戻し 299 件（`MERGED` 107 / `CLOSED` 192、`zip` 内包インストーラー含む集計）。`portable` 単独の未マージ脱落率は **73.7%** と全配布形式中で最悪。なお、ZIP 内に MSI / Inno 等のインストーラーを含む場合は `PKG-PORT-02` で `NestedInstallerType` を一致させた上で §4.2 のインストーラー系チェックを適用してください。
 
 #### `PKG-PORT-01` `[機械検査可]` VC++ ランタイム（`VCRUNTIME140.dll` 等）の静的リンクまたは依存宣言
 
@@ -137,17 +137,19 @@
 
 #### `PKG-PORT-02` `[機械検査可]` `NestedInstallerType`・`RelativeFilePath`・`PortableCommandAlias` の整合
 
-- **根拠**: ポータブル展開・コマンドエイリアス指摘（例: [#460148](https://github.com/microsoft/winget-pkgs/pull/460148), [#445063](https://github.com/microsoft/winget-pkgs/pull/445063), [#464837](https://github.com/microsoft/winget-pkgs/pull/464837)）。
+- **根拠**: ポータブル展開・コマンドエイリアス指摘（例: [#460148](https://github.com/microsoft/winget-pkgs/pull/460148), [#445063](https://github.com/microsoft/winget-pkgs/pull/445063), [#464837](https://github.com/microsoft/winget-pkgs/pull/464837)）、および [WinGet 公式インストーラースキーマ（`NestedInstallerType`）](https://github.com/microsoft/winget-pkgs/blob/master/doc/manifest/schema/1.28.0/installer.md#nestedinstallertype---nestedinstallertype-is-required-when-installertype-is-an-archive-type-such-as-zip)。
 - **対策**:
-  - `InstallerType: zip` の場合は `NestedInstallerType: portable` と `NestedInstallerFiles` の `RelativeFilePath`（ZIP 内実パスと完全一致）および `PortableCommandAlias` を明示する。
-  - ZIP 内に複数の `.exe` が含まれる場合、エンドユーザーが実行すべきエントリポイントだけを登録し、複数コマンドを登録する意図があれば PR 本文で説明する。
-  - `PortableCommandAlias` は他ツールや Windows 標準コマンドと衝突せず、不適切な語句を含まないプロフェッショナルな名称にする。
+  - `InstallerType: zip` の場合は、`NestedInstallerType` に**ZIP 内の実際の内包形式**を指定し、`NestedInstallerFiles[].RelativeFilePath` を ZIP 内の実パスと完全一致させる:
+    - **ZIP 内がポータブル実行ファイルの場合**: `NestedInstallerType: portable` とし、`PortableCommandAlias` を指定する。
+    - **ZIP 内がインストーラー（MSI / Inno / NSIS / WiX / EXE 等）の場合**: `NestedInstallerType` に実際の形式（`msi` / `inno` / `nullsoft` / `wix` / `exe` 等）を指定する。**この場合 `PortableCommandAlias` は使わず、§4.2（`PKG-INST-01` 〜 `PKG-INST-06`）のインストーラー系チェックを併せて適用する**（誤って `portable` を指定すると WinGet がインストーラーとして実行できない）。
+  - ポータブル ZIP 内に複数の `.exe` が含まれる場合、エンドユーザーが実行すべきエントリポイントだけを登録し、複数コマンドを登録する意図があれば PR 本文で説明する。
+  - `PortableCommandAlias`（`portable` 配布・`NestedInstallerType: portable` 時のみ）は他ツールや Windows 標準コマンドと衝突せず、不適切な語句を含まないプロフェッショナルな名称にする。
 
 #### `PKG-PORT-03` `[Sandbox検証]` クリーン VM での同梱ファイル解決・起動確認
 
 - **根拠**: PyInstaller / ラッパー起動失敗（例: [#441456](https://github.com/microsoft/winget-pkgs/pull/441456)）、展開先パス依存の失敗（例: [#442337](https://github.com/microsoft/winget-pkgs/pull/442337)）。
 - **対策**:
-  - Windows Sandbox 上で `winget install -m <manifest-dir>` を実行し、WinGet が作成したシンボリックリンク（`%LOCALAPPDATA%\Microsoft\WinGet\Links\`）経由で**カレントディレクトリが別の場所（例: `C:\Users\WDAGUtilityAccount\Desktop`）からでも正常起動する**ことを確認する。
+  - [§7.1 Windows Sandbox クリーン環境での検証手順](#71-windows-sandbox-クリーン環境での検証手順)（公式 `Tools/SandboxTest.ps1`、または管理者権限で `LocalManifestFiles` を有効化した上での `winget install -m`）でインストールを実行し、WinGet が作成したシンボリックリンク（`%LOCALAPPDATA%\Microsoft\WinGet\Links\`）経由で**カレントディレクトリが別の場所（例: `C:\Users\WDAGUtilityAccount\Desktop`）からでも正常起動する**ことを確認する。
 
 #### `PKG-PORT-04` `[自己確認]` ビルド来歴の透明性確保
 
@@ -162,15 +164,15 @@
 
 ---
 
-### 4.2 インストーラー系（Inno / NSIS / WiX / MSI / EXE）
+### 4.2 インストーラー系（Inno / NSIS / WiX / MSI / EXE・ZIP 内包インストーラー含む）
 
-> 差し戻し 653 件（Inno 229 / NSIS 219 / WiX・MSI・Burn 133 / カスタム EXE 72）。最大の地雷は **ARP レジストリ不一致**・**`UpgradeBehavior` 欠落/誤設定**・**サイレント実行失敗**。
+> 差し戻し 653 件（Inno 229 / NSIS 219 / WiX・MSI・Burn 133 / カスタム EXE 72）。`InstallerType: zip` で `NestedInstallerType` が `inno` / `nullsoft` / `wix` / `msi` / `exe` 等のアーカイブ内包インストーラーも本節の対象です。最大の地雷は **ARP レジストリ不一致**・**`UpgradeBehavior` 欠落/誤設定**・**サイレント実行失敗**。
 
 #### `PKG-INST-01` `[Sandbox検証]` ARP（アプリと機能 / レジストリ）値の完全一致
 
 - **根拠**: ARP / レジストリ整合指摘 119 件（`MERGED` 73 / `CLOSED` 46。例: `Publisher` 不一致 [#450891](https://github.com/microsoft/winget-pkgs/pull/450891)、`DisplayVersion` 表記揺れ [#445940](https://github.com/microsoft/winget-pkgs/pull/445940)、`ProductCode` に表示名を誤記 [#438961](https://github.com/microsoft/winget-pkgs/pull/438961)、Inno `ProductCode` 欠落 [#446565](https://github.com/microsoft/winget-pkgs/pull/446565)）。
 - **対策**:
-  - クリーン環境（Windows Sandbox）へ実際にインストールした直後、レジストリの以下 3 パスから実測値を取得し、マニフェストと **1 文字単位で一致**させる:
+  - [§7.1 Windows Sandbox クリーン環境での検証手順](#71-windows-sandbox-クリーン環境での検証手順)で実際にインストールした直後、レジストリの以下 3 パスから実測値を取得し、マニフェストと **1 文字単位で一致**させる:
     - `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*`
     - `HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*`
     - `HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*`
@@ -240,7 +242,7 @@
 #### `APP-CLI-03` `[機械検査可]` `Commands` / `PortableCommandAlias` の正確性
 
 - **対策**:
-  - インストーラーが PATH へコマンドを追加する場合は `.installer.yaml` に `Commands:` を、Portable/ZIP の場合は `PortableCommandAlias:` を正確に記載する。
+  - インストーラーが PATH へコマンドを追加する場合は `.installer.yaml` に `Commands:` を、`InstallerType: portable` または `InstallerType: zip`（`NestedInstallerType: portable`）の場合は `PortableCommandAlias:` を正確に記載する。
 
 ---
 
@@ -324,9 +326,27 @@
 
 以下の順で事前チェックを通すことで、実データ上の差し戻し要因の大半を提出前に機械的・再現可能に潰せます。
 
-| フェーズ                                                | 対象チェック ID                                                                                                                           | 実施方法（Step 3 プリフライト診断スクリプト対応）                                                                                                                                                                                                                          |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1. 静的マニフェスト・URL 検査** `[機械検査可]`        | `CMN-02`, `CMN-03`, `CMN-04`, `CMN-06`, `PKG-PORT-02`, `PKG-PORT-05`, `PKG-INST-02`, `APP-CLI-03`                                         | `winget validate`、現行 `ManifestVersion` 検査、HTTP HEAD/GET 到達性・SHA-256 照合、不変 URL パターン検査、`LicenseUrl`/`PrivacyUrl`/`UpgradeBehavior` 検査、`Policy-Test` 誤検知語句スキャン                                                                              |
-| **2. PE バイナリ静的検査** `[機械検査可]`               | `PKG-PORT-01`, `PKG-PORT-05`, `PKG-INST-05`, `CMN-07`                                                                                     | PE ヘッダの Machine（`x64`/`arm64`/`x86`）照合、Import Table の `VCRUNTIME140.dll` / `MSVCP140.dll` 等未同梱 DLL 依存検出、Authenticode 署名有無確認                                                                                                                       |
-| **3. Windows Sandbox クリーン VM 検証** `[Sandbox検証]` | `PKG-PORT-03`, `PKG-INST-01`, `PKG-INST-03`, `PKG-INST-04`, `APP-CLI-01`, `APP-CLI-02`, `APP-GUI-01`, `APP-GUI-02`, `APP-GUI-03`, `NG-03` | クリーン環境で `winget install -m` 実行 → レジストリ ARP 値（`DisplayName` / `Publisher` / `DisplayVersion` / `ProductCode` / `UpgradeCode`）抽出・マニフェスト突き合わせ → CLI 引数なし終了コード & `--version` 検証 → GUI 起動・解像度確認 → `winget uninstall` 残骸確認 |
-| **4. 先回り PR 本文作成 & CLA** `[自己確認]`            | `CMN-01`, `CMN-05`, `CMN-07`, `PKG-PORT-04`, `APP-NET-01`〜`03`, `NG-01`, `NG-02`, `NG-04`                                                | [先回り PR 本文テンプレート](templates/winget-pkgs-pr-template.md) を記入して提出し、直後に `@microsoft-github-policy-service agree` をコメント                                                                                                                            |
+| フェーズ                                                | 対象チェック ID                                                                                                                           | 実施方法（Step 3 プリフライト診断スクリプト対応）                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. 静的マニフェスト・URL 検査** `[機械検査可]`        | `CMN-02`, `CMN-03`, `CMN-04`, `CMN-06`, `PKG-PORT-02`, `PKG-PORT-05`, `PKG-INST-02`, `APP-CLI-03`                                         | `winget validate`、現行 `ManifestVersion` 検査、HTTP HEAD/GET 到達性・SHA-256 照合、不変 URL パターン検査、`zip` 内実体に応じた `NestedInstallerType` 分岐検証（`portable` 時のみ `PortableCommandAlias` 検査、非 `portable` 時はインストーラー系ルール適用）、`LicenseUrl`/`PrivacyUrl`/`UpgradeBehavior` 検査、`Policy-Test` 誤検知語句スキャン |
+| **2. PE バイナリ静的検査** `[機械検査可]`               | `PKG-PORT-01`, `PKG-PORT-05`, `PKG-INST-05`, `CMN-07`                                                                                     | PE ヘッダの Machine（`x64`/`arm64`/`x86`）照合、Import Table の `VCRUNTIME140.dll` / `MSVCP140.dll` 等未同梱 DLL 依存検出、Authenticode 署名有無確認                                                                                                                                                                                              |
+| **3. Windows Sandbox クリーン VM 検証** `[Sandbox検証]` | `PKG-PORT-03`, `PKG-INST-01`, `PKG-INST-03`, `PKG-INST-04`, `APP-CLI-01`, `APP-CLI-02`, `APP-GUI-01`, `APP-GUI-02`, `APP-GUI-03`, `NG-03` | [§7.1 の手順](#71-windows-sandbox-クリーン環境での検証手順)（`Tools/SandboxTest.ps1` または `LocalManifestFiles` 有効化後の `winget install -m`）で導入 → レジストリ ARP 値抽出・マニフェスト突き合わせ → CLI 引数なし終了コード & `--version` 検証 → GUI 起動・解像度確認 → `winget uninstall` 残骸確認                                          |
+| **4. 先回り PR 本文作成 & CLA** `[自己確認]`            | `CMN-01`, `CMN-05`, `CMN-07`, `PKG-PORT-04`, `APP-NET-01`〜`03`, `NG-01`, `NG-02`, `NG-04`                                                | [先回り PR 本文テンプレート](templates/winget-pkgs-pr-template.md) を記入して提出し、直後に `@microsoft-github-policy-service agree` をコメント                                                                                                                                                                                                   |
+
+### 7.1 Windows Sandbox クリーン環境での検証手順
+
+クリーンな Windows Sandbox では既定で `LocalManifestFiles` が無効になっており、そのまま `winget install -m <manifest-dir>` を実行すると拒否されます。[WinGet 公式検証手順（`Validation.md`）](https://github.com/microsoft/winget-pkgs/blob/master/doc/Validation.md)に従い、以下のいずれかで検証してください。
+
+1. **公式スクリプトを使う方法（推奨）**: `microsoft/winget-pkgs` リポジトリ同梱の `Tools/SandboxTest.ps1` を使い、WinGet 導入とローカルマニフェスト有効化を自動セットアップした Sandbox 上で検証する。
+
+   ```powershell
+   .\Tools\SandboxTest.ps1 <manifest-dir>
+   ```
+
+2. **手動で Windows Sandbox を使う方法**: Sandbox 内で WinGet を利用可能にした上で、**管理者権限の PowerShell で `LocalManifestFiles` を有効化してから**ローカルマニフェストをインストールする。
+
+   ```powershell
+   # 管理者権限の PowerShell でローカルマニフェストを許可
+   winget settings --enable LocalManifestFiles
+   winget install --manifest <manifest-dir>
+   ```
