@@ -718,7 +718,7 @@ describe("runCollectReviewFeedback integration", () => {
       },
       {
         number: 500101,
-        title: "New package: Open.Excess 1.0",
+        title: "New package: Open.Third 1.0",
         html_url: "https://github.com/microsoft/winget-pkgs/pull/500101",
         created_at: "2026-10-10T00:00:00Z",
         updated_at: "2026-11-10T00:00:00Z",
@@ -727,165 +727,150 @@ describe("runCollectReviewFeedback integration", () => {
     ];
     const closedItems = [
       {
-        number: 500002,
+        number: 500003,
         title: "New package: Closed.Latest 1.0",
-        html_url: "https://github.com/microsoft/winget-pkgs/pull/500002",
+        html_url: "https://github.com/microsoft/winget-pkgs/pull/500003",
         created_at: "2026-10-15T00:00:00Z",
         updated_at: "2026-11-25T00:00:00Z",
         author: "u4",
       },
       {
+        number: 500002,
+        title: "New package: Closed.Second 1.0",
+        html_url: "https://github.com/microsoft/winget-pkgs/pull/500002",
+        created_at: "2026-10-10T00:00:00Z",
+        updated_at: "2026-11-18T00:00:00Z",
+        author: "u5",
+      },
+      {
         number: 500001,
-        title: "New package: Closed.Older 1.0",
+        title: "New package: Closed.Third 1.0",
         html_url: "https://github.com/microsoft/winget-pkgs/pull/500001",
         created_at: "2026-10-05T00:00:00Z",
         updated_at: "2026-11-15T00:00:00Z",
-        author: "u5",
+        author: "u6",
       },
     ];
+
+    const makeMockPr = (
+      num: number,
+      title: string,
+      state: "OPEN" | "CLOSED",
+      updatedAt: string,
+      author: string,
+      body: string,
+    ): Record<string, unknown> => ({
+      number: num,
+      title,
+      url: `https://github.com/microsoft/winget-pkgs/pull/${num}`,
+      state,
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt,
+      mergedAt: null,
+      closedAt: state === "CLOSED" ? updatedAt : null,
+      author: { __typename: "User", login: author },
+      authorAssociation: "NONE",
+      commits: { totalCount: 1 },
+      labels: {
+        nodes:
+          state === "OPEN"
+            ? [{ name: "New-Package" }, { name: "Needs-Author-Feedback" }]
+            : [{ name: "New-Package" }],
+      },
+      files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      comments: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [
+          {
+            author: { __typename: "User", login: "mod" },
+            authorAssociation: "COLLABORATOR",
+            body,
+            createdAt: updatedAt,
+          },
+        ],
+      },
+      timelineItems: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes:
+          state === "CLOSED"
+            ? [
+                {
+                  __typename: "LabeledEvent",
+                  createdAt: updatedAt,
+                  label: { name: "Needs-Author-Feedback" },
+                },
+              ]
+            : [],
+      },
+    });
 
     const prDetailsByNumber = new Map<number, Record<string, unknown>>([
       [
         500103,
-        {
-          number: 500103,
-          title: "New package: Open.Latest 1.0",
-          url: "https://github.com/microsoft/winget-pkgs/pull/500103",
-          state: "OPEN",
-          createdAt: "2026-11-01T00:00:00Z",
-          updatedAt: "2026-11-26T00:00:00Z",
-          mergedAt: null,
-          closedAt: null,
-          author: { __typename: "User", login: "u1" },
-          authorAssociation: "NONE",
-          commits: { totalCount: 1 },
-          labels: { nodes: [{ name: "New-Package" }, { name: "Needs-Author-Feedback" }] },
-          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          comments: {
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                author: { __typename: "User", login: "mod" },
-                authorAssociation: "COLLABORATOR",
-                body: "PrivacyUrl 404",
-                createdAt: "2026-11-26T00:00:00Z",
-              },
-            ],
-          },
-          timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-        },
+        makeMockPr(
+          500103,
+          "New package: Open.Latest 1.0",
+          "OPEN",
+          "2026-11-26T00:00:00Z",
+          "u1",
+          "PrivacyUrl 404",
+        ),
       ],
       [
         500102,
-        {
-          number: 500102,
-          title: "New package: Open.Older 1.0",
-          url: "https://github.com/microsoft/winget-pkgs/pull/500102",
-          state: "OPEN",
-          createdAt: "2026-10-20T00:00:00Z",
-          updatedAt: "2026-11-20T00:00:00Z",
-          mergedAt: null,
-          closedAt: null,
-          author: { __typename: "User", login: "u2" },
-          authorAssociation: "NONE",
-          commits: { totalCount: 1 },
-          labels: { nodes: [{ name: "New-Package" }, { name: "Needs-Author-Feedback" }] },
-          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          comments: {
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                author: { __typename: "User", login: "mod" },
-                authorAssociation: "COLLABORATOR",
-                body: "VCRUNTIME140.dll missing",
-                createdAt: "2026-11-20T00:00:00Z",
-              },
-            ],
-          },
-          timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-        },
+        makeMockPr(
+          500102,
+          "New package: Open.Older 1.0",
+          "OPEN",
+          "2026-11-20T00:00:00Z",
+          "u2",
+          "VCRUNTIME140.dll missing",
+        ),
+      ],
+      [
+        500101,
+        makeMockPr(
+          500101,
+          "New package: Open.Third 1.0",
+          "OPEN",
+          "2026-11-10T00:00:00Z",
+          "u3",
+          "SmartScreen warning",
+        ),
+      ],
+      [
+        500003,
+        makeMockPr(
+          500003,
+          "New package: Closed.Latest 1.0",
+          "CLOSED",
+          "2026-11-25T00:00:00Z",
+          "u4",
+          "SmartScreen warning",
+        ),
       ],
       [
         500002,
-        {
-          number: 500002,
-          title: "New package: Closed.Latest 1.0",
-          url: "https://github.com/microsoft/winget-pkgs/pull/500002",
-          state: "CLOSED",
-          createdAt: "2026-10-15T00:00:00Z",
-          updatedAt: "2026-11-25T00:00:00Z",
-          mergedAt: null,
-          closedAt: "2026-11-25T00:00:00Z",
-          author: { __typename: "User", login: "u4" },
-          authorAssociation: "NONE",
-          commits: { totalCount: 1 },
-          labels: { nodes: [{ name: "New-Package" }] },
-          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          comments: {
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                author: { __typename: "User", login: "mod" },
-                authorAssociation: "COLLABORATOR",
-                body: "SmartScreen warning",
-                createdAt: "2026-11-25T00:00:00Z",
-              },
-            ],
-          },
-          timelineItems: {
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                __typename: "LabeledEvent",
-                createdAt: "2026-11-25T00:00:00Z",
-                label: { name: "Needs-Author-Feedback" },
-              },
-            ],
-          },
-        },
+        makeMockPr(
+          500002,
+          "New package: Closed.Second 1.0",
+          "CLOSED",
+          "2026-11-18T00:00:00Z",
+          "u5",
+          "InstallerType mismatch",
+        ),
       ],
       [
         500001,
-        {
-          number: 500001,
-          title: "New package: Closed.Older 1.0",
-          url: "https://github.com/microsoft/winget-pkgs/pull/500001",
-          state: "CLOSED",
-          createdAt: "2026-10-05T00:00:00Z",
-          updatedAt: "2026-11-15T00:00:00Z",
-          mergedAt: null,
-          closedAt: "2026-11-15T00:00:00Z",
-          author: { __typename: "User", login: "u5" },
-          authorAssociation: "NONE",
-          commits: { totalCount: 1 },
-          labels: { nodes: [{ name: "New-Package" }] },
-          files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          reviews: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          comments: {
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                author: { __typename: "User", login: "mod" },
-                authorAssociation: "COLLABORATOR",
-                body: "InstallerType mismatch",
-                createdAt: "2026-11-15T00:00:00Z",
-              },
-            ],
-          },
-          timelineItems: {
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                __typename: "LabeledEvent",
-                createdAt: "2026-11-15T00:00:00Z",
-                label: { name: "Needs-Author-Feedback" },
-              },
-            ],
-          },
-        },
+        makeMockPr(
+          500001,
+          "New package: Closed.Third 1.0",
+          "CLOSED",
+          "2026-11-15T00:00:00Z",
+          "u6",
+          "ReleaseNotesUrl 404",
+        ),
       ],
     ]);
 
@@ -953,19 +938,32 @@ describe("runCollectReviewFeedback integration", () => {
         () => {},
       );
       expect(searchedStates).toEqual(["open", "closed"]);
-      expect(fetchedPrBatches[0]).toEqual([500103, 500002]);
-      expect(run1.records.map((r) => r.number)).toEqual([500103, 500002]);
+      expect(fetchedPrBatches[0]).toEqual([500103, 500003]);
+      expect(run1.records.map((r) => r.number)).toEqual([500103, 500003]);
 
-      // 2 回目: 1 回目で取得した未更新 OPEN (#500103) と CLOSED (#500002) が再利用され、
-      //        古い OPEN (#500102) と後続 CLOSED (#500001) の両方へ前進する
+      // 2 回目: 1 回目で取得した未更新 OPEN (#500103) と CLOSED (#500003) が枠を消費せず再利用され、
+      //        2 件目 (#500102, #500002) へ前進する
       const run2 = await runCollectReviewFeedback(
         { ...parseArgs(cliArgs), now: new Date("2026-11-27T06:05:00.000Z") },
         mockClient,
         () => {},
       );
       expect(run2.stats.reusedFromCacheCount).toBe(2);
-      expect(fetchedPrBatches[1]).toEqual([500102, 500001]);
-      expect(run2.records.map((r) => r.number)).toEqual([500103, 500102, 500002, 500001]);
+      expect(fetchedPrBatches[1]).toEqual([500102, 500002]);
+      expect(run2.records.map((r) => r.number)).toEqual([500103, 500102, 500003, 500002]);
+
+      // 3 回目: 先頭 2 件ずつ（旧 stateLimit=2 の内側）がすべてキャッシュ済みでも枠を消費せず読み飛ばし、
+      //        上限外だった 3 件目 (#500101, #500001) へ確実に到達・取得できる
+      const run3 = await runCollectReviewFeedback(
+        { ...parseArgs(cliArgs), now: new Date("2026-11-27T06:10:00.000Z") },
+        mockClient,
+        () => {},
+      );
+      expect(run3.stats.reusedFromCacheCount).toBe(4);
+      expect(fetchedPrBatches[2]).toEqual([500101, 500001]);
+      expect(run3.records.map((r) => r.number)).toEqual([
+        500103, 500102, 500101, 500003, 500002, 500001,
+      ]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
