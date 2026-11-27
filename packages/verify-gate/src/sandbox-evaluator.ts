@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { extractExpectedArpSpec, resolveSelectedInstallerArchitecture } from "./sandbox-plan";
+import { extractExpectedArpSpec } from "./sandbox-plan";
 import type {
   ArpRegistryEntry,
   CliProbeResult,
@@ -192,6 +192,9 @@ export function parseSandboxRunResult(rawText: string): SandboxRunResult {
     packageIdentifier: asOptionalString(rec.packageIdentifier),
     packageVersion: asOptionalString(rec.packageVersion),
     installedArchitecture,
+    osVersion: asOptionalString(rec.osVersion),
+    selectedInstallerUrl: asOptionalString(rec.selectedInstallerUrl),
+    selectedInstallerSha256: asOptionalString(rec.selectedInstallerSha256),
     executedAt,
     localManifestFilesEnabled: rec.localManifestFilesEnabled,
     install,
@@ -382,67 +385,76 @@ export function evaluateSandboxResult(
     }
   }
 
-  // アーキテクチャ別の ARP 期待値解決（選択アーキテクチャのみ対象）
-  const unfilteredSpec = extractExpectedArpSpec(bundle);
-  const needsArchDisambiguation =
-    unfilteredSpec.hasArchitectureSpecificArpVariants && !result.installedArchitecture;
-  if (needsArchDisambiguation) {
+  // 実行時に選択されたインストーラーと ARP 期待値を解決する
+  const expected = extractExpectedArpSpec(bundle, {
+    installedArchitecture: result.installedArchitecture,
+    osVersion: result.osVersion,
+    selectedInstallerUrl: result.selectedInstallerUrl,
+    selectedInstallerSha256: result.selectedInstallerSha256,
+  });
+
+  if (expected.selectionStatus === "unmatched_selected_installer") {
     identityIssues++;
     findings.push({
       id: "CMN-SBX-02",
       status: "fail",
-      title: "複数アーキテクチャで異なる ARP 宣言があるが installedArchitecture が未記録",
-      detail: `マニフェストに複数アーキテクチャ [${unfilteredSpec.availableArchitectures.join(", ")}] の異なる ProductCode / AppsAndFeaturesEntries 宣言があるため、実測対象アーキテクチャの記録が必須です。`,
-      remediation:
-        "sandbox-result.json に installedArchitecture（x64 / x86 / arm64）を記録する最新 verify-inside-sandbox.ps1 で再計測してください。",
+      title: "Sandbox 結果に記録された選択インストーラーがマニフェストに一致しない",
+      detail: expected.selectionReason ?? "selectedInstallerUrl / selectedInstallerSha256 不一致",
+      remediation: "対象マニフェストに対応する最新の sandbox-result.json を使用してください。",
       file: sourceFile,
       guideRef: "PKG-INST-01",
     });
-  }
-
-  const resolvedArchForOs =
-    result.installedArchitecture && unfilteredSpec.availableArchitectures.length > 0
-      ? resolveSelectedInstallerArchitecture(
-          unfilteredSpec.availableArchitectures,
-          result.installedArchitecture,
-        )
-      : null;
-
-  if (
-    result.installedArchitecture &&
-    unfilteredSpec.availableArchitectures.length > 0 &&
-    !resolvedArchForOs
-  ) {
+  } else if (expected.selectionStatus === "ambiguous") {
     identityIssues++;
     findings.push({
       id: "CMN-SBX-02",
       status: "fail",
-      title: "Sandbox の OS アーキテクチャで適用可能なインストーラーがマニフェストに存在しない",
-      detail: `installedArchitecture="${result.installedArchitecture}" に対し適用可能なエントリが [${unfilteredSpec.availableArchitectures.join(", ")}] に存在しません。`,
+      title: "実測時に選択されたインストーラーを一意に特定できない",
+      detail:
+        expected.selectionReason ??
+        "複数インストーラーで異なる ARP 宣言があるため、選択されたインストーラーの記録が必要です。",
       remediation:
-        "マニフェストが対象とするアーキテクチャを実行できる Sandbox 環境で検証してください。",
+        "selectedInstallerUrl / selectedInstallerSha256（または osVersion と installedArchitecture）を記録する最新 verify-inside-sandbox.ps1 で再計測してください。",
+      file: sourceFile,
+      guideRef: "PKG-INST-01",
+    });
+  } else if (expected.selectionStatus === "incompatible") {
+    identityIssues++;
+    findings.push({
+      id: "CMN-SBX-02",
+      status: "fail",
+      title: "Sandbox の OS 条件で適用可能なインストーラーがマニフェストに存在しない",
+      detail:
+        expected.selectionReason ??
+        `installedArchitecture="${result.installedArchitecture ?? ""}" に対し適用可能なエントリが存在しません。`,
+      remediation:
+        "マニフェストの Architecture / MinimumOSVersion / UnsupportedOSArchitectures と検証環境を確認してください。",
       file: sourceFile,
       guideRef: "PKG-INST-01",
     });
   }
 
   if (identityIssues === 0 && (manifestPkgId || manifestPkgVer)) {
+    const resolvedArch = expected.resolvedInstallerArchitecture;
     const archLabel = result.installedArchitecture
-      ? resolvedArchForOs && resolvedArchForOs !== result.installedArchitecture
-        ? ` (OS=${result.installedArchitecture}, installer=${resolvedArchForOs})`
+      ? resolvedArch && resolvedArch !== result.installedArchitecture
+        ? ` (OS=${result.installedArchitecture}, installer=${resolvedArch})`
         : ` (${result.installedArchitecture})`
-      : "";
+      : resolvedArch
+        ? ` (installer=${resolvedArch})`
+        : "";
     findings.push({
       id: "CMN-SBX-02",
       status: "pass",
-      title: "Sandbox 結果のパッケージ識別子・バージョンが対象マニフェストと一致",
+      title:
+        "Sandbox 結果のパッケージ識別子・バージョン・選択インストーラーが対象マニフェストと一致",
       detail: `${manifestPkgId ?? "(unknown)"}@${manifestPkgVer ?? "(unknown)"}${archLabel}`,
       file: sourceFile,
       guideRef: "7.1",
     });
   }
 
-  const expected = extractExpectedArpSpec(bundle, result.installedArchitecture);
+  const canEvaluateArp = expected.selectionStatus === "resolved";
 
   // 1. LocalManifestFiles 有効化確認
   if (!result.localManifestFilesEnabled) {
@@ -504,7 +516,7 @@ export function evaluateSandboxResult(
     }
   };
 
-  if (result.install.exitCode === 0 && !needsArchDisambiguation) {
+  if (result.install.exitCode === 0 && canEvaluateArp) {
     if (changedEntries.length === 0) {
       if (expected.hasInstallerBasedEntry) {
         findings.push({

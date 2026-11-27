@@ -529,6 +529,126 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       expect(wow64Findings.filter((f) => f.status === "fail")).toHaveLength(0);
       expect(wow64Findings.some((f) => f.id === "CMN-SBX-02" && f.status === "pass")).toBe(true);
       expect(wow64Findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+
+      // MinimumOSVersion で x64 が除外され x86 へ切り替わるケース（osVersion / selectedInstallerUrl / 未記録 fail-closed）
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    MinimumOSVersion: 10.0.22621.0",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: x86",
+          "    MinimumOSVersion: 10.0.17763.0",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          `    InstallerSha256: ${"B".repeat(64)}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const minOsBundle = loadManifestBundle(tmpDir);
+      // 1) osVersion が 10.0.19045.0 なら x64 が除外され x86 が選択されて合格
+      const minOsFallbackFindings = evaluateSandboxResult(
+        minOsBundle,
+        makeBaseSandboxResult({
+          installedArchitecture: "x64",
+          osVersion: "10.0.19045.0",
+          cliProbes: [],
+        }),
+      );
+      expect(minOsFallbackFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(minOsFallbackFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(
+        true,
+      );
+
+      // 2) selectedInstallerUrl で x86 URL が記録されていれば osVersion なしでも一意特定して合格
+      const selectedUrlFindings = evaluateSandboxResult(
+        minOsBundle,
+        makeBaseSandboxResult({
+          installedArchitecture: "x64",
+          selectedInstallerUrl:
+            "https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          cliProbes: [],
+        }),
+      );
+      expect(selectedUrlFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(selectedUrlFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(
+        true,
+      );
+
+      // 3) osVersion も selectedInstallerUrl も未記録なら推定せず fail-closed (CMN-SBX-02: fail)
+      const ambiguousMinOsFindings = evaluateSandboxResult(
+        minOsBundle,
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(ambiguousMinOsFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(
+        true,
+      );
+
+      // UnsupportedOSArchitectures で x64 が除外され x86 へ切り替わるケース
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    UnsupportedOSArchitectures:",
+          "      - x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: x86",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x86.exe",
+          `    InstallerSha256: ${"B".repeat(64)}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const unsupportedArchFindings = evaluateSandboxResult(
+        loadManifestBundle(tmpDir),
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(unsupportedArchFindings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(
+        unsupportedArchFindings.some((f) => f.id === "PKG-INST-01" && f.status === "pass"),
+      ).toBe(true);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

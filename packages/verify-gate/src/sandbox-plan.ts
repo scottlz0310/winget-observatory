@@ -72,6 +72,15 @@ export interface ExpectedArpSpec {
   availableArchitectures: string[];
   resolvedInstallerArchitecture: string | null;
   hasArchitectureSpecificArpVariants: boolean;
+  selectionStatus: "resolved" | "ambiguous" | "incompatible" | "unmatched_selected_installer";
+  selectionReason?: string;
+}
+
+export interface InstallerSelectionContext {
+  installedArchitecture?: string;
+  osVersion?: string;
+  selectedInstallerUrl?: string;
+  selectedInstallerSha256?: string;
 }
 
 const INSTALLER_BASED_TYPES = new Set(["inno", "nullsoft", "wix", "msi", "exe", "burn", "msix"]);
@@ -82,6 +91,17 @@ const WINGET_ARCH_PREFERENCE: Record<string, readonly string[]> = {
   x86: ["x86", "neutral"],
   neutral: ["neutral"],
 };
+
+function compareDottedVersion(a: string, b: string): number {
+  const pa = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 /**
  * WinGet のアーキテクチャ適用優先順（GetApplicableArchitectures 相当、WOW64 含む）に従い、
@@ -172,13 +192,18 @@ export function inferProbeCommandsFromBundle(bundle: ManifestBundle): string[] {
 
 /**
  * マニフェストバンドルから ARP（Add/Remove Programs）突き合わせ用の期待値を抽出する。
- * selectedArchitecture が指定されている場合は該当アーキテクチャ（および neutral）の
- * インストーラーエントリのみを対象とし、WinGet の継承規則（エントリ固有があればルートを上書き）に従う。
+ * 実行時に記録された selectedInstallerUrl / selectedInstallerSha256 を最優先で照合し、
+ * 未記録時は UnsupportedOSArchitectures / MinimumOSVersion による候補除外と WinGet 優先順で解決する。
+ * 適用条件の判定材料不足や複数異なる ARP 仕様の競合で一意特定できない場合は selectionStatus="ambiguous" を返す。
  */
 export function extractExpectedArpSpec(
   bundle: ManifestBundle,
-  selectedArchitecture?: string,
+  selectionInput?: string | InstallerSelectionContext,
 ): ExpectedArpSpec {
+  const context: InstallerSelectionContext =
+    typeof selectionInput === "string"
+      ? { installedArchitecture: selectionInput }
+      : (selectionInput ?? {});
   const installerHost = getInstallerHostFile(bundle);
   const localeHost = getLocaleHostFile(bundle);
   const versionHost = bundle.versionFile ?? installerHost ?? localeHost;
@@ -189,6 +214,10 @@ export function extractExpectedArpSpec(
 
   const rootProductCode = installerHost ? asNonEmptyString(installerHost.data.ProductCode) : null;
   const rootExplicitEntries = installerHost ? parseAppsAndFeaturesEntries(installerHost.data) : [];
+  const rootMinOs = installerHost ? asNonEmptyString(installerHost.data.MinimumOSVersion) : null;
+  const rootUnsupportedArchs = installerHost
+    ? asStringArray(installerHost.data.UnsupportedOSArchitectures).map((a) => a.toLowerCase())
+    : [];
   const allEntries = getInstallerEntries(bundle);
 
   const availableArchitectures = [
@@ -199,36 +228,124 @@ export function extractExpectedArpSpec(
     ),
   ];
 
-  // アーキテクチャ間で ARP 宣言（ProductCode / AppsAndFeaturesEntries）が異なるか判定
-  const variantByArch = new Map<string, string>();
-  for (const entry of allEntries) {
-    const arch = asNonEmptyString(entry.Architecture)?.toLowerCase() ?? "unknown";
+  const computeVariantKey = (entry: Record<string, unknown>): string => {
     const entryExplicit = parseAppsAndFeaturesEntries(entry);
     const effectiveExplicit = entryExplicit.length > 0 ? entryExplicit : rootExplicitEntries;
     const effectiveProductCode =
       asNonEmptyString(entry.ProductCode) ??
       effectiveExplicit.find((e) => e.productCode)?.productCode ??
       rootProductCode;
-    variantByArch.set(arch, serializeArpVariantKey(effectiveProductCode, effectiveExplicit));
+    return serializeArpVariantKey(effectiveProductCode, effectiveExplicit);
+  };
+
+  const distinctEntryVariants = new Set(allEntries.map(computeVariantKey));
+  const hasArchitectureSpecificArpVariants = distinctEntryVariants.size > 1;
+
+  let selectionStatus: ExpectedArpSpec["selectionStatus"] = "resolved";
+  let selectionReason: string | undefined;
+  let resolvedInstallerArchitecture: string | null =
+    availableArchitectures.length === 1 ? availableArchitectures[0] : null;
+  let targetEntries: Record<string, unknown>[] = allEntries;
+
+  const selectedSha = context.selectedInstallerSha256?.trim().toLowerCase();
+  const selectedUrl = context.selectedInstallerUrl?.trim();
+  const normalizedOsArch = context.installedArchitecture?.trim().toLowerCase();
+  const osVersion = context.osVersion?.trim();
+
+  // 1. 実行時記録（InstallerSha256 / InstallerUrl）が提供されていれば直接一致で一意特定
+  if (selectedSha || selectedUrl) {
+    const matched = allEntries.filter((entry) => {
+      const entrySha = asNonEmptyString(entry.InstallerSha256)?.toLowerCase();
+      const entryUrl = asNonEmptyString(entry.InstallerUrl);
+      if (selectedSha && selectedUrl) {
+        return entrySha === selectedSha && entryUrl === selectedUrl;
+      }
+      if (selectedSha) return entrySha === selectedSha;
+      return entryUrl === selectedUrl;
+    });
+    if (matched.length === 0) {
+      selectionStatus = "unmatched_selected_installer";
+      selectionReason = `記録されたインストーラー（url=${selectedUrl ?? "(none)"}, sha256=${selectedSha ?? "(none)"}）がマニフェストに一致しません。`;
+      targetEntries = [];
+      resolvedInstallerArchitecture = null;
+    } else if (new Set(matched.map(computeVariantKey)).size > 1) {
+      selectionStatus = "ambiguous";
+      selectionReason =
+        "一致した複数エントリ間で異なる ARP 宣言（ProductCode / AppsAndFeaturesEntries）が存在するため一意特定できません。";
+      targetEntries = matched;
+    } else {
+      targetEntries = matched;
+      resolvedInstallerArchitecture =
+        asNonEmptyString(matched[0].Architecture)?.toLowerCase() ?? null;
+    }
+  } else if (normalizedOsArch && allEntries.length > 0) {
+    // 2. OS アーキテクチャ＋適用除外条件（UnsupportedOSArchitectures / MinimumOSVersion）で候補絞り込み
+    let unverifiedMinOsCandidateExists = false;
+    const eligibleEntries = allEntries.filter((entry) => {
+      const entryUnsupported = asStringArray(entry.UnsupportedOSArchitectures).map((a) =>
+        a.toLowerCase(),
+      );
+      const effectiveUnsupported =
+        entryUnsupported.length > 0 ? entryUnsupported : rootUnsupportedArchs;
+      if (effectiveUnsupported.includes(normalizedOsArch)) {
+        return false;
+      }
+      const entryMinOs = asNonEmptyString(entry.MinimumOSVersion) ?? rootMinOs;
+      if (entryMinOs) {
+        if (osVersion) {
+          if (compareDottedVersion(osVersion, entryMinOs) < 0) {
+            return false;
+          }
+        } else {
+          unverifiedMinOsCandidateExists = true;
+        }
+      }
+      return true;
+    });
+
+    const eligibleArchs = [
+      ...new Set(
+        eligibleEntries
+          .map((e) => asNonEmptyString(e.Architecture)?.toLowerCase())
+          .filter((a): a is string => a !== undefined && a !== null),
+      ),
+    ];
+    const preferredArch = resolveSelectedInstallerArchitecture(eligibleArchs, normalizedOsArch);
+    if (!preferredArch) {
+      selectionStatus = "incompatible";
+      selectionReason = `installedArchitecture="${normalizedOsArch}" で適用可能なインストーラー候補がありません。`;
+      targetEntries = [];
+      resolvedInstallerArchitecture = null;
+    } else {
+      const preferredEntries = eligibleEntries.filter(
+        (entry) => asNonEmptyString(entry.Architecture)?.toLowerCase() === preferredArch,
+      );
+      const preferredVariants = new Set(preferredEntries.map(computeVariantKey));
+      // 優先候補に MinimumOSVersion が宣言されているのに osVersion も selectedInstallerUrl も未記録、
+      // かつ他候補と異なる ARP 仕様を持つ場合は互換版へ切り替わった可能性を否定できないため ambiguous とする
+      const preferredHasMinOs = preferredEntries.some(
+        (entry) => (asNonEmptyString(entry.MinimumOSVersion) ?? rootMinOs) !== null,
+      );
+      if (
+        (unverifiedMinOsCandidateExists &&
+          preferredHasMinOs &&
+          hasArchitectureSpecificArpVariants) ||
+        preferredVariants.size > 1
+      ) {
+        selectionStatus = "ambiguous";
+        selectionReason =
+          "MinimumOSVersion または同一アーキテクチャ内の複数 ARP 宣言により、OS アーキテクチャだけでは実選択インストーラーを一意特定できません。selectedInstallerUrl / selectedInstallerSha256 または osVersion を記録してください。";
+        targetEntries = preferredEntries;
+        resolvedInstallerArchitecture = preferredArch;
+      } else {
+        targetEntries = preferredEntries;
+        resolvedInstallerArchitecture = preferredArch;
+      }
+    }
+  } else if (hasArchitectureSpecificArpVariants) {
+    selectionStatus = "ambiguous";
+    selectionReason = `複数インストーラーで異なる ARP 宣言（ProductCode / AppsAndFeaturesEntries）があるため、selectedInstallerUrl / selectedInstallerSha256 または installedArchitecture の記録が必須です。`;
   }
-  const hasArchitectureSpecificArpVariants =
-    variantByArch.size > 1 && new Set(variantByArch.values()).size > 1;
-
-  const normalizedSelectedArch = selectedArchitecture?.toLowerCase();
-  const resolvedInstallerArchitecture = normalizedSelectedArch
-    ? resolveSelectedInstallerArchitecture(availableArchitectures, normalizedSelectedArch)
-    : availableArchitectures.length === 1
-      ? availableArchitectures[0]
-      : null;
-
-  const targetEntries = normalizedSelectedArch
-    ? resolvedInstallerArchitecture
-      ? allEntries.filter(
-          (entry) =>
-            asNonEmptyString(entry.Architecture)?.toLowerCase() === resolvedInstallerArchitecture,
-        )
-      : []
-    : allEntries;
 
   let productCode = rootProductCode;
   let upgradeCode: string | null = null;
@@ -282,6 +399,8 @@ export function extractExpectedArpSpec(
     availableArchitectures,
     resolvedInstallerArchitecture,
     hasArchitectureSpecificArpVariants,
+    selectionStatus,
+    selectionReason,
   };
 }
 
@@ -525,6 +644,7 @@ export function buildInsideSandboxScript(options: {
     "}",
     "",
     "$installedArchitecture = Get-NormalizedOsArchitecture",
+    "$osVersion = [System.Environment]::OSVersion.Version.ToString()",
     "$localManifestFilesEnabled = $false",
     "$wingetCmd = Ensure-WinGetInstalled",
     "if ($wingetCmd) {",
@@ -536,10 +656,12 @@ export function buildInsideSandboxScript(options: {
     '$installCommand = "winget install --manifest $ManifestDir --accept-package-agreements --accept-source-agreements --disable-interactivity"',
     "$installExitCode = -1",
     "$installLog = ''",
+    "$selectedInstallerUrl = $null",
     "if ($wingetCmd) {",
     "  $installOut = & winget install --manifest $ManifestDir --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | Out-String",
     "  $installExitCode = [int]$LASTEXITCODE",
     "  $installLog = $installOut.Substring(0, [Math]::Min(1200, $installOut.Length))",
+    "  if ($installOut -match 'Downloading\\s+(https?://\\S+)') { $selectedInstallerUrl = $Matches[1].Trim() }",
     "} else {",
     "  $installLog = 'WinGet bootstrap failed in Windows Sandbox (see sandbox-run.log for details).'",
     "}",
@@ -577,6 +699,8 @@ export function buildInsideSandboxScript(options: {
     "  packageIdentifier = if ($PackageIdentifier) { $PackageIdentifier } else { $null }",
     "  packageVersion = if ($PackageVersion) { $PackageVersion } else { $null }",
     "  installedArchitecture = $installedArchitecture",
+    "  osVersion = $osVersion",
+    "  selectedInstallerUrl = $selectedInstallerUrl",
     "  executedAt = [DateTime]::UtcNow.ToString('o')",
     "  localManifestFilesEnabled = $localManifestFilesEnabled",
     "  install = [ordered]@{",

@@ -107,6 +107,9 @@ export interface SandboxRunResult {
   packageIdentifier?: string;
   packageVersion?: string;
   installedArchitecture?: Exclude<PeArchitecture, "unknown">;
+  osVersion?: string;
+  selectedInstallerUrl?: string;
+  selectedInstallerSha256?: string;
   executedAt: string;
   localManifestFilesEnabled: boolean;
   install: SandboxCommandOutcome;
