@@ -97,21 +97,38 @@ export function resolveEffectiveInstallerType(
   return { installerType, nestedInstallerType, effectiveType };
 }
 
-function extractPackageDependenciesFromContainer(container: Record<string, unknown>): string[] {
+function extractDependenciesInfo(container: Record<string, unknown>): {
+  hasAny: boolean;
+  packageDependencies: string[];
+} {
   const depObj = asRecord(container.Dependencies);
-  if (!depObj || !Array.isArray(depObj.PackageDependencies)) return [];
-  const deps: string[] = [];
-  for (const item of depObj.PackageDependencies) {
-    const rec = asRecord(item);
-    const id = rec ? asString(rec.PackageIdentifier) : null;
-    if (id) deps.push(id);
+  if (!depObj) {
+    return { hasAny: false, packageDependencies: [] };
   }
-  return deps;
+  const packageDependencies: string[] = [];
+  if (Array.isArray(depObj.PackageDependencies)) {
+    for (const item of depObj.PackageDependencies) {
+      const rec = asRecord(item);
+      const id = rec ? asString(rec.PackageIdentifier) : null;
+      if (id) packageDependencies.push(id);
+    }
+  }
+  const hasNonPackageDeps =
+    asStringArray(depObj.WindowsFeatures).length > 0 ||
+    asStringArray(depObj.WindowsLibraries).length > 0 ||
+    asStringArray(depObj.ExternalDependencies).length > 0;
+  return {
+    hasAny: packageDependencies.length > 0 || hasNonPackageDeps,
+    packageDependencies,
+  };
 }
 
 /**
- * 指定アーキテクチャに該当するインストーラーエントリごとの実効 PackageDependencies（トップレベル共通依存 ∪ エントリ固有依存）を返す。
- * 該当アーキテクチャのエントリが 0 件の場合は、他アーキテクチャのエントリ依存を流用せずトップレベル共通依存のみを 1 組として返す。
+ * 指定アーキテクチャに該当するインストーラーエントリごとの実効 PackageDependencies を返す。
+ * WinGet の ManifestYamlPopulator 仕様どおり、エントリ固有の Dependencies に有効な依存
+ * （PackageDependencies / WindowsFeatures / WindowsLibraries / ExternalDependencies）が
+ * 1 件以上ある場合はエントリ固有の依存のみを使用し、ルートの Dependencies は継承しない。
+ * エントリに有効な依存がない場合のみルートへフォールバックする。
  */
 export function resolveEffectivePackageDependencySetsForArchitecture(
   bundle: ManifestBundle,
@@ -119,17 +136,20 @@ export function resolveEffectivePackageDependencySetsForArchitecture(
 ): string[][] {
   const host = getInstallerHostFile(bundle);
   if (!host) return [];
-  const topLevelDeps = extractPackageDependenciesFromContainer(host.data);
+  const topLevel = extractDependenciesInfo(host.data);
   const targetArch = architecture.toLowerCase();
   const matchingEntries = getInstallerEntries(bundle).filter(
     (entry) => asString(entry.Architecture)?.toLowerCase() === targetArch,
   );
   if (matchingEntries.length === 0) {
-    return [topLevelDeps];
+    return [topLevel.packageDependencies];
   }
-  return matchingEntries.map((entry) => [
-    ...new Set([...topLevelDeps, ...extractPackageDependenciesFromContainer(entry)]),
-  ]);
+  return matchingEntries.map((entry) => {
+    const entryDeps = extractDependenciesInfo(entry);
+    return entryDeps.hasAny
+      ? [...new Set(entryDeps.packageDependencies)]
+      : [...new Set(topLevel.packageDependencies)];
+  });
 }
 
 export interface ManifestRuleOptions {

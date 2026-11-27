@@ -488,4 +488,103 @@ describe("manifest-rules and gate-runner", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test.each([
+    {
+      name: "エントリ固有の Dependencies が無い場合はルートの VC++ 依存へフォールバックして pass",
+      entryDepsLines: [],
+      expectedPassed: true,
+      expectedStatus: "pass" as const,
+    },
+    {
+      name: "エントリ固有の空 Dependencies ({}) の場合はルートの VC++ 依存へフォールバックして pass",
+      entryDepsLines: ["    Dependencies: {}"],
+      expectedPassed: true,
+      expectedStatus: "pass" as const,
+    },
+    {
+      name: "エントリ固有の別 PackageDependencies がある場合はルートの VC++ 依存を継承せず fail",
+      entryDepsLines: [
+        "    Dependencies:",
+        "      PackageDependencies:",
+        "        - PackageIdentifier: Example.OtherRuntime",
+      ],
+      expectedPassed: false,
+      expectedStatus: "fail" as const,
+    },
+    {
+      name: "エントリ固有の ExternalDependencies（非パッケージ依存）がある場合もルートを継承せず fail",
+      entryDepsLines: [
+        "    Dependencies:",
+        "      ExternalDependencies:",
+        "        - CustomNativeSdk",
+      ],
+      expectedPassed: false,
+      expectedStatus: "fail" as const,
+    },
+    {
+      name: "エントリ固有の WindowsFeatures（非パッケージ依存）がある場合もルートを継承せず fail",
+      entryDepsLines: ["    Dependencies:", "      WindowsFeatures:", "        - NetFx3"],
+      expectedPassed: false,
+      expectedStatus: "fail" as const,
+    },
+    {
+      name: "エントリ固有の WindowsLibraries（非パッケージ依存）がある場合もルートを継承せず fail",
+      entryDepsLines: [
+        "    Dependencies:",
+        "      WindowsLibraries:",
+        "        - Microsoft.VCLibs.140.00",
+      ],
+      expectedPassed: false,
+      expectedStatus: "fail" as const,
+    },
+  ])("WinGet 依存上書き規則: $name", async ({ entryDepsLines, expectedPassed, expectedStatus }) => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-dep-override-"));
+    try {
+      const exePath = join(tmpDir, "mycli-x64.exe");
+      writeFileSync(
+        exePath,
+        buildSyntheticPe({
+          machine: 0x8664,
+          pe32Plus: true,
+          importedDlls: ["KERNEL32.dll", "VCRUNTIME140.dll"],
+          hasSignature: true,
+        }),
+      );
+
+      const base = makeCleanPortableZipFixture();
+      writeManifestFixture(tmpDir, {
+        ...base,
+        "Example.MyCli.installer.yaml": [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyCli",
+          "PackageVersion: 1.0.0",
+          "Dependencies:",
+          "  PackageDependencies:",
+          "    - PackageIdentifier: Microsoft.VCRedist.2015+.x64",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: portable",
+          "    InstallerUrl: https://github.com/example/mycli/releases/download/v1.0.0/mycli-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          ...entryDepsLines,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+      });
+
+      const report = await runManifestGate({
+        manifestDir: tmpDir,
+        binaryPath: exePath,
+        offline: true,
+      });
+      expect(report.passed).toBe(expectedPassed);
+      expect(
+        report.findings.some((f) => f.id === "PKG-PORT-01" && f.status === expectedStatus),
+      ).toBe(true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
