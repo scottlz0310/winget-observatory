@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-27
+
 ### Added
 
 - `verify-gate` に Windows Sandbox 実機検証連携（.wsb / PowerShell 生成・ARP 自動ダンプ突き合わせ・CLI 終了コード実測評価）を追加（#155 PR 2/2）:
@@ -400,7 +402,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.3.0...v0.4.0
