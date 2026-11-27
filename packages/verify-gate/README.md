@@ -6,7 +6,7 @@
 
 ## 導入方法（Bun / pnpm / Node.js / 単体バイナリ）
 
-Bun・pnpm・Node.js（20+）のいずれでも動作し、[GitHub Releases](https://github.com/scottlz0310/winget-observatory/releases) の単体バイナリを使えばランタイム未導入環境でもそのまま実行できます。
+Bun・pnpm・Node.js（26+）のいずれでも動作し、[GitHub Releases](https://github.com/scottlz0310/winget-observatory/releases) の単体バイナリを使えばランタイム未導入環境でもそのまま実行できます。
 
 | 環境           | 即時実行                                         | MCP 設定（`command` / `args`）                                  |
 | -------------- | ------------------------------------------------ | --------------------------------------------------------------- |
