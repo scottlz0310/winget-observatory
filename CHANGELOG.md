@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `.github/workflows/release.yml`, `.github/workflows/verify-npm-release.yml`, `packages/verify-gate/scripts/verify-published-package.ts`: npm 公開（`publish-npm` / GitHub Release `finalize`）と npm レジストリ反映後の事後照合・実インストール検証を別ワークフロー（`Verify npm Release`）へ責務分離し、npm 側の非同期反映ラグでリリース公開が止まらない構成へ変更。`verify-published-package.ts` に `--wait-seconds` / `--poll-interval-seconds` 待機オプションを追加し、未反映タイムアウト（終了コード `4`）と改ざん・SLSA provenance 不一致等の検証失敗（終了コード `1`・即失敗）を明確に分離
+
 ## [0.7.0] - 2026-11-27
 
 ### Added

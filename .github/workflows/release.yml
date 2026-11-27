@@ -3,9 +3,8 @@ name: Release
 # prepare-release.yml が作る `chore(release): vX.Y.Z` PR のマージ（main への push）で起動する。
 # draft（tag と draft Release 作成）
 # → build-binaries（4 環境向け単体バイナリ + SHA256SUMS をビルド・スモーク検証し Draft Release へ添付）
-# → publish-npm（@scottlz0310/winget-verify-gate をビルド・検証して npm へ OIDC Trusted Publishing）
-# → verify-package（npm レジストリ公開物と provenance をバイト一致照合）
-# → finalize（全検証通過後に Draft Release を正式公開）
+# → publish-npm（@scottlz0310/winget-verify-gate をビルド・スモーク検証して npm へ OIDC Trusted Publishing）
+# → finalize（Draft Release を正式公開。npm レジストリ反映後の事後照合・実インストール検証は別ワークフロー verify-npm-release.yml で実施）
 # npm の Trusted Publisher は repo とこの workflow ファイル名（release.yml）に紐づくため、名前を変えない。
 
 on:
@@ -209,7 +208,7 @@ jobs:
           expected_tgz="${packages[0]}"
 
           # 再実行時に同一版が公開済みの場合は、tarball 内容と SLSA provenance（repo / workflow / TARGET_SHA）が
-          # 完全一致する場合に限り再利用して後段検証・finalize を再開する（不一致時は即エラー停止）。
+          # 完全一致する場合に限り公開をスキップして finalize を継続する（不一致時は即エラー停止）。
           set +e
           bun run packages/verify-gate/scripts/verify-published-package.ts \
             --package "@scottlz0310/winget-verify-gate" \
@@ -217,14 +216,12 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --commit "$TARGET_SHA" \
             --expected-tarball "$expected_tgz" \
-            --allow-missing \
-            --out-registry-tarball "./package-output/registry-reused.tgz"
+            --allow-missing
           check_code=$?
           set -e
 
           if [ "$check_code" -eq 0 ]; then
-            echo "Verified existing published @scottlz0310/winget-verify-gate@${version} matches commit ${TARGET_SHA}; reusing for downstream verification."
-            mv "./package-output/registry-reused.tgz" "$expected_tgz"
+            echo "Verified existing published @scottlz0310/winget-verify-gate@${version} matches commit ${TARGET_SHA}; skipping republish."
           elif [ "$check_code" -eq 3 ]; then
             args=(--provenance --access public)
             if [[ "${version%%+*}" == *-* ]]; then args+=(--tag next); fi
@@ -234,58 +231,8 @@ jobs:
             exit 1
           fi
 
-      - name: Upload npm payload
-        uses: actions/upload-artifact@v7
-        with:
-          name: npm-payload
-          path: package-output/*.tgz
-          if-no-files-found: error
-
-  verify-package:
-    needs: [draft, publish-npm]
-    if: needs.draft.outputs.release_state == 'draft'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.draft.outputs.target_sha }}
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: .bun-version
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "26.13.1"
-
-      - name: Download expected tarball
-        uses: actions/download-artifact@v8
-        with:
-          name: npm-payload
-          path: expected
-
-      - name: Verify registry tarball and SLSA provenance
-        env:
-          TAG: ${{ needs.draft.outputs.tag_name }}
-          TARGET_SHA: ${{ needs.draft.outputs.target_sha }}
-        run: |
-          set -euo pipefail
-          packages=(expected/*.tgz)
-          test "${#packages[@]}" = 1
-          bun run packages/verify-gate/scripts/verify-published-package.ts \
-            --package "@scottlz0310/winget-verify-gate" \
-            --version "${TAG#v}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --commit "$TARGET_SHA" \
-            --expected-tarball "${packages[0]}" \
-            --strict-bytes
-
   finalize:
-    needs: [draft, build-binaries, publish-npm, verify-package]
+    needs: [draft, build-binaries, publish-npm]
     if: needs.draft.outputs.release_state == 'draft'
     uses: scottlz0310/release-automate/.github/workflows/reusable-finalize-release.yml@b155081b04cae981e8ae3beeb37aa1c024866ea2 # v3.3.0
     permissions:
