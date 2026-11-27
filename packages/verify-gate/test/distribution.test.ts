@@ -1,19 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   compareExtractedDirectories,
+  EXIT_CODE_MISSING,
+  EXIT_CODE_PROPAGATION_TIMEOUT,
+  EXIT_CODE_VERIFIED,
   runVerifyPublishedPackage,
   verifySlsaProvenance,
 } from "../scripts/verify-published-package";
@@ -277,7 +272,7 @@ describe("verify-gate distribution bundle & release provenance", () => {
     }
   });
 
-  test("runVerifyPublishedPackage は公開済み再利用・strict バイト一致・未公開 exit 3・各種異常系を正確に判定する", async () => {
+  test("runVerifyPublishedPackage は公開済み再利用・未公開 exit 3・未反映待機リトライ・タイムアウト exit 4・異常系即失敗を正確に判定する", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "vg-run-verify-pkg-"));
     try {
       const srcDir = join(tmpDir, "pkg-src", "package");
@@ -287,9 +282,8 @@ describe("verify-gate distribution bundle & release provenance", () => {
 
       const expectedTgz = join(tmpDir, "expected.tgz");
       execFileSync("tar", ["-czf", expectedTgz, "-C", join(tmpDir, "pkg-src"), "package"]);
-      const expectedBytes = readFileSync(expectedTgz);
 
-      // 内容同一だが別圧縮（別 gzip ヘッダ/タイムスタンプ等）でも展開内容一致で再利用可能にするため、
+      // 内容同一だが別圧縮（別 gzip ヘッダ/タイムスタンプ等）でも展開内容一致で検証可能にするため、
       // 同一ファイルを再圧縮した tarball を registry 側として用意
       const registryTgz = join(tmpDir, "registry-src.tgz");
       execFileSync("tar", ["-czf", registryTgz, "-C", join(tmpDir, "pkg-src"), "package"]);
@@ -327,75 +321,111 @@ describe("verify-gate distribution bundle & release provenance", () => {
         expectedTgz,
       ];
 
-      // 1. 公開済み同一版の照合・再利用（--allow-missing + --out-registry-tarball）
-      const outRegPath = join(tmpDir, "reused.tgz");
+      // 1. 公開済み同一版の照合（--allow-missing 付きでも存在すれば exit 0）
       const logs1: string[] = [];
-      const code1 = await runVerifyPublishedPackage(
-        [...baseArgs, "--allow-missing", "--out-registry-tarball", outRegPath],
-        {
-          npmView: () => validMetadata,
-          fetchBytes: async () => registryBytes,
-          fetchJson: async () => validAttestation,
-          stdout: (l) => logs1.push(l),
-        },
-      );
-      expect(code1).toBe(0);
-      expect(existsSync(outRegPath)).toBe(true);
-      expect(readFileSync(outRegPath).equals(registryBytes)).toBe(true);
+      const code1 = await runVerifyPublishedPackage([...baseArgs, "--allow-missing"], {
+        npmView: () => validMetadata,
+        fetchBytes: async () => registryBytes,
+        fetchJson: async () => validAttestation,
+        stdout: (l) => logs1.push(l),
+      });
+      expect(code1).toBe(EXIT_CODE_VERIFIED);
       expect(logs1[0]).toContain("VERIFIED");
+      expect(logs1[0]).toContain("attempts=1");
 
-      // 2. --strict-bytes でバイト完全一致なら exit 0、1 バイトでも異なれば reject
-      const strictLogs: string[] = [];
-      const strictCode = await runVerifyPublishedPackage(
-        [
-          "--package",
-          "@scottlz0310/winget-verify-gate",
-          "--version",
-          "0.7.0",
-          "--repo",
-          "scottlz0310/winget-observatory",
-          "--commit",
-          commitSha,
-          "--expected-tarball",
-          outRegPath,
-          "--strict-bytes",
-        ],
+      // 2. 未反映（npm view 404 → tarball 404 → attestations 404）を待機リトライし、4 回目で成功
+      let clockMs = 1_000_000;
+      const sleepCalls: number[] = [];
+      let npmViewCalls = 0;
+      let fetchBytesCalls = 0;
+      let fetchJsonCalls = 0;
+      const retryLogs: string[] = [];
+      const retryCode = await runVerifyPublishedPackage(
+        [...baseArgs, "--wait-seconds", "120", "--poll-interval-seconds", "30"],
         {
-          npmView: () => validMetadata,
-          fetchBytes: async () => registryBytes,
-          fetchJson: async () => validAttestation,
-          stdout: (l) => strictLogs.push(l),
+          now: () => clockMs,
+          sleep: async (ms) => {
+            sleepCalls.push(ms);
+            clockMs += ms;
+          },
+          npmView: () => {
+            npmViewCalls += 1;
+            if (npmViewCalls === 1) {
+              const e = new Error("npm error code E404") as Error & { stderr?: string };
+              e.stderr = "404 Not Found";
+              throw e;
+            }
+            return validMetadata;
+          },
+          fetchBytes: async () => {
+            fetchBytesCalls += 1;
+            if (fetchBytesCalls === 1) {
+              throw new Error("HTTP 404 (https://registry.npmjs.org/pkg.tgz)");
+            }
+            return registryBytes;
+          },
+          fetchJson: async () => {
+            fetchJsonCalls += 1;
+            if (fetchJsonCalls === 1) {
+              const e = new Error("not found") as Error & { status?: number };
+              e.status = 404;
+              throw e;
+            }
+            return validAttestation;
+          },
+          stdout: (l) => retryLogs.push(l),
         },
       );
-      expect(strictCode).toBe(0);
-      expect(strictLogs[0]).toContain("strictBytes=true");
+      expect(retryCode).toBe(EXIT_CODE_VERIFIED);
+      expect(sleepCalls).toEqual([30_000, 30_000, 30_000]);
+      expect(retryLogs.filter((l) => l.startsWith("WAITING"))).toHaveLength(3);
+      expect(retryLogs.at(-1)).toContain("VERIFIED");
+      expect(retryLogs.at(-1)).toContain("attempts=4");
 
-      const tamperedExpected = join(tmpDir, "tampered.tgz");
-      writeFileSync(tamperedExpected, Buffer.concat([expectedBytes, Buffer.from([0x00])]));
-      await expect(
-        runVerifyPublishedPackage(
-          [
-            "--package",
-            "@scottlz0310/winget-verify-gate",
-            "--version",
-            "0.7.0",
-            "--repo",
-            "scottlz0310/winget-observatory",
-            "--commit",
-            commitSha,
-            "--expected-tarball",
-            tamperedExpected,
-            "--strict-bytes",
-          ],
-          {
-            npmView: () => validMetadata,
-            fetchBytes: async () => registryBytes,
-            fetchJson: async () => validAttestation,
+      // 3. 制限時間到達まで未反映継続 → exit 4（PROPAGATION_TIMEOUT）
+      let timeoutClockMs = 5_000_000;
+      const timeoutSleeps: number[] = [];
+      const timeoutErrors: string[] = [];
+      const timeoutCode = await runVerifyPublishedPackage(
+        [...baseArgs, "--wait-seconds", "50", "--poll-interval-seconds", "30"],
+        {
+          now: () => timeoutClockMs,
+          sleep: async (ms) => {
+            timeoutSleeps.push(ms);
+            timeoutClockMs += ms;
           },
-        ),
-      ).rejects.toThrow("バイト一致しません");
+          npmView: () => {
+            const e = new Error("npm error code E404") as Error & { stderr?: string };
+            e.stderr = "No match found for version 0.7.0";
+            throw e;
+          },
+          stdout: () => {},
+          stderr: (l) => timeoutErrors.push(l),
+        },
+      );
+      expect(timeoutCode).toBe(EXIT_CODE_PROPAGATION_TIMEOUT);
+      expect(timeoutSleeps).toEqual([30_000, 20_000]);
+      expect(timeoutErrors[0]).toContain("PROPAGATION_TIMEOUT");
 
-      // 3. 未公開版（E404）+ --allow-missing → exit 3、--allow-missing なしは reject
+      // 4. --wait-seconds > 0 でも改ざん・SLSA 不一致・HTTP 500 等の非未反映エラーはリトライせず即失敗
+      let fatalSleepCount = 0;
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--wait-seconds", "120"], {
+          sleep: async () => {
+            fatalSleepCount += 1;
+          },
+          npmView: () => validMetadata,
+          fetchBytes: async () => registryBytes,
+          fetchJson: async () =>
+            makeAttestationResponse({
+              sha512: regSha512Hex,
+              gitCommit: "0000000000000000000000000000000000000000",
+            }),
+        }),
+      ).rejects.toThrow("SLSA provenance 検証失敗");
+      expect(fatalSleepCount).toBe(0);
+
+      // 5. 未公開版（E404）+ --allow-missing → exit 3、公開済み版の tarball/attestations 404 + --allow-missing → reject（再公開させない）
       const missLogs: string[] = [];
       const missCode = await runVerifyPublishedPackage([...baseArgs, "--allow-missing"], {
         npmView: () => {
@@ -405,8 +435,41 @@ describe("verify-gate distribution bundle & release provenance", () => {
         },
         stdout: (l) => missLogs.push(l),
       });
-      expect(missCode).toBe(3);
+      expect(missCode).toBe(EXIT_CODE_MISSING);
       expect(missLogs[0]).toContain("MISSING");
+
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--allow-missing"], {
+          npmView: () => validMetadata,
+          fetchBytes: async () => {
+            const e = new Error("HTTP 404") as Error & { status?: number };
+            e.status = 404;
+            throw e;
+          },
+        }),
+      ).rejects.toThrow("配布物または attestation が未反映");
+
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--allow-missing"], {
+          npmView: () => validMetadata,
+          fetchBytes: async () => registryBytes,
+          fetchJson: async () => {
+            const e = new Error("HTTP 404") as Error & { status?: number };
+            e.status = 404;
+            throw e;
+          },
+        }),
+      ).rejects.toThrow("配布物または attestation が未反映");
+
+      await expect(
+        runVerifyPublishedPackage(baseArgs, {
+          npmView: () => {
+            const e = new Error("npm error code E404") as Error & { stderr?: string };
+            e.stderr = "404 Not Found";
+            throw e;
+          },
+        }),
+      ).rejects.toThrow("npm view に失敗しました");
 
       await expect(
         runVerifyPublishedPackage(baseArgs, {
@@ -416,7 +479,7 @@ describe("verify-gate distribution bundle & release provenance", () => {
         }),
       ).rejects.toThrow("npm view に失敗しました");
 
-      // 4. メタデータ欠落・integrity 不一致・SLSA 不一致・通信エラー・展開内容不一致・引数エラーを拒否
+      // 6. メタデータ欠落・integrity 不一致・通信エラー・展開内容不一致を拒否
       await expect(
         runVerifyPublishedPackage(baseArgs, {
           npmView: () => JSON.stringify({ dist: { tarball: "https://example.invalid/a.tgz" } }),
@@ -440,25 +503,13 @@ describe("verify-gate distribution bundle & release provenance", () => {
       await expect(
         runVerifyPublishedPackage(baseArgs, {
           npmView: () => validMetadata,
-          fetchBytes: async () => registryBytes,
-          fetchJson: async () =>
-            makeAttestationResponse({
-              sha512: regSha512Hex,
-              gitCommit: "0000000000000000000000000000000000000000",
-            }),
-        }),
-      ).rejects.toThrow("SLSA provenance 検証失敗");
-
-      await expect(
-        runVerifyPublishedPackage(baseArgs, {
-          npmView: () => validMetadata,
           fetchBytes: async () => {
             throw new Error("HTTP 503");
           },
         }),
       ).rejects.toThrow("HTTP 503");
 
-      // 展開ファイル内容が異なる tarball の再利用を拒否
+      // 展開ファイル内容が異なる tarball を拒否
       const diffSrcDir = join(tmpDir, "diff-src", "package");
       mkdirSync(join(diffSrcDir, "dist"), { recursive: true });
       writeFileSync(join(diffSrcDir, "dist", "cli.mjs"), "console.log('MODIFIED');\n", "utf8");
@@ -484,9 +535,18 @@ describe("verify-gate distribution bundle & release provenance", () => {
         }),
       ).rejects.toThrow("内容検証に失敗");
 
-      // 引数エラー
+      // 7. 引数エラー
       await expect(runVerifyPublishedPackage(["--unknown"])).rejects.toThrow("未知の引数");
       await expect(runVerifyPublishedPackage([])).rejects.toThrow("すべて必須");
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--allow-missing", "--wait-seconds", "60"]),
+      ).rejects.toThrow("同時に指定できません");
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--wait-seconds", "-1"]),
+      ).rejects.toThrow("0 以上の数値");
+      await expect(
+        runVerifyPublishedPackage([...baseArgs, "--poll-interval-seconds", "0"]),
+      ).rejects.toThrow("0 より大きい数値");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

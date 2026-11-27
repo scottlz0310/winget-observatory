@@ -4,6 +4,10 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } f
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
+export const EXIT_CODE_VERIFIED = 0;
+export const EXIT_CODE_MISSING = 3;
+export const EXIT_CODE_PROPAGATION_TIMEOUT = 4;
+
 export interface SlsaProvenanceCheckInput {
   attestationsResponse: unknown;
   expectedPackageName: string;
@@ -18,7 +22,10 @@ export interface VerifyPublishedPackageDeps {
   npmView?: (spec: string) => string;
   fetchJson?: (url: string) => Promise<unknown>;
   fetchBytes?: (url: string) => Promise<Buffer>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
   stdout?: (line: string) => void;
+  stderr?: (line: string) => void;
 }
 
 interface AttestationEntry {
@@ -30,6 +37,18 @@ interface AttestationEntry {
   };
 }
 
+type PendingRegistryKind = "version-missing" | "artifact-pending";
+
+class PendingRegistryError extends Error {
+  readonly kind: PendingRegistryKind;
+
+  constructor(kind: PendingRegistryKind, message: string) {
+    super(message);
+    this.name = "PendingRegistryError";
+    this.kind = kind;
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -38,6 +57,39 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function encodePackageNameForPurl(packageName: string): string {
   return packageName.startsWith("@") ? `%40${packageName.slice(1)}` : packageName;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (error instanceof PendingRegistryError) {
+    return true;
+  }
+  const err = error as {
+    status?: unknown;
+    stderr?: string | Buffer;
+    stdout?: string | Buffer;
+    message?: string;
+  };
+  if (err?.status === 404) {
+    return true;
+  }
+  const combined = `${String(err?.stderr ?? "")}\n${String(err?.stdout ?? "")}\n${err?.message ?? ""}`;
+  return /E404|404 Not Found|No match found|\bHTTP 404\b/i.test(combined);
+}
+
+function parseNonNegativeNumber(raw: string | undefined, flagName: string): number {
+  const value = Number(raw);
+  if (raw === undefined || raw.trim() === "" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${flagName} には 0 以上の数値を指定してください: ${String(raw)}`);
+  }
+  return value;
+}
+
+function parsePositiveNumber(raw: string | undefined, flagName: string): number {
+  const value = Number(raw);
+  if (raw === undefined || raw.trim() === "" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${flagName} には 0 より大きい数値を指定してください: ${String(raw)}`);
+  }
+  return value;
 }
 
 /**
@@ -196,6 +248,9 @@ function defaultNpmView(spec: string): string {
 
 async function defaultFetchJson(url: string): Promise<unknown> {
   const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  if (res.status === 404) {
+    throw new PendingRegistryError("artifact-pending", `HTTP 404 (${url})`);
+  }
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} (${url})`);
   }
@@ -204,60 +259,41 @@ async function defaultFetchJson(url: string): Promise<unknown> {
 
 async function defaultFetchBytes(url: string): Promise<Buffer> {
   const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (res.status === 404) {
+    throw new PendingRegistryError("artifact-pending", `HTTP 404 (${url})`);
+  }
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} (${url})`);
   }
   return Buffer.from(await res.arrayBuffer());
 }
 
-export async function runVerifyPublishedPackage(
-  argv: readonly string[],
-  deps: VerifyPublishedPackageDeps = {},
-): Promise<number> {
-  const npmView = deps.npmView ?? defaultNpmView;
-  const fetchJson = deps.fetchJson ?? defaultFetchJson;
-  const fetchBytes = deps.fetchBytes ?? defaultFetchBytes;
-  const stdout = deps.stdout ?? ((line: string) => console.log(line));
+async function defaultSleep(ms: number): Promise<void> {
+  await new Promise<void>((resolveTimer) => setTimeout(resolveTimer, ms));
+}
 
-  let pkgName = "";
-  let version = "";
-  let repo = "";
-  let workflowPath = ".github/workflows/release.yml";
-  let commitSha = "";
-  let expectedTarball = "";
-  let strictBytes = false;
-  let allowMissing = false;
-  let outRegistryTarball = "";
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--package") pkgName = argv[++i] ?? "";
-    else if (arg === "--version") version = (argv[++i] ?? "").replace(/^v/, "");
-    else if (arg === "--repo") repo = argv[++i] ?? "";
-    else if (arg === "--workflow-path") workflowPath = argv[++i] ?? "";
-    else if (arg === "--commit") commitSha = argv[++i] ?? "";
-    else if (arg === "--expected-tarball") expectedTarball = resolve(argv[++i] ?? "");
-    else if (arg === "--out-registry-tarball") outRegistryTarball = resolve(argv[++i] ?? "");
-    else if (arg === "--strict-bytes") strictBytes = true;
-    else if (arg === "--allow-missing") allowMissing = true;
-    else throw new Error(`未知の引数です: ${arg}`);
-  }
-
-  if (!pkgName || !version || !repo || !commitSha || !expectedTarball) {
-    throw new Error(
-      "--package / --version / --repo / --commit / --expected-tarball はすべて必須です",
-    );
-  }
-
+async function verifyOnce(params: {
+  pkgName: string;
+  version: string;
+  repo: string;
+  workflowPath: string;
+  commitSha: string;
+  expectedTarball: string;
+  npmView: (spec: string) => string;
+  fetchJson: (url: string) => Promise<unknown>;
+  fetchBytes: (url: string) => Promise<Buffer>;
+}): Promise<{ actualSha512Hex: string }> {
   let metadataRaw: string;
   try {
-    metadataRaw = npmView(`${pkgName}@${version}`);
+    metadataRaw = params.npmView(`${params.pkgName}@${params.version}`);
   } catch (error) {
     const err = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
     const combined = `${String(err.stderr ?? "")}\n${String(err.stdout ?? "")}\n${err.message ?? ""}`;
-    if (allowMissing && /E404|404 Not Found|No match found/i.test(combined)) {
-      stdout(`MISSING ${pkgName}@${version}`);
-      return 3;
+    if (isNotFoundError(error)) {
+      throw new PendingRegistryError(
+        "version-missing",
+        `npm view が未反映です (404): ${params.pkgName}@${params.version}`,
+      );
     }
     throw new Error(`npm view に失敗しました: ${combined.trim()}`);
   }
@@ -275,7 +311,19 @@ export async function runVerifyPublishedPackage(
     );
   }
 
-  const registryBytes = await fetchBytes(tarballUrl);
+  let registryBytes: Buffer;
+  try {
+    registryBytes = await params.fetchBytes(tarballUrl);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      throw new PendingRegistryError(
+        "artifact-pending",
+        `tarball が未反映です (404): ${tarballUrl}`,
+      );
+    }
+    throw error;
+  }
+
   const actualSha512Base64 = createHash("sha512").update(registryBytes).digest("base64");
   const actualSha512Hex = createHash("sha512").update(registryBytes).digest("hex");
   if (integrity !== `sha512-${actualSha512Base64}`) {
@@ -284,52 +332,158 @@ export async function runVerifyPublishedPackage(
     );
   }
 
-  const attestationsResponse = await fetchJson(attestationsUrl);
+  let attestationsResponse: unknown;
+  try {
+    attestationsResponse = await params.fetchJson(attestationsUrl);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      throw new PendingRegistryError(
+        "artifact-pending",
+        `attestations が未反映です (404): ${attestationsUrl}`,
+      );
+    }
+    throw error;
+  }
+
   const slsaCheck = verifySlsaProvenance({
     attestationsResponse,
-    expectedPackageName: pkgName,
-    expectedVersion: version,
-    expectedRepository: repo,
-    expectedWorkflowPath: workflowPath,
-    expectedCommitSha: commitSha,
+    expectedPackageName: params.pkgName,
+    expectedVersion: params.version,
+    expectedRepository: params.repo,
+    expectedWorkflowPath: params.workflowPath,
+    expectedCommitSha: params.commitSha,
     expectedTarballSha512Hex: actualSha512Hex,
   });
   if (!slsaCheck.ok) {
     throw new Error(`SLSA provenance 検証失敗: ${slsaCheck.reason}`);
   }
 
-  const expectedBytes = readFileSync(expectedTarball);
-  if (strictBytes) {
-    if (!expectedBytes.equals(registryBytes)) {
-      throw new Error("レジストリ tarball がアップロードした期待 tarball とバイト一致しません");
+  const tmp = mkdtempSync(join(tmpdir(), "vg-npm-verify-"));
+  try {
+    const regTgz = join(tmp, "registry.tgz");
+    const dirExp = join(tmp, "expected");
+    const dirReg = join(tmp, "registry");
+    mkdirSync(dirExp, { recursive: true });
+    mkdirSync(dirReg, { recursive: true });
+    await Bun.write(regTgz, registryBytes);
+    execFileSync("tar", ["-xzf", params.expectedTarball, "-C", dirExp]);
+    execFileSync("tar", ["-xzf", regTgz, "-C", dirReg]);
+    const diff = compareExtractedDirectories(dirExp, dirReg);
+    if (!diff.ok) {
+      throw new Error(`公開済み tarball の内容検証に失敗: ${diff.reason}`);
     }
-  } else {
-    const tmp = mkdtempSync(join(tmpdir(), "vg-npm-verify-"));
-    try {
-      const regTgz = join(tmp, "registry.tgz");
-      const dirExp = join(tmp, "expected");
-      const dirReg = join(tmp, "registry");
-      mkdirSync(dirExp, { recursive: true });
-      mkdirSync(dirReg, { recursive: true });
-      await Bun.write(regTgz, registryBytes);
-      execFileSync("tar", ["-xzf", expectedTarball, "-C", dirExp]);
-      execFileSync("tar", ["-xzf", regTgz, "-C", dirReg]);
-      const diff = compareExtractedDirectories(dirExp, dirReg);
-      if (!diff.ok) {
-        throw new Error(`公開済み tarball の内容検証に失敗: ${diff.reason}`);
-      }
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 
-  if (outRegistryTarball) {
-    await Bun.write(outRegistryTarball, registryBytes);
+  return { actualSha512Hex };
+}
+
+export async function runVerifyPublishedPackage(
+  argv: readonly string[],
+  deps: VerifyPublishedPackageDeps = {},
+): Promise<number> {
+  const npmView = deps.npmView ?? defaultNpmView;
+  const fetchJson = deps.fetchJson ?? defaultFetchJson;
+  const fetchBytes = deps.fetchBytes ?? defaultFetchBytes;
+  const sleep = deps.sleep ?? defaultSleep;
+  const now = deps.now ?? (() => Date.now());
+  const stdout = deps.stdout ?? ((line: string) => console.log(line));
+  const stderr = deps.stderr ?? ((line: string) => console.error(line));
+
+  let pkgName = "";
+  let version = "";
+  let repo = "";
+  let workflowPath = ".github/workflows/release.yml";
+  let commitSha = "";
+  let expectedTarball = "";
+  let allowMissing = false;
+  let waitSeconds = 0;
+  let pollIntervalSeconds = 30;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--package") pkgName = argv[++i] ?? "";
+    else if (arg === "--version") version = (argv[++i] ?? "").replace(/^v/, "");
+    else if (arg === "--repo") repo = argv[++i] ?? "";
+    else if (arg === "--workflow-path") workflowPath = argv[++i] ?? "";
+    else if (arg === "--commit") commitSha = argv[++i] ?? "";
+    else if (arg === "--expected-tarball") expectedTarball = resolve(argv[++i] ?? "");
+    else if (arg === "--allow-missing") allowMissing = true;
+    else if (arg === "--wait-seconds")
+      waitSeconds = parseNonNegativeNumber(argv[++i], "--wait-seconds");
+    else if (arg === "--poll-interval-seconds")
+      pollIntervalSeconds = parsePositiveNumber(argv[++i], "--poll-interval-seconds");
+    else throw new Error(`未知の引数です: ${arg}`);
   }
-  stdout(
-    `VERIFIED ${pkgName}@${version} commit=${commitSha} sha512=${actualSha512Hex.slice(0, 16)}... strictBytes=${strictBytes}`,
-  );
-  return 0;
+
+  if (!pkgName || !version || !repo || !commitSha || !expectedTarball) {
+    throw new Error(
+      "--package / --version / --repo / --commit / --expected-tarball はすべて必須です",
+    );
+  }
+  if (allowMissing && waitSeconds > 0) {
+    throw new Error("--allow-missing と --wait-seconds は同時に指定できません");
+  }
+
+  const startMs = now();
+  const deadlineMs = startMs + waitSeconds * 1000;
+  const pollIntervalMs = pollIntervalSeconds * 1000;
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
+    try {
+      const { actualSha512Hex } = await verifyOnce({
+        pkgName,
+        version,
+        repo,
+        workflowPath,
+        commitSha,
+        expectedTarball,
+        npmView,
+        fetchJson,
+        fetchBytes,
+      });
+      stdout(
+        `VERIFIED ${pkgName}@${version} commit=${commitSha} sha512=${actualSha512Hex.slice(0, 16)}... attempts=${attempt}`,
+      );
+      return EXIT_CODE_VERIFIED;
+    } catch (error) {
+      if (!(error instanceof PendingRegistryError)) {
+        throw error;
+      }
+      if (allowMissing) {
+        if (error.kind === "version-missing") {
+          stdout(`MISSING ${pkgName}@${version}`);
+          return EXIT_CODE_MISSING;
+        }
+        throw new Error(
+          `公開済みバージョン ${pkgName}@${version} の配布物または attestation が未反映のため再利用・再公開できません: ${error.message}`,
+        );
+      }
+      if (waitSeconds <= 0) {
+        throw new Error(`npm view に失敗しました: ${error.message}`);
+      }
+
+      const currentMs = now();
+      const remainingMs = deadlineMs - currentMs;
+      if (remainingMs <= 0) {
+        const waitedSeconds = Math.round((currentMs - startMs) / 1000);
+        stderr(
+          `PROPAGATION_TIMEOUT ${pkgName}@${version} waited=${waitedSeconds}s attempts=${attempt}: ${error.message}`,
+        );
+        return EXIT_CODE_PROPAGATION_TIMEOUT;
+      }
+
+      const sleepMs = Math.min(pollIntervalMs, remainingMs);
+      const elapsedSeconds = Math.round((currentMs - startMs) / 1000);
+      stdout(
+        `WAITING ${pkgName}@${version} attempt=${attempt} elapsed=${elapsedSeconds}s/${waitSeconds}s nextRetry=${Math.ceil(sleepMs / 1000)}s (${error.message})`,
+      );
+      await sleep(sleepMs);
+    }
+  }
 }
 
 if (import.meta.main) {

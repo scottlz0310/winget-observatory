@@ -1,0 +1,264 @@
+name: Verify npm Release
+
+# release.yml による公開完了後に独立して起動し、npm レジストリへの非同期反映を待ったうえで
+# tarball 内容一致・SLSA v1 provenance・実環境（npx / bunx）起動を事後検証する。
+# リリース公開（GitHub Release の finalize）とは責務を切り離しており、npm 側遅延でタイムアウトした
+# 場合も本ワークフローのみ単体再実行できる。
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "検証対象のリリース タグ（例: v0.7.0。省略時は最新の公開済み Release を使用）"
+        required: false
+        type: string
+      wait_seconds:
+        description: "npm レジストリ反映の最大待機秒数（0〜2100、既定: 1800 = 30 分）"
+        required: false
+        default: "1800"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-npm-release-${{ github.event.inputs.tag || github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-npm:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Resolve release tag and target commit
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_WAIT_SECONDS: ${{ github.event.inputs.wait_seconds }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          wait_seconds="${INPUT_WAIT_SECONDS:-1800}"
+          if [[ ! "$wait_seconds" =~ ^[0-9]+$ ]] || [ "$wait_seconds" -gt 2100 ]; then
+            echo "::error::wait_seconds must be an integer between 0 and 2100 (got: $wait_seconds)"
+            exit 1
+          fi
+
+          semver_tag_regex='^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          tag=""
+          target_sha=""
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -n "$INPUT_TAG" ]; then
+              tag="$INPUT_TAG"
+            else
+              tag="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName -q '.[0].tagName // empty')"
+            fi
+            if [ -z "$tag" ]; then
+              echo "::error::No published GitHub Release found to verify."
+              exit 1
+            fi
+            if [[ ! "$tag" =~ $semver_tag_regex ]]; then
+              echo "::error::Invalid release tag format: $tag"
+              exit 1
+            fi
+
+            is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft -q '.isDraft')"
+            if [ "$is_draft" != "false" ]; then
+              echo "::error::Release $tag is still a draft; finalize the release before running post-publish verification."
+              exit 1
+            fi
+
+            ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}")"
+            obj_type="$(printf '%s' "$ref_json" | jq -r '.object.type')"
+            obj_sha="$(printf '%s' "$ref_json" | jq -r '.object.sha')"
+            if [ "$obj_type" = "tag" ]; then
+              target_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${obj_sha}" -q '.object.sha')"
+            else
+              target_sha="$obj_sha"
+            fi
+          else
+            target_sha="$WORKFLOW_HEAD_SHA"
+            tag="$(
+              gh api "repos/${GITHUB_REPOSITORY}/tags?per_page=30" \
+                | jq -r --arg sha "$target_sha" '
+                    [ .[] | select(.commit.sha == $sha and (.name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))) | .name ]
+                    | first // empty
+                  '
+            )"
+            if [ -z "$tag" ]; then
+              echo "Commit ${target_sha} has no release tag; skipping npm post-publish verification."
+              echo "should_verify=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            release_body="$(mktemp)"
+            trap 'rm -f "$release_body"' EXIT
+            release_http_code="$(
+              curl -sS -o "$release_body" -w '%{http_code}' \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+            )"
+            if [ "$release_http_code" = "404" ]; then
+              echo "Published release for ${tag} does not exist (HTTP 404); skipping."
+              echo "should_verify=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            elif [ "$release_http_code" != "200" ]; then
+              echo "::error::Failed to query GitHub Release for ${tag} (HTTP ${release_http_code}): $(cat "$release_body")"
+              exit 1
+            fi
+            is_draft="$(jq -r '.draft' "$release_body")"
+            if [ "$is_draft" != "false" ]; then
+              echo "Release ${tag} is still a draft (draft=${is_draft}); skipping."
+              echo "should_verify=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Resolved invalid commit SHA: $target_sha"
+            exit 1
+          fi
+
+          echo "Resolved target: tag=${tag} sha=${target_sha} wait_seconds=${wait_seconds}"
+          {
+            echo "should_verify=true"
+            echo "tag_name=${tag}"
+            echo "target_sha=${target_sha}"
+            echo "wait_seconds=${wait_seconds}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout verification scripts
+        if: steps.target.outputs.should_verify == 'true'
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .bun-version
+            packages/verify-gate/scripts/verify-published-package.ts
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout target release commit
+        if: steps.target.outputs.should_verify == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.target.outputs.target_sha }}
+          path: target
+
+      - name: Setup Bun
+        if: steps.target.outputs.should_verify == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: target/.bun-version
+
+      - name: Setup Node.js
+        if: steps.target.outputs.should_verify == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: "26.13.1"
+
+      - name: Install target dependencies
+        if: steps.target.outputs.should_verify == 'true'
+        working-directory: target
+        run: bun install --frozen-lockfile
+
+      - name: Build expected verify-gate tarball
+        if: steps.target.outputs.should_verify == 'true'
+        working-directory: target
+        env:
+          TAG: ${{ steps.target.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          ROOT_VERSION="$(bun -e "console.log(JSON.parse(await Bun.file('package.json').text()).version)")"
+          if [ "$ROOT_VERSION" != "$VERSION" ]; then
+            echo "::error::Version mismatch: tag=$VERSION package.json=$ROOT_VERSION"
+            exit 1
+          fi
+          bun -e "
+            const path = 'packages/verify-gate/package.json';
+            const pkg = JSON.parse(await Bun.file(path).text());
+            pkg.version = process.env.TAG.replace(/^v/, '');
+            await Bun.write(path, JSON.stringify(pkg, null, 2) + '\n');
+          "
+          bun run build:verify-gate
+          mkdir -p expected-package
+          (cd packages/verify-gate && npm pack --pack-destination ../../expected-package)
+
+      - name: Wait for npm propagation and verify tarball + SLSA provenance
+        if: steps.target.outputs.should_verify == 'true'
+        env:
+          TAG: ${{ steps.target.outputs.tag_name }}
+          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
+          WAIT_SECONDS: ${{ steps.target.outputs.wait_seconds }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          packages=(target/expected-package/*.tgz)
+          test "${#packages[@]}" = 1
+
+          set +e
+          bun run packages/verify-gate/scripts/verify-published-package.ts \
+            --package "@scottlz0310/winget-verify-gate" \
+            --version "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --commit "$TARGET_SHA" \
+            --expected-tarball "${packages[0]}" \
+            --wait-seconds "$WAIT_SECONDS" \
+            --poll-interval-seconds 30
+          verify_code=$?
+          set -e
+
+          if [ "$verify_code" -eq 0 ]; then
+            exit 0
+          elif [ "$verify_code" -eq 4 ]; then
+            echo "::warning::@scottlz0310/winget-verify-gate@${VERSION} did not propagate to npm within ${WAIT_SECONDS}s (not an integrity/provenance mismatch). Re-run 'Verify npm Release' with tag=${TAG} once npm finishes processing."
+            exit 1
+          else
+            echo "::error::Published package verification failed for @scottlz0310/winget-verify-gate@${VERSION} (exit=${verify_code})."
+            exit 1
+          fi
+
+      - name: Smoke test published npm package outside repository (npx & bunx)
+        if: steps.target.outputs.should_verify == 'true'
+        env:
+          TAG: ${{ steps.target.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          SPEC="@scottlz0310/winget-verify-gate@${VERSION}"
+          TMPDIR="$(mktemp -d)"
+          trap 'rm -rf "$TMPDIR"' EXIT
+
+          (
+            cd "$TMPDIR"
+            npx_ver="$(npx --yes "$SPEC" --version)"
+            echo "npx --version => $npx_ver"
+            test "$npx_ver" = "winget-verify-gate $VERSION"
+
+            npx --yes "$SPEC" skill list --json \
+              | jq -e '.skills | length == 1 and (.[0].resources | length == 3)'
+
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}' \
+              | npx --yes "$SPEC" mcp \
+              | jq -e --arg ver "$VERSION" '.result.serverInfo.version == $ver and .result.capabilities.extensions["io.modelcontextprotocol/skills"].directoryRead == true'
+
+            bunx_ver="$(bunx --bun "$SPEC" --version)"
+            echo "bunx --bun --version => $bunx_ver"
+            test "$bunx_ver" = "winget-verify-gate $VERSION"
+
+            bunx --bun "$SPEC" skill list --json \
+              | jq -e '.skills | length == 1 and (.[0].resources | length == 3)'
+          )
