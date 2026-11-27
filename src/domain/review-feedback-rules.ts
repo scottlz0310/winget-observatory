@@ -296,12 +296,27 @@ const AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN =
   /^(?:Edit\s*[:;]\s*)?My\s+automation\s+isn't\s+getting\s+a\s+valid\s+output\s+from\s+the\s+pipeline\s+artifacts\.?$/i;
 
 const AUTOMATIC_VALIDATION_POLICY_TEST_QUOTE_LINE_PATTERN =
-  /^>\s*(?:\[Policy-Test-[^\]]+\]\([^)]+\)[^\r\n]*|All\s+banking\s+applications\s+require\s+review\.?)$/i;
+  /^>\s*(?:\[Policy-Test-[^\]]+\]\([^)]+\)\s+`[^`\r\n]+`(?:\s+in\s+[^\r\n(]+)?(?:\s*\(Deterministic\s+automation[^)\r\n]*\))?|All\s+banking\s+applications\s+require\s+review\.?)\s*$/i;
+
+function isAutomaticValidationPolicyTestQuoteLine(line: string): boolean {
+  if (!AUTOMATIC_VALIDATION_POLICY_TEST_QUOTE_LINE_PATTERN.test(line)) {
+    return false;
+  }
+  // `(Deterministic automation...)` マーカーを含む場合はその閉じ括弧で終端していること（後ろへの追記を拒否）
+  if (/\(Deterministic\s+automation/i.test(line) && !/\)\s*$/.test(line)) {
+    return false;
+  }
+  // Policy-Test 転載行と同じ行に人間による修正依頼・HTTP エラー報告が混在していれば保持
+  if (EXPLICIT_BLOCKING_ISSUE_PATTERN.test(line)) {
+    return false;
+  }
+  return true;
+}
 
 /**
  * `Automatic Validation ended with:` で始まるコメントのうち、
  * 行単位で定型の Policy-Test 転載行または自動検証出力エラー行のみで構成されているかを判定する。
- * 定型エラー文の後ろへの追記・別 `>` 行や非引用行の修正依頼・実障害ログが 1 行でも含まれる場合は false（保持）を返す。
+ * 定型出力の終端以降への追記・別 `>` 行や非引用行の修正依頼・実障害ログが 1 行でも含まれる場合は false（保持）を返す。
  */
 export function isAutomaticValidationNoiseComment(body: string | null | undefined): boolean {
   if (typeof body !== "string") {
@@ -339,7 +354,7 @@ export function isAutomaticValidationNoiseComment(body: string | null | undefine
   return remainingLines.every(
     (line) =>
       AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN.test(line) ||
-      AUTOMATIC_VALIDATION_POLICY_TEST_QUOTE_LINE_PATTERN.test(line),
+      isAutomaticValidationPolicyTestQuoteLine(line),
   );
 }
 
@@ -369,20 +384,33 @@ export function isFeedbackNoiseComment(body: string | null | undefined): boolean
 const NON_BLOCKING_FEEDBACK_PATTERN =
   /\b(?:No\s+blockers\s+have\s+been\s+found\s+for\s+this\s+PR|No\s+blocking\s+issues?\s+(?:were|was|have\s+been)?\s*found)\b/i;
 
+const EXPLICIT_BLOCKING_ISSUE_PATTERN =
+  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|can't\s+(?:be\s+)?(?:approved|accepted|proceed)|before\s+this\s+(?:package|submission|pr)\s+can\s+(?:proceed|be\s+approved)|corrections?\s+are\s+required|(?:must|need(?:s)?\s+to|should)\s+be\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch)|fails?\s+to\s+(?:start|launch|run|install|download)|returned\s+exit\s+code|install\s+failed|hash\s+(?:doesn't\s+match|verification\s+failed)|(?:url|link|download|installer|asset|endpoint|page|site)\b[^\r\n]{0,40}\b(?:returns?\s+(?:http\s+)?(?:4\d\d|5\d\d)|is\s+(?:unavailable|unreachable|broken|dead)|404s?)|http\s+(?:4\d\d|5\d\d)\b)|(?:^|\n)\s*required\s*:|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
+
+const CLOSED_REJECTION_ACTIONABLE_PATTERN = new RegExp(
+  `${EXPLICIT_BLOCKING_ISSUE_PATTERN.source}|\\b(?:is\\s+not\\s+recommended|deprecated\\s+manifest|manifest\\s+version\\s+has\\s+been\\s+depreciated|policy\\s+\\d+\\.\\d+|policy-test-\\d|Manual\\s+Validation\\s+ended\\s+with\\s*:|Automatic\\s+Validation\\s+ended\\s+with\\s*:)`,
+  "i",
+);
+
 /**
  * 指摘コメントがブロッキング差し戻しか、任意・非ブロッキング助言かを判定する。
+ * 本文に「No blockers / No blocking issues were found」が含まれていても、
+ * 明示的な障害報告・必須修正依頼（`fails to start` / `Please fix` / `Required:` 等）が併記されている場合は `blocking` を優先する。
  */
 export function classifyFeedbackCommentSeverity(
   body: string | null | undefined,
 ): FeedbackCommentSeverity {
-  if (typeof body === "string" && NON_BLOCKING_FEEDBACK_PATTERN.test(body)) {
+  if (typeof body !== "string") {
+    return "blocking";
+  }
+  if (EXPLICIT_BLOCKING_ISSUE_PATTERN.test(body)) {
+    return "blocking";
+  }
+  if (NON_BLOCKING_FEEDBACK_PATTERN.test(body)) {
     return "non-blocking";
   }
   return "blocking";
 }
-
-const CLOSED_REJECTION_ACTIONABLE_PATTERN =
-  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|can't\s+(?:be\s+)?(?:approved|accepted|proceed)|before\s+this\s+(?:package|submission|pr)\s+can\s+(?:proceed|be\s+approved)|corrections?\s+are\s+required|(?:must|need(?:s)?\s+to|should)\s+be\s+(?:removed|updated|fixed|changed|added|corrected|addressed|resolved)|please\s+(?:fix|update|remove|add|address|correct|provide|use|ensure|rebase|switch)|is\s+not\s+recommended|deprecated\s+manifest|manifest\s+version\s+has\s+been\s+depreciated|policy\s+\d+\.\d+|policy-test-\d|fails?\s+to\s+(?:start|launch|run|install|download)|returned\s+exit\s+code|install\s+failed|hash\s+(?:doesn't\s+match|verification\s+failed)|Manual\s+Validation\s+ended\s+with\s*:|Automatic\s+Validation\s+ended\s+with\s*:)|(?:^|\n)\s*required\s*:|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
 
 /**
  * `CLOSED`（未マージ終了）PR の特権メンテナコメントが、単なる挨拶や任意助言・否定文（「ブロッキングなし」等）ではなく、

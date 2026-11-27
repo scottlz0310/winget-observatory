@@ -241,6 +241,10 @@ describe("review-feedback domain logic", () => {
       true,
     ],
     [
+      "Automatic Validation ended with:\n> [Policy-Test-2.7](https://example.com) `Algo Speak - Potential adult content` (Deterministic automation). Please fix the installer URL. It returns HTTP 404.",
+      false,
+    ],
+    [
       "Automatic Validation ended with:\n> [Policy-Test-2.7](https://example.com) `Algo Speak - Potential adult content` (Deterministic automation)\n\nPlease fix the installer URL. It returns HTTP 404.",
       false,
     ],
@@ -1123,5 +1127,63 @@ describe("review-feedback domain logic", () => {
     expect(
       filterReviewFeedbackRecords([closedNoBlockingWithLabel], { blockingOnly: true }),
     ).toHaveLength(0);
+
+    // 否定文と明示的な障害・修正依頼が併記された場合は blocking を優先（収集・--blocking-only 両方で保持）
+    const closedMixedNoBlockingAndFailure = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900010,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: "No blocking issues were found in the manifest. However, the installer fails to start. Please fix the installer.",
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedMixedNoBlockingAndFailure.entryType).toBe("feedback");
+    if (closedMixedNoBlockingAndFailure.entryType === "feedback") {
+      expect(closedMixedNoBlockingAndFailure.triggers).toEqual(["closed-maintainer-feedback"]);
+      expect(closedMixedNoBlockingAndFailure.hasBlockingFeedback).toBe(true);
+      expect(
+        filterReviewFeedbackRecords([closedMixedNoBlockingAndFailure], { blockingOnly: true }),
+      ).toHaveLength(1);
+    }
+
+    // 却下ラベル・変更要求なしでもインストーラー URL の HTTP 404 障害報告は CLOSED 直接却下として捕捉する
+    const closedHttp404 = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900011,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: "The installer URL returns HTTP 404.",
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedHttp404.entryType).toBe("feedback");
+    if (closedHttp404.entryType === "feedback") {
+      expect(closedHttp404.triggers).toEqual(["closed-maintainer-feedback"]);
+      expect(closedHttp404.hasBlockingFeedback).toBe(true);
+      expect(closedHttp404.categories).toEqual(["metadata-url"]);
+    }
   });
 });
