@@ -1302,5 +1302,71 @@ describe("review-feedback domain logic", () => {
     expect(
       filterReviewFeedbackRecords([closedMandatoryFixWithLabel], { blockingOnly: true }),
     ).toHaveLength(1);
+
+    // 否定語を伴う修正不要コメントは blocking に上書きしない
+    // （ラベルなし CLOSED では no-rejection-trigger、Needs-Author-Feedback 経由でも --blocking-only から除外）
+    const negatedNoUpdateBody =
+      "No blocking issues were found. The installer hash does not need to be updated.";
+    expect(classifyFeedbackCommentSeverity(negatedNoUpdateBody)).toBe("non-blocking");
+    expect(
+      classifyFeedbackCommentSeverity(
+        "No blocking issues were found. The icon doesn't need to be changed and no corrections are required before merge.",
+      ),
+    ).toBe("non-blocking");
+    expect(
+      classifyFeedbackCommentSeverity(
+        "No blocking issues were found. Nothing needs to be updated.",
+      ),
+    ).toBe("non-blocking");
+
+    const closedNegatedWithoutLabel = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900016,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: negatedNoUpdateBody,
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedNegatedWithoutLabel.entryType).toBe("no-feedback");
+    if (closedNegatedWithoutLabel.entryType === "no-feedback") {
+      expect(closedNegatedWithoutLabel.skipReason).toBe("no-rejection-trigger");
+    }
+
+    const closedNegatedWithLabel = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900017,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "Needs-Author-Feedback", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: negatedNoUpdateBody,
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    }) as ReviewFeedbackRecord;
+    expect(closedNegatedWithLabel.hasBlockingFeedback).toBe(false);
+    expect(
+      filterReviewFeedbackRecords([closedNegatedWithLabel], { blockingOnly: true }),
+    ).toHaveLength(0);
   });
 });
