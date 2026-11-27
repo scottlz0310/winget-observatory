@@ -24,7 +24,7 @@ const HELP_TEXT = `verify-gate — microsoft/winget-pkgs pre-submission gate (ST
 Usage:
   verify-gate check <manifest-dir> [--binary <path>] [--sandbox-result <path>] [--offline] [--verify-sha256] [--min-manifest-version <ver>] [--json]
   verify-gate binary <pe-path> [--arch x64|x86|arm64] [--json]
-  verify-gate sandbox prepare <manifest-dir> --out <dir> [--winget-pkgs-root <dir>] [--probe-command <cmd>] [--skip-uninstall] [--vgpu] [--json]
+  verify-gate sandbox prepare <manifest-dir> --out <dir> [--winget-pkgs-root <dir>] [--probe-command <cmd>] [--verify-command "<cmd args>"] [--skip-uninstall] [--vgpu] [--json]
   verify-gate sandbox eval <manifest-dir> --result <sandbox-result.json> [--json]
   verify-gate mcp
   verify-gate skill list [--json]
@@ -143,6 +143,7 @@ export async function runCli(
         let outDir: string | null = null;
         let wingetPkgsRoot: string | undefined;
         const probeCommands: string[] = [];
+        const verifyCommands: string[] = [];
         let skipUninstall = false;
         let enableVgpu = false;
         let asJson = false;
@@ -157,6 +158,9 @@ export async function runCli(
             i++;
           } else if (arg === "--probe-command") {
             probeCommands.push(takeValue(argv, i, "--probe-command"));
+            i++;
+          } else if (arg === "--verify-command") {
+            verifyCommands.push(takeValue(argv, i, "--verify-command"));
             i++;
           } else if (arg === "--skip-uninstall") {
             skipUninstall = true;
@@ -183,6 +187,7 @@ export async function runCli(
           outDir,
           wingetPkgsRoot,
           probeCommands,
+          verifyCommands,
           skipUninstall,
           enableVgpu,
         });

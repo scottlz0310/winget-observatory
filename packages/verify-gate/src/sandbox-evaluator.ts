@@ -104,11 +104,15 @@ function parseCliProbe(raw: unknown, label: string): CliProbeResult {
   if (typeof rec.timedOut !== "boolean") {
     throw new Error(`${label}.timedOut は boolean である必要があります`);
   }
+  if (rec.required !== undefined && typeof rec.required !== "boolean") {
+    throw new Error(`${label}.required は boolean である必要があります`);
+  }
   return {
     command,
     args: rec.args as string[],
     exitCode: rec.exitCode as number | null,
     timedOut: rec.timedOut,
+    required: rec.required as boolean | undefined,
     stdoutSnippet: typeof rec.stdoutSnippet === "string" ? rec.stdoutSnippet : undefined,
     stderrSnippet: typeof rec.stderrSnippet === "string" ? rec.stderrSnippet : undefined,
     error: asOptionalString(rec.error),
@@ -137,6 +141,16 @@ export function parseSandboxRunResult(rawText: string): SandboxRunResult {
   const executedAt = asOptionalString(rec.executedAt);
   if (!executedAt) {
     throw new Error("executedAt は非空文字列である必要があります");
+  }
+  let installedArchitecture: SandboxRunResult["installedArchitecture"];
+  if (rec.installedArchitecture !== undefined && rec.installedArchitecture !== null) {
+    const archRaw = asOptionalString(rec.installedArchitecture)?.toLowerCase();
+    if (archRaw !== "x64" && archRaw !== "x86" && archRaw !== "arm64") {
+      throw new Error(
+        `installedArchitecture は x64 / x86 / arm64 のいずれかである必要があります: ${String(rec.installedArchitecture)}`,
+      );
+    }
+    installedArchitecture = archRaw;
   }
   if (!Array.isArray(rec.arpBefore)) {
     throw new Error("arpBefore は配列である必要があります");
@@ -177,6 +191,7 @@ export function parseSandboxRunResult(rawText: string): SandboxRunResult {
     schemaVersion: 1,
     packageIdentifier: asOptionalString(rec.packageIdentifier),
     packageVersion: asOptionalString(rec.packageVersion),
+    installedArchitecture,
     executedAt,
     localManifestFilesEnabled: rec.localManifestFilesEnabled,
     install,
@@ -232,7 +247,12 @@ function isStatusDllNotFound(exitCode: number | null): boolean {
 
 function scoreArpCandidate(
   entry: ArpRegistryEntry,
-  expected: { displayName: string | null; publisher: string | null; productCode: string | null },
+  expected: {
+    displayName: string | null;
+    publisher: string | null;
+    productCode: string | null;
+    upgradeCode?: string | null;
+  },
 ): number {
   let score = 0;
   if (
@@ -241,6 +261,13 @@ function scoreArpCandidate(
     normalizeGuidOrText(entry.productCode) === normalizeGuidOrText(expected.productCode)
   ) {
     score += 100;
+  }
+  if (
+    expected.upgradeCode &&
+    entry.upgradeCode &&
+    normalizeGuidOrText(entry.upgradeCode) === normalizeGuidOrText(expected.upgradeCode)
+  ) {
+    score += 80;
   }
   if (expected.displayName && entry.displayName) {
     const expLower = expected.displayName.toLowerCase();
@@ -259,7 +286,12 @@ function scoreArpCandidate(
 
 function selectPrimaryArpEntry(
   entries: readonly ArpRegistryEntry[],
-  expected: { displayName: string | null; publisher: string | null; productCode: string | null },
+  expected: {
+    displayName: string | null;
+    publisher: string | null;
+    productCode: string | null;
+    upgradeCode?: string | null;
+  },
 ): ArpRegistryEntry {
   let best = entries[0];
   let bestScore = scoreArpCandidate(best, expected);
@@ -274,8 +306,8 @@ function selectPrimaryArpEntry(
 }
 
 /**
- * Windows Sandbox 実測結果（LocalManifestFiles・インストール/アンインストール・ARP 差分・CLI 実測）を
- * マニフェスト期待値と突き合わせ、GateFinding 一覧へ変換する。
+ * Windows Sandbox 実測結果（対象識別子/バージョン・LocalManifestFiles・インストール/アンインストール・
+ * 選択アーキテクチャの ARP 差分・CLI 実測）をマニフェスト期待値と突き合わせ、GateFinding 一覧へ変換する。
  */
 export function evaluateSandboxResult(
   bundle: ManifestBundle,
@@ -283,28 +315,121 @@ export function evaluateSandboxResult(
   sourceFile?: string,
 ): GateFinding[] {
   const findings: GateFinding[] = [];
-  const expected = extractExpectedArpSpec(bundle);
   const versionHost = bundle.versionFile ?? bundle.installerFile ?? bundle.singletonFile;
   const manifestPkgId =
     versionHost && typeof versionHost.data.PackageIdentifier === "string"
       ? versionHost.data.PackageIdentifier.trim()
       : null;
+  const manifestPkgVer =
+    versionHost && typeof versionHost.data.PackageVersion === "string"
+      ? versionHost.data.PackageVersion.trim()
+      : null;
 
-  if (
-    result.packageIdentifier &&
-    manifestPkgId &&
-    result.packageIdentifier.toLowerCase() !== manifestPkgId.toLowerCase()
-  ) {
+  // 0. 対象 PackageIdentifier / PackageVersion の厳密照合 (CMN-SBX-02)
+  let identityIssues = 0;
+  if (manifestPkgId) {
+    if (!result.packageIdentifier) {
+      identityIssues++;
+      findings.push({
+        id: "CMN-SBX-02",
+        status: "fail",
+        title: "Sandbox 結果に PackageIdentifier が記録されていない",
+        detail: `manifest="${manifestPkgId}" に対し sandbox-result.packageIdentifier が未設定のため対象パッケージを照合できません。`,
+        remediation:
+          "verify-gate sandbox prepare で生成したスクリプトを用いて対象マニフェストを再計測してください。",
+        file: sourceFile,
+        guideRef: "7.1",
+      });
+    } else if (result.packageIdentifier.toLowerCase() !== manifestPkgId.toLowerCase()) {
+      identityIssues++;
+      findings.push({
+        id: "CMN-SBX-02",
+        status: "fail",
+        title: "Sandbox 結果の PackageIdentifier が対象マニフェストと不一致",
+        detail: `sandbox-result="${result.packageIdentifier}" vs manifest="${manifestPkgId}"`,
+        remediation:
+          "対象マニフェストに対応する sandbox-result.json を指定して再実行してください。",
+        file: sourceFile,
+        guideRef: "7.1",
+      });
+    }
+  }
+
+  if (manifestPkgVer) {
+    if (!result.packageVersion) {
+      identityIssues++;
+      findings.push({
+        id: "CMN-SBX-02",
+        status: "fail",
+        title: "Sandbox 結果に PackageVersion が記録されていない",
+        detail: `manifest="${manifestPkgVer}" に対し sandbox-result.packageVersion が未設定のため旧版結果との取り違えを防げません。`,
+        remediation:
+          "packageVersion を記録した最新マニフェストの sandbox-result.json を取得して再評価してください。",
+        file: sourceFile,
+        guideRef: "7.1",
+      });
+    } else if (result.packageVersion !== manifestPkgVer) {
+      identityIssues++;
+      findings.push({
+        id: "CMN-SBX-02",
+        status: "fail",
+        title: "Sandbox 結果の PackageVersion が対象マニフェストと不一致",
+        detail: `sandbox-result="${result.packageVersion}" vs manifest="${manifestPkgVer}"（旧版または別版の実測結果です）`,
+        remediation: `対象バージョン ${manifestPkgVer} のマニフェストで Sandbox 検証を再実行してください。`,
+        file: sourceFile,
+        guideRef: "7.1",
+      });
+    }
+  }
+
+  // アーキテクチャ別の ARP 期待値解決（選択アーキテクチャのみ対象）
+  const unfilteredSpec = extractExpectedArpSpec(bundle);
+  const needsArchDisambiguation =
+    unfilteredSpec.hasArchitectureSpecificArpVariants && !result.installedArchitecture;
+  if (needsArchDisambiguation) {
+    identityIssues++;
     findings.push({
       id: "CMN-SBX-02",
       status: "fail",
-      title: "Sandbox 結果の PackageIdentifier が対象マニフェストと不一致",
-      detail: `sandbox-result="${result.packageIdentifier}" vs manifest="${manifestPkgId}"`,
-      remediation: "対象マニフェストに対応する sandbox-result.json を指定して再実行してください。",
+      title: "複数アーキテクチャで異なる ARP 宣言があるが installedArchitecture が未記録",
+      detail: `マニフェストに複数アーキテクチャ [${unfilteredSpec.availableArchitectures.join(", ")}] の異なる ProductCode / AppsAndFeaturesEntries 宣言があるため、実測対象アーキテクチャの記録が必須です。`,
+      remediation:
+        "sandbox-result.json に installedArchitecture（x64 / x86 / arm64）を記録する最新 verify-inside-sandbox.ps1 で再計測してください。",
+      file: sourceFile,
+      guideRef: "PKG-INST-01",
+    });
+  }
+
+  if (
+    result.installedArchitecture &&
+    unfilteredSpec.availableArchitectures.length > 0 &&
+    !unfilteredSpec.availableArchitectures.includes(result.installedArchitecture) &&
+    !unfilteredSpec.availableArchitectures.includes("neutral")
+  ) {
+    identityIssues++;
+    findings.push({
+      id: "CMN-SBX-02",
+      status: "fail",
+      title: "Sandbox 結果の installedArchitecture がマニフェスト定義に存在しない",
+      detail: `installedArchitecture="${result.installedArchitecture}" はマニフェスト定義 [${unfilteredSpec.availableArchitectures.join(", ")}] に含まれていません。`,
+      remediation: "マニフェストが対象とするアーキテクチャの Sandbox 環境で検証してください。",
+      file: sourceFile,
+      guideRef: "PKG-INST-01",
+    });
+  }
+
+  if (identityIssues === 0 && (manifestPkgId || manifestPkgVer)) {
+    findings.push({
+      id: "CMN-SBX-02",
+      status: "pass",
+      title: "Sandbox 結果のパッケージ識別子・バージョンが対象マニフェストと一致",
+      detail: `${manifestPkgId ?? "(unknown)"}@${manifestPkgVer ?? "(unknown)"}${result.installedArchitecture ? ` (${result.installedArchitecture})` : ""}`,
       file: sourceFile,
       guideRef: "7.1",
     });
   }
+
+  const expected = extractExpectedArpSpec(bundle, result.installedArchitecture);
 
   // 1. LocalManifestFiles 有効化確認
   if (!result.localManifestFilesEnabled) {
@@ -315,7 +440,7 @@ export function evaluateSandboxResult(
       detail:
         "winget settings --enable LocalManifestFiles が失敗または未実行のため、ローカルマニフェスト検証が完了していません。",
       remediation:
-        "管理者権限 PowerShell で winget settings --enable LocalManifestFiles を実行するか、microsoft/winget-pkgs の Tools/SandboxTest.ps1 を使用してください。",
+        "管理者権限 PowerShell で winget settings --enable LocalManifestFiles を実行するか、verify-gate sandbox prepare で生成した .wsb を実行してください。",
       file: sourceFile,
       guideRef: "7.1",
     });
@@ -356,8 +481,17 @@ export function evaluateSandboxResult(
   // 3. ARP レジストリ差分とマニフェスト突き合わせ (PKG-INST-01)
   const arpDiff = diffArpSnapshots(result.arpBefore, result.arpAfterInstall);
   const changedEntries = [...arpDiff.added, ...arpDiff.updated];
+  const matchedAppArpEntries: ArpRegistryEntry[] = [];
+  const matchedAppArpKeys = new Set<string>();
+  const recordMatchedAppArp = (entry: ArpRegistryEntry): void => {
+    const k = arpIdentityKey(entry);
+    if (!matchedAppArpKeys.has(k)) {
+      matchedAppArpKeys.add(k);
+      matchedAppArpEntries.push(entry);
+    }
+  };
 
-  if (result.install.exitCode === 0) {
+  if (result.install.exitCode === 0 && !needsArchDisambiguation) {
     if (changedEntries.length === 0) {
       if (expected.hasInstallerBasedEntry) {
         findings.push({
@@ -384,27 +518,16 @@ export function evaluateSandboxResult(
     } else {
       let arpMismatchCount = 0;
 
-      // 明示 AppsAndFeaturesEntries が宣言されている場合は各エントリの厳密一致を検証
+      // 明示 AppsAndFeaturesEntries が宣言されている場合は選択アーキテクチャの宣言のみを検証
       if (expected.explicitEntries.length > 0) {
         for (const [idx, exp] of expected.explicitEntries.entries()) {
-          const matched = changedEntries.find((actual) => {
-            if (
-              exp.displayName &&
-              actual.displayName &&
-              exp.displayName.toLowerCase() !== actual.displayName.toLowerCase()
-            ) {
-              return false;
-            }
-            if (
-              exp.productCode &&
-              actual.productCode &&
-              normalizeGuidOrText(exp.productCode) !== normalizeGuidOrText(actual.productCode)
-            ) {
-              return false;
-            }
-            return true;
+          const target = selectPrimaryArpEntry(changedEntries, {
+            displayName: exp.displayName ?? expected.displayName,
+            publisher: exp.publisher ?? expected.publisher,
+            productCode: exp.productCode ?? expected.productCode,
+            upgradeCode: exp.upgradeCode,
           });
-          const target = matched ?? changedEntries[0];
+          recordMatchedAppArp(target);
           const mismatches: string[] = [];
 
           if (exp.displayName && target.displayName !== exp.displayName) {
@@ -459,6 +582,7 @@ export function evaluateSandboxResult(
         // AppsAndFeaturesEntries 未宣言時は最も関連度の高い代表 ARP エントリを選択して突き合わせ
         // （依存パッケージ VCRedist 等が同時インストールされても誤爆しないようにする）
         const primary = selectPrimaryArpEntry(changedEntries, expected);
+        recordMatchedAppArp(primary);
         if (
           expected.displayVersion &&
           primary.displayVersion &&
@@ -518,7 +642,7 @@ export function evaluateSandboxResult(
       }
 
       if (arpMismatchCount === 0) {
-        const summaryText = changedEntries
+        const summaryText = matchedAppArpEntries
           .map(
             (e) =>
               `${e.displayName ?? e.keyName} (${e.displayVersion ?? "no-ver"}, ${e.publisher ?? "no-pub"})`,
@@ -528,7 +652,7 @@ export function evaluateSandboxResult(
           id: "PKG-INST-01",
           status: "pass",
           title: "実測 ARP レジストリ値とマニフェストが整合",
-          detail: `検出 ARP (${changedEntries.length} 件): ${summaryText}`,
+          detail: `照合対象 ARP (${matchedAppArpEntries.length} 件 / 全差分 ${changedEntries.length} 件): ${summaryText}`,
           file: sourceFile,
           guideRef: "PKG-INST-01",
         });
@@ -537,6 +661,7 @@ export function evaluateSandboxResult(
   }
 
   // 4. アンインストール・ARP 残骸確認 (PKG-INST-03)
+  // 同時導入された依存パッケージ（VCRedist 等）を残骸と誤認しないよう、対象アプリに紐付いた新規追加 ARP のみを検査する
   if (result.uninstall) {
     if (result.uninstall.exitCode !== 0) {
       findings.push({
@@ -550,15 +675,26 @@ export function evaluateSandboxResult(
         guideRef: "PKG-INST-03",
       });
     } else if (result.arpAfterUninstall) {
+      const addedKeys = new Set(arpDiff.added.map(arpIdentityKey));
+      const appAddedEntries =
+        matchedAppArpEntries.length > 0
+          ? matchedAppArpEntries.filter((entry) => addedKeys.has(arpIdentityKey(entry)))
+          : arpDiff.added.filter((entry) => scoreArpCandidate(entry, expected) > 0);
       const afterUninstallKeys = new Set(result.arpAfterUninstall.map(arpIdentityKey));
-      const leftover = arpDiff.added.filter((entry) =>
+      const leftover = appAddedEntries.filter((entry) =>
         afterUninstallKeys.has(arpIdentityKey(entry)),
       );
+      const dependencyRemainedCount = arpDiff.added.filter(
+        (entry) =>
+          !appAddedEntries.some((a) => arpIdentityKey(a) === arpIdentityKey(entry)) &&
+          afterUninstallKeys.has(arpIdentityKey(entry)),
+      ).length;
+
       if (leftover.length > 0) {
         findings.push({
           id: "PKG-INST-03",
           status: "fail",
-          title: "winget uninstall 後も ARP レジストリに残骸が残存",
+          title: "winget uninstall 後も対象アプリの ARP レジストリに残骸が残存",
           detail: `残存エントリ (${leftover.length} 件): ${leftover.map((e) => `${e.hive}\\${e.view}\\${e.keyName}`).join(", ")}`,
           remediation:
             "アンインストール時に Uninstall キーが確実に削除されるようインストーラーまたは UpgradeBehavior / QuietUninstallString を修正してください。",
@@ -566,11 +702,15 @@ export function evaluateSandboxResult(
           guideRef: "PKG-INST-03",
         });
       } else {
+        const depNote =
+          dependencyRemainedCount > 0
+            ? `（同時導入された依存パッケージ ARP ${dependencyRemainedCount} 件は対象外として除外）`
+            : "";
         findings.push({
           id: "PKG-INST-03",
           status: "pass",
-          title: "winget uninstall が成功し ARP 残骸なし",
-          detail: `exitCode=0 (${result.uninstall.command})、新規追加 ARP ${arpDiff.added.length} 件すべて除去済み。`,
+          title: "winget uninstall が成功し対象アプリの ARP 残骸なし",
+          detail: `exitCode=0 (${result.uninstall.command})、対象アプリ ARP ${appAddedEntries.length} 件すべて除去済み${depNote}。`,
           file: sourceFile,
           guideRef: "PKG-INST-03",
         });
@@ -590,8 +730,8 @@ export function evaluateSandboxResult(
   // 5. CLI 引数なし終了コード & 推奨検証コマンド実測 (APP-CLI-01, APP-CLI-02, PKG-PORT-01)
   if (result.cliProbes && result.cliProbes.length > 0) {
     let noArgChecked = 0;
-    let verifiedArgPasses = 0;
-    let verifiedArgFails = 0;
+    const requiredArgProbes: CliProbeResult[] = [];
+    const optionalArgProbesByCommand = new Map<string, CliProbeResult[]>();
 
     for (const probe of result.cliProbes) {
       const invocation =
@@ -608,11 +748,10 @@ export function evaluateSandboxResult(
           file: sourceFile,
           guideRef: "PKG-PORT-01",
         });
-        if (probe.args.length > 0) verifiedArgFails++;
         continue;
       }
 
-      if (probe.args.length === 0) {
+      if (probe.args.length === 0 && !probe.required) {
         noArgChecked++;
         if (probe.error && !probe.timedOut) {
           findings.push({
@@ -641,7 +780,7 @@ export function evaluateSandboxResult(
             id: "APP-CLI-01",
             status: "pass",
             title: `引数なし CLI 起動が終了コード 0 で完了: ${probe.command}`,
-            detail: `exitCode=0`,
+            detail: "exitCode=0",
             file: sourceFile,
             guideRef: "APP-CLI-01",
           });
@@ -656,33 +795,79 @@ export function evaluateSandboxResult(
             guideRef: "APP-CLI-01",
           });
         }
+      } else if (probe.required) {
+        requiredArgProbes.push(probe);
       } else {
-        if (probe.timedOut || probe.exitCode !== 0) {
-          verifiedArgFails++;
-          findings.push({
-            id: "APP-CLI-02",
-            status: "fail",
-            title: `CLI 検証コマンドが失敗: ${invocation}`,
-            detail: probe.timedOut
-              ? "実行がタイムアウトしました。"
-              : `exitCode=${probe.exitCode ?? "null"}${probe.error ? ` (${probe.error})` : ""}`,
-            remediation:
-              "推奨検証コマンドがクリーン Sandbox 上で exitCode=0 を返すことを確認し、必要に応じてマニフェストまたはバイナリを修正してください。",
-            file: sourceFile,
-            guideRef: "APP-CLI-02",
-          });
-        } else {
-          verifiedArgPasses++;
-        }
+        const list = optionalArgProbesByCommand.get(probe.command) ?? [];
+        list.push(probe);
+        optionalArgProbesByCommand.set(probe.command, list);
       }
     }
 
-    if (verifiedArgPasses > 0 && verifiedArgFails === 0) {
+    let verifiedPassCount = 0;
+    let verifiedFailCount = 0;
+    const passedInvocations: string[] = [];
+
+    // 利用者が明示指定した検証コマンド（required: true）は全件成功を必須とする
+    for (const probe of requiredArgProbes) {
+      const invocation =
+        probe.args.length > 0 ? `${probe.command} ${probe.args.join(" ")}` : probe.command;
+      if (probe.timedOut || probe.exitCode !== 0) {
+        verifiedFailCount++;
+        findings.push({
+          id: "APP-CLI-02",
+          status: "fail",
+          title: `指定された CLI 検証コマンドが失敗: ${invocation}`,
+          detail: probe.timedOut
+            ? "実行がタイムアウトしました。"
+            : `exitCode=${probe.exitCode ?? "null"}${probe.error ? ` (${probe.error})` : ""}`,
+          remediation:
+            "指定した検証コマンドがクリーン Sandbox 上で exitCode=0 を返すことを確認し、必要に応じてマニフェストまたはバイナリを修正してください。",
+          file: sourceFile,
+          guideRef: "APP-CLI-02",
+        });
+      } else {
+        verifiedPassCount++;
+        passedInvocations.push(invocation);
+      }
+    }
+
+    // 自動探索プローブ（--version / --help 等）は、コマンドごとに 1 件以上成功すれば合格
+    // （--version のみ対応 / --help のみ対応の CLI を誤って fail にしない）
+    for (const [cmd, probes] of optionalArgProbesByCommand.entries()) {
+      const succeeded = probes.filter((p) => !p.timedOut && p.exitCode === 0);
+      if (succeeded.length > 0) {
+        verifiedPassCount += succeeded.length;
+        for (const s of succeeded) {
+          passedInvocations.push(`${s.command} ${s.args.join(" ")}`);
+        }
+      } else {
+        verifiedFailCount++;
+        const summary = probes
+          .map(
+            (p) =>
+              `${p.command} ${p.args.join(" ")}=${p.timedOut ? "timeout" : String(p.exitCode ?? "null")}`,
+          )
+          .join(", ");
+        findings.push({
+          id: "APP-CLI-02",
+          status: "fail",
+          title: `CLI 検証コマンドがいずれも失敗: ${cmd}`,
+          detail: `試行した非対話コマンドすべてが非 0 またはタイムアウトでした: ${summary}`,
+          remediation:
+            "クリーン Sandbox 上で exitCode=0 を返す非対話検証コマンドを確認し、独自コマンドを使う場合は --verify-command（verifyCommands）で明示してください。",
+          file: sourceFile,
+          guideRef: "APP-CLI-02",
+        });
+      }
+    }
+
+    if (verifiedPassCount > 0 && verifiedFailCount === 0) {
       findings.push({
         id: "APP-CLI-02",
         status: "pass",
-        title: "CLI 検証コマンド（--version / --help 等）がすべて exitCode=0 で成功",
-        detail: `成功 ${verifiedArgPasses} 件（引数なし計測 ${noArgChecked} 件）。`,
+        title: "CLI 検証コマンドが exitCode=0 で成功",
+        detail: `成功: [${passedInvocations.join(", ")}]（引数なし計測 ${noArgChecked} 件）。`,
         file: sourceFile,
         guideRef: "APP-CLI-02",
       });

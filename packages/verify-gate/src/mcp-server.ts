@@ -78,6 +78,7 @@ const MCP_TOOLS = [
         outDir: { type: "string" },
         wingetPkgsRoot: { type: "string" },
         probeCommands: { type: "array", items: { type: "string" } },
+        verifyCommands: { type: "array", items: { type: "string" } },
         skipUninstall: { type: "boolean" },
         enableVgpu: { type: "boolean" },
       },
@@ -276,12 +277,27 @@ export async function handleJsonRpcMessage(
           }
           probeCommands = args.probeCommands;
         }
+        let verifyCommands: string[] | undefined;
+        if (args.verifyCommands !== undefined) {
+          if (
+            !Array.isArray(args.verifyCommands) ||
+            !args.verifyCommands.every((item) => typeof item === "string")
+          ) {
+            return makeError(
+              id,
+              -32602,
+              "prepare_sandbox parameter 'verifyCommands' must be string[]",
+            );
+          }
+          verifyCommands = args.verifyCommands;
+        }
         try {
           const prepared = runSandboxPrepare({
             manifestDir,
             outDir,
             wingetPkgsRoot: asNonEmptyString(args.wingetPkgsRoot) ?? undefined,
             probeCommands,
+            verifyCommands,
             skipUninstall: args.skipUninstall,
             enableVgpu: args.enableVgpu,
           });

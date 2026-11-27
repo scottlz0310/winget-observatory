@@ -53,23 +53,60 @@ function toPsSingleQuotedLiteral(value: string): string {
   return `'${escapePowerShellSingleQuoted(value)}'`;
 }
 
+export interface ExplicitArpEntrySpec {
+  displayName: string | null;
+  publisher: string | null;
+  displayVersion: string | null;
+  productCode: string | null;
+  upgradeCode: string | null;
+}
+
 export interface ExpectedArpSpec {
   displayName: string | null;
   publisher: string | null;
   displayVersion: string | null;
   productCode: string | null;
   upgradeCode: string | null;
-  explicitEntries: Array<{
-    displayName: string | null;
-    publisher: string | null;
-    displayVersion: string | null;
-    productCode: string | null;
-    upgradeCode: string | null;
-  }>;
+  explicitEntries: ExplicitArpEntrySpec[];
   hasInstallerBasedEntry: boolean;
+  availableArchitectures: string[];
+  hasArchitectureSpecificArpVariants: boolean;
 }
 
 const INSTALLER_BASED_TYPES = new Set(["inno", "nullsoft", "wix", "msi", "exe", "burn", "msix"]);
+
+function parseAppsAndFeaturesEntries(container: Record<string, unknown>): ExplicitArpEntrySpec[] {
+  if (!Array.isArray(container.AppsAndFeaturesEntries)) return [];
+  const entries: ExplicitArpEntrySpec[] = [];
+  for (const raw of container.AppsAndFeaturesEntries) {
+    const rec = asRecord(raw);
+    if (!rec) continue;
+    entries.push({
+      displayName: asNonEmptyString(rec.DisplayName),
+      publisher: asNonEmptyString(rec.Publisher),
+      displayVersion: asNonEmptyString(rec.DisplayVersion),
+      productCode: asNonEmptyString(rec.ProductCode),
+      upgradeCode: asNonEmptyString(rec.UpgradeCode),
+    });
+  }
+  return entries;
+}
+
+function serializeArpVariantKey(
+  productCode: string | null,
+  explicitEntries: readonly ExplicitArpEntrySpec[],
+): string {
+  return JSON.stringify({
+    productCode: productCode?.toLowerCase() ?? null,
+    explicitEntries: explicitEntries.map((e) => ({
+      displayName: e.displayName,
+      publisher: e.publisher,
+      displayVersion: e.displayVersion,
+      productCode: e.productCode?.toLowerCase() ?? null,
+      upgradeCode: e.upgradeCode?.toLowerCase() ?? null,
+    })),
+  });
+}
 
 /**
  * マニフェストバンドルから Sandbox 検証時に使う CLI 検証コマンド候補を抽出する。
@@ -108,8 +145,13 @@ export function inferProbeCommandsFromBundle(bundle: ManifestBundle): string[] {
 
 /**
  * マニフェストバンドルから ARP（Add/Remove Programs）突き合わせ用の期待値を抽出する。
+ * selectedArchitecture が指定されている場合は該当アーキテクチャ（および neutral）の
+ * インストーラーエントリのみを対象とし、WinGet の継承規則（エントリ固有があればルートを上書き）に従う。
  */
-export function extractExpectedArpSpec(bundle: ManifestBundle): ExpectedArpSpec {
+export function extractExpectedArpSpec(
+  bundle: ManifestBundle,
+  selectedArchitecture?: string,
+): ExpectedArpSpec {
   const installerHost = getInstallerHostFile(bundle);
   const localeHost = getLocaleHostFile(bundle);
   const versionHost = bundle.versionFile ?? installerHost ?? localeHost;
@@ -118,41 +160,79 @@ export function extractExpectedArpSpec(bundle: ManifestBundle): ExpectedArpSpec 
   const publisher = localeHost ? asNonEmptyString(localeHost.data.Publisher) : null;
   const displayVersion = versionHost ? asNonEmptyString(versionHost.data.PackageVersion) : null;
 
-  let productCode = installerHost ? asNonEmptyString(installerHost.data.ProductCode) : null;
+  const rootProductCode = installerHost ? asNonEmptyString(installerHost.data.ProductCode) : null;
+  const rootExplicitEntries = installerHost ? parseAppsAndFeaturesEntries(installerHost.data) : [];
+  const allEntries = getInstallerEntries(bundle);
+
+  const availableArchitectures = [
+    ...new Set(
+      allEntries
+        .map((e) => asNonEmptyString(e.Architecture)?.toLowerCase())
+        .filter((a): a is string => a !== undefined && a !== null),
+    ),
+  ];
+
+  // アーキテクチャ間で ARP 宣言（ProductCode / AppsAndFeaturesEntries）が異なるか判定
+  const variantByArch = new Map<string, string>();
+  for (const entry of allEntries) {
+    const arch = asNonEmptyString(entry.Architecture)?.toLowerCase() ?? "unknown";
+    const entryExplicit = parseAppsAndFeaturesEntries(entry);
+    const effectiveExplicit = entryExplicit.length > 0 ? entryExplicit : rootExplicitEntries;
+    const effectiveProductCode =
+      asNonEmptyString(entry.ProductCode) ??
+      effectiveExplicit.find((e) => e.productCode)?.productCode ??
+      rootProductCode;
+    variantByArch.set(arch, serializeArpVariantKey(effectiveProductCode, effectiveExplicit));
+  }
+  const hasArchitectureSpecificArpVariants =
+    variantByArch.size > 1 && new Set(variantByArch.values()).size > 1;
+
+  const normalizedSelectedArch = selectedArchitecture?.toLowerCase();
+  const targetEntries = normalizedSelectedArch
+    ? allEntries.filter((entry) => {
+        const arch = asNonEmptyString(entry.Architecture)?.toLowerCase();
+        return arch === normalizedSelectedArch || arch === "neutral";
+      })
+    : allEntries;
+
+  let productCode = rootProductCode;
   let upgradeCode: string | null = null;
   let hasInstallerBasedEntry = false;
-  const explicitEntries: ExpectedArpSpec["explicitEntries"] = [];
+  const explicitEntries: ExplicitArpEntrySpec[] = [];
+  const seenExplicitKeys = new Set<string>();
 
-  const collectAppsAndFeatures = (container: Record<string, unknown>): void => {
-    if (!Array.isArray(container.AppsAndFeaturesEntries)) return;
-    for (const raw of container.AppsAndFeaturesEntries) {
-      const rec = asRecord(raw);
-      if (!rec) continue;
-      const entryProductCode = asNonEmptyString(rec.ProductCode);
-      const entryUpgradeCode = asNonEmptyString(rec.UpgradeCode);
-      if (!productCode && entryProductCode) productCode = entryProductCode;
-      if (!upgradeCode && entryUpgradeCode) upgradeCode = entryUpgradeCode;
-      explicitEntries.push({
-        displayName: asNonEmptyString(rec.DisplayName),
-        publisher: asNonEmptyString(rec.Publisher),
-        displayVersion: asNonEmptyString(rec.DisplayVersion),
-        productCode: entryProductCode,
-        upgradeCode: entryUpgradeCode,
-      });
+  const pushUniqueExplicit = (items: readonly ExplicitArpEntrySpec[]): void => {
+    for (const item of items) {
+      const key = JSON.stringify(item);
+      if (seenExplicitKeys.has(key)) continue;
+      seenExplicitKeys.add(key);
+      if (!productCode && item.productCode) productCode = item.productCode;
+      if (!upgradeCode && item.upgradeCode) upgradeCode = item.upgradeCode;
+      explicitEntries.push(item);
     }
   };
 
   if (installerHost) {
-    collectAppsAndFeatures(installerHost.data);
-    for (const entry of getInstallerEntries(bundle)) {
+    let anyTargetUsedEntryExplicit = false;
+    for (const entry of targetEntries) {
       const { effectiveType } = resolveEffectiveInstallerType(installerHost.data, entry);
       if (effectiveType && INSTALLER_BASED_TYPES.has(effectiveType)) {
         hasInstallerBasedEntry = true;
       }
-      if (!productCode) {
-        productCode = asNonEmptyString(entry.ProductCode);
+      const entryProductCode = asNonEmptyString(entry.ProductCode);
+      if (entryProductCode) {
+        productCode = entryProductCode;
       }
-      collectAppsAndFeatures(entry);
+      const entryExplicit = parseAppsAndFeaturesEntries(entry);
+      if (entryExplicit.length > 0) {
+        anyTargetUsedEntryExplicit = true;
+        pushUniqueExplicit(entryExplicit);
+      } else if (rootExplicitEntries.length > 0) {
+        pushUniqueExplicit(rootExplicitEntries);
+      }
+    }
+    if (targetEntries.length === 0 && !anyTargetUsedEntryExplicit) {
+      pushUniqueExplicit(rootExplicitEntries);
     }
   }
 
@@ -164,6 +244,8 @@ export function extractExpectedArpSpec(bundle: ManifestBundle): ExpectedArpSpec 
     upgradeCode,
     explicitEntries,
     hasInstallerBasedEntry,
+    availableArchitectures,
+    hasArchitectureSpecificArpVariants,
   };
 }
 
@@ -172,6 +254,7 @@ export interface SandboxPrepareOptions {
   outDir: string;
   wingetPkgsRoot?: string;
   probeCommands?: string[];
+  verifyCommands?: string[];
   skipUninstall?: boolean;
   enableVgpu?: boolean;
 }
@@ -210,10 +293,17 @@ export function buildWsbConfigurationXml(options: {
   ].join("\n");
 }
 
+function parseVerifyCommandLine(raw: string): { command: string; args: string[] } | null {
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  return { command: tokens[0], args: tokens.slice(1) };
+}
+
 export function buildInsideSandboxScript(options: {
   packageIdentifier: string | null;
   packageVersion: string | null;
   probeCommands: readonly string[];
+  verifyCommands?: readonly string[];
   skipUninstall?: boolean;
 }): string {
   const pkgIdLiteral = toPsSingleQuotedLiteral(options.packageIdentifier ?? "");
@@ -221,11 +311,21 @@ export function buildInsideSandboxScript(options: {
   const probeArrayItems = options.probeCommands
     .map((cmd) => toPsSingleQuotedLiteral(cmd))
     .join(", ");
+  const verifySpecs = (options.verifyCommands ?? [])
+    .map(parseVerifyCommandLine)
+    .filter((item): item is { command: string; args: string[] } => item !== null);
+  const verifySpecItems = verifySpecs
+    .map(
+      (spec) =>
+        `@{ Command = ${toPsSingleQuotedLiteral(spec.command)}; Args = @(${spec.args.map((a) => toPsSingleQuotedLiteral(a)).join(", ")}) }`,
+    )
+    .join(", ");
   const skipUninstallLiteral = options.skipUninstall ? "$true" : "$false";
 
   return [
     "# Auto-generated by winget verify-gate (PR 2/2 Windows Sandbox runner)",
     "$ErrorActionPreference = 'Continue'",
+    "$ProgressPreference = 'SilentlyContinue'",
     `$ManifestDir = ${toPsSingleQuotedLiteral(SANDBOX_MANIFEST_DIR)}`,
     `$OutputDir = ${toPsSingleQuotedLiteral(SANDBOX_OUTPUT_DIR)}`,
     "$ResultPath = Join-Path $OutputDir 'sandbox-result.json'",
@@ -233,9 +333,62 @@ export function buildInsideSandboxScript(options: {
     `$PackageIdentifier = ${pkgIdLiteral}`,
     `$PackageVersion = ${pkgVerLiteral}`,
     `$ProbeCommands = @(${probeArrayItems})`,
+    `$VerifyCommands = @(${verifySpecItems})`,
     `$SkipUninstall = ${skipUninstallLiteral}`,
     "",
     "Start-Transcript -Path $LogPath -Force | Out-Null",
+    "",
+    "function Get-NormalizedOsArchitecture {",
+    "  try {",
+    "    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()",
+    "    if ($arch -in @('x64', 'x86', 'arm64')) { return $arch }",
+    "  } catch {}",
+    "  switch ($env:PROCESSOR_ARCHITECTURE) {",
+    "    'AMD64' { return 'x64' }",
+    "    'ARM64' { return 'arm64' }",
+    "    'x86'   { return 'x86' }",
+    "    default { return 'x64' }",
+    "  }",
+    "}",
+    "",
+    "function Refresh-ProcessPath {",
+    "  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')",
+    "  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')",
+    "  $wingetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\\WinGet\\Links'",
+    "  $windowsApps = Join-Path $env:LOCALAPPDATA 'Microsoft\\WindowsApps'",
+    "  $parts = @($machinePath, $userPath)",
+    "  if (Test-Path $windowsApps) { $parts += $windowsApps }",
+    "  if (Test-Path $wingetLinks) { $parts += $wingetLinks }",
+    "  $env:Path = ($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'",
+    "}",
+    "",
+    "function Ensure-WinGetInstalled {",
+    "  Refresh-ProcessPath",
+    "  $existing = Get-Command winget -ErrorAction SilentlyContinue",
+    "  if ($existing) { return $existing }",
+    "  # Bootstrap WinGet in clean Windows Sandbox per Microsoft Learn guidance",
+    "  try {",
+    "    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+    "    Install-PackageProvider -Name NuGet -Force | Out-Null",
+    "    Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -AllowClobber | Out-Null",
+    "    Import-Module Microsoft.WinGet.Client -Force",
+    "    Repair-WinGetPackageManager -AllUsers | Out-Null",
+    "  } catch {",
+    "    Write-Warning ('Microsoft.WinGet.Client bootstrap failed: ' + $_.Exception.Message)",
+    "  }",
+    "  Refresh-ProcessPath",
+    "  $afterModule = Get-Command winget -ErrorAction SilentlyContinue",
+    "  if ($afterModule) { return $afterModule }",
+    "  try {",
+    "    $bundlePath = Join-Path $env:TEMP 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'",
+    "    Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $bundlePath -UseBasicParsing",
+    "    Add-AppxPackage -Path $bundlePath",
+    "  } catch {",
+    "    Write-Warning ('Direct msixbundle WinGet install failed: ' + $_.Exception.Message)",
+    "  }",
+    "  Refresh-ProcessPath",
+    "  return (Get-Command winget -ErrorAction SilentlyContinue)",
+    "}",
     "",
     "function Get-ArpSnapshot {",
     "  $targets = @(",
@@ -273,16 +426,7 @@ export function buildInsideSandboxScript(options: {
     "  return @($entries)",
     "}",
     "",
-    "function Refresh-ProcessPath {",
-    "  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')",
-    "  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')",
-    "  $wingetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\\WinGet\\Links'",
-    "  $parts = @($machinePath, $userPath)",
-    "  if (Test-Path $wingetLinks) { $parts += $wingetLinks }",
-    "  $env:Path = ($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'",
-    "}",
-    "",
-    "function Invoke-CliProbe([string]$Cmd, [string[]]$CmdArgs, [int]$TimeoutSeconds = 15) {",
+    "function Invoke-CliProbe([string]$Cmd, [string[]]$CmdArgs, [bool]$Required = $false, [int]$TimeoutSeconds = 15) {",
     "  $resolved = Get-Command $Cmd -ErrorAction SilentlyContinue",
     "  if (-not $resolved) {",
     "    return [ordered]@{",
@@ -290,7 +434,8 @@ export function buildInsideSandboxScript(options: {
     "      args = @($CmdArgs)",
     "      exitCode = $null",
     "      timedOut = $false",
-    '      error = "Command not found in PATH: $Cmd"',
+    "      required = $Required",
+    "      error = ('Command not found in PATH: ' + $Cmd)",
     "    }",
     "  }",
     "  $psi = New-Object System.Diagnostics.ProcessStartInfo",
@@ -314,6 +459,7 @@ export function buildInsideSandboxScript(options: {
     "        args = @($CmdArgs)",
     "        exitCode = $null",
     "        timedOut = $true",
+    "        required = $Required",
     "        error = ('Timed out after ' + $TimeoutSeconds + 's')",
     "      }",
     "    }",
@@ -324,6 +470,7 @@ export function buildInsideSandboxScript(options: {
     "      args = @($CmdArgs)",
     "      exitCode = [int]$proc.ExitCode",
     "      timedOut = $false",
+    "      required = $Required",
     "      stdoutSnippet = if ($stdoutText) { $stdoutText.Substring(0, [Math]::Min(400, $stdoutText.Length)) } else { '' }",
     "      stderrSnippet = if ($stderrText) { $stderrText.Substring(0, [Math]::Min(400, $stderrText.Length)) } else { '' }",
     "    }",
@@ -333,6 +480,7 @@ export function buildInsideSandboxScript(options: {
     "      args = @($CmdArgs)",
     "      exitCode = $null",
     "      timedOut = $false",
+    "      required = $Required",
     "      error = [string]$_.Exception.Message",
     "    }",
     "  } finally {",
@@ -340,8 +488,9 @@ export function buildInsideSandboxScript(options: {
     "  }",
     "}",
     "",
+    "$installedArchitecture = Get-NormalizedOsArchitecture",
     "$localManifestFilesEnabled = $false",
-    "$wingetCmd = Get-Command winget -ErrorAction SilentlyContinue",
+    "$wingetCmd = Ensure-WinGetInstalled",
     "if ($wingetCmd) {",
     "  & winget settings --enable LocalManifestFiles | Out-Null",
     "  if ($LASTEXITCODE -eq 0) { $localManifestFilesEnabled = $true }",
@@ -356,18 +505,21 @@ export function buildInsideSandboxScript(options: {
     "  $installExitCode = [int]$LASTEXITCODE",
     "  $installLog = $installOut.Substring(0, [Math]::Min(1200, $installOut.Length))",
     "} else {",
-    "  $installLog = 'winget.exe was not found in Windows Sandbox. Use microsoft/winget-pkgs Tools/SandboxTest.ps1 to bootstrap WinGet.'",
+    "  $installLog = 'WinGet bootstrap failed in Windows Sandbox (see sandbox-run.log for details).'",
     "}",
     "",
     "Refresh-ProcessPath",
     "$arpAfterInstall = @(Get-ArpSnapshot)",
     "",
     "$cliProbes = @()",
-    "if ($installExitCode -eq 0 -and $ProbeCommands.Count -gt 0) {",
+    "if ($installExitCode -eq 0) {",
     "  foreach ($cmdName in $ProbeCommands) {",
-    "    $cliProbes += Invoke-CliProbe -Cmd $cmdName -CmdArgs @()",
-    "    $cliProbes += Invoke-CliProbe -Cmd $cmdName -CmdArgs @('--version')",
-    "    $cliProbes += Invoke-CliProbe -Cmd $cmdName -CmdArgs @('--help')",
+    "    $cliProbes += Invoke-CliProbe -Cmd $cmdName -CmdArgs @() -Required $false",
+    "    $cliProbes += Invoke-CliProbe -Cmd $cmdName -CmdArgs @('--version') -Required $false",
+    "    $cliProbes += Invoke-CliProbe -Cmd $cmdName -CmdArgs @('--help') -Required $false",
+    "  }",
+    "  foreach ($vc in $VerifyCommands) {",
+    "    $cliProbes += Invoke-CliProbe -Cmd $vc.Command -CmdArgs $vc.Args -Required $true",
     "  }",
     "}",
     "",
@@ -388,6 +540,7 @@ export function buildInsideSandboxScript(options: {
     "  schemaVersion = 1",
     "  packageIdentifier = if ($PackageIdentifier) { $PackageIdentifier } else { $null }",
     "  packageVersion = if ($PackageVersion) { $PackageVersion } else { $null }",
+    "  installedArchitecture = $installedArchitecture",
     "  executedAt = [DateTime]::UtcNow.ToString('o')",
     "  localManifestFilesEnabled = $localManifestFilesEnabled",
     "  install = [ordered]@{",
@@ -423,7 +576,7 @@ export function buildHostLauncherScript(options: {
   return [
     "# Auto-generated host launcher by winget verify-gate",
     "param(",
-    "  [switch]$UseOfficialSandboxTest",
+    "  [switch]$ManualOfficialSandboxTest",
     ")",
     "$ErrorActionPreference = 'Stop'",
     `$ManifestDir = ${manifestLiteral}`,
@@ -431,14 +584,15 @@ export function buildHostLauncherScript(options: {
     `$ResultPath = ${resultLiteral}`,
     `$WingetPkgsRoot = ${wingetPkgsRootLiteral}`,
     "",
-    "if ($UseOfficialSandboxTest) {",
+    "if ($ManualOfficialSandboxTest) {",
     "  if ([string]::IsNullOrWhiteSpace($WingetPkgsRoot)) {",
-    "    throw 'Pass --winget-pkgs-root when preparing to use Tools/SandboxTest.ps1.'",
+    "    throw 'Pass --winget-pkgs-root when preparing to launch official Tools/SandboxTest.ps1.'",
     "  }",
     "  $officialScript = Join-Path $WingetPkgsRoot 'Tools\\SandboxTest.ps1'",
     "  if (-not (Test-Path $officialScript)) {",
-    '    throw "Official SandboxTest.ps1 not found: $officialScript"',
+    "    throw ('Official SandboxTest.ps1 not found: ' + $officialScript)",
     "  }",
+    "  Write-Host 'Launching official Tools/SandboxTest.ps1 for interactive/manual check (does not emit sandbox-result.json).'",
     "  & $officialScript $ManifestDir",
     "  exit $LASTEXITCODE",
     "}",
@@ -448,9 +602,9 @@ export function buildHostLauncherScript(options: {
     "  throw 'WindowsSandbox.exe was not found. Enable Windows Sandbox optional feature on Windows Pro/Enterprise.'",
     "}",
     "Start-Process -FilePath $sandboxExe.Source -ArgumentList $WsbPath",
-    'Write-Host "Launched Windows Sandbox: $WsbPath"',
-    'Write-Host "After Sandbox finishes, evaluate with:"',
-    'Write-Host "  bun run verify:gate sandbox eval `"$ManifestDir`" --result `"$ResultPath`""',
+    "Write-Host ('Launched Windows Sandbox (auto WinGet bootstrap + ARP/CLI capture): ' + $WsbPath)",
+    "Write-Host 'After Sandbox finishes and emits sandbox-result.json, evaluate with:'",
+    "Write-Host ('  bun run verify:gate sandbox eval \"' + $ManifestDir + '\" --result \"' + $ResultPath + '\"')",
     "",
   ].join("\n");
 }
@@ -476,6 +630,9 @@ export function prepareSandboxWorkspace(
     .map((c) => c.trim())
     .filter((c) => c.length > 0);
   const probeCommands = [...new Set([...inferredProbes, ...explicitProbes])];
+  const verifyCommands = [
+    ...new Set((options.verifyCommands ?? []).map((c) => c.trim()).filter((c) => c.length > 0)),
+  ];
 
   mkdirSync(outputDir, { recursive: true });
 
@@ -493,6 +650,7 @@ export function prepareSandboxWorkspace(
     packageIdentifier,
     packageVersion,
     probeCommands,
+    verifyCommands,
     skipUninstall: options.skipUninstall,
   });
   const launcherScript = buildHostLauncherScript({
@@ -520,11 +678,12 @@ export function prepareSandboxWorkspace(
     hostLauncherPath,
     resultJsonPath,
     probeCommands,
+    verifyCommands,
     recommendedOfficialCommand,
     nextSteps: [
-      `公式 SandboxTest を使う場合: ${recommendedOfficialCommand}`,
-      `自動ダンプ用 .wsb を起動する場合: pwsh -File "${hostLauncherPath}"`,
-      `実行後に結果を突き合わせる場合: verify-gate sandbox eval "${manifestDir}" --result "${resultJsonPath}"`,
+      `自動検証用 .wsb（WinGet 自動導入＋ARP/CLI 自動計測）を起動: pwsh -File "${hostLauncherPath}"`,
+      `完了後に sandbox-result.json をマニフェストと突き合わせ: verify-gate sandbox eval "${manifestDir}" --result "${resultJsonPath}"`,
+      `（補助・手動対話確認のみ）公式 SandboxTest.ps1 を使う場合: ${recommendedOfficialCommand}`,
     ],
   };
 }

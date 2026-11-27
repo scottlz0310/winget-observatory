@@ -90,6 +90,7 @@ export interface CliProbeResult {
   args: string[];
   exitCode: number | null;
   timedOut: boolean;
+  required?: boolean;
   stdoutSnippet?: string;
   stderrSnippet?: string;
   error?: string;
@@ -105,6 +106,7 @@ export interface SandboxRunResult {
   schemaVersion: 1;
   packageIdentifier?: string;
   packageVersion?: string;
+  installedArchitecture?: Exclude<PeArchitecture, "unknown">;
   executedAt: string;
   localManifestFilesEnabled: boolean;
   install: SandboxCommandOutcome;
@@ -125,6 +127,7 @@ export interface SandboxPrepareResult {
   hostLauncherPath: string;
   resultJsonPath: string;
   probeCommands: string[];
+  verifyCommands: string[];
   recommendedOfficialCommand: string;
   nextSteps: string[];
 }

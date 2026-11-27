@@ -305,6 +305,7 @@ export function formatSandboxPrepareText(result: SandboxPrepareResult): string {
     `Launcher: ${result.hostLauncherPath}`,
     `Result:   ${result.resultJsonPath}`,
     `Probes:   ${result.probeCommands.length > 0 ? result.probeCommands.join(", ") : "(none inferred)"}`,
+    `Verify:   ${result.verifyCommands.length > 0 ? result.verifyCommands.join(", ") : "(default --version/--help)"}`,
     "",
     "Next Steps:",
     ...result.nextSteps.map((step) => `- ${step}`),

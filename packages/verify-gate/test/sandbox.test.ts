@@ -122,6 +122,7 @@ function makeBaseSandboxResult(overrides: Partial<SandboxRunResult> = {}): Sandb
     schemaVersion: 1,
     packageIdentifier: "Example.MyApp",
     packageVersion: "1.2.3",
+    installedArchitecture: "x64",
     executedAt: "2026-11-27T14:00:00.000Z",
     localManifestFilesEnabled: true,
     install: {
@@ -211,7 +212,10 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       expect(scriptBytes[1]).toBe(0xbb);
       expect(scriptBytes[2]).toBe(0xbf);
       const scriptText = scriptBytes.toString("utf8");
+      expect(scriptText).toContain("Ensure-WinGetInstalled");
+      expect(scriptText).toContain("Repair-WinGetPackageManager");
       expect(scriptText).toContain("winget settings --enable LocalManifestFiles");
+      expect(scriptText).toContain("installedArchitecture = $installedArchitecture");
       expect(scriptText).toContain("$SkipUninstall = $true");
       expect(scriptText).toContain("'extra-cmd'");
 
@@ -363,6 +367,131 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       });
       const findings = evaluateSandboxResult(bundle, result);
       expect(findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+      // 依存パッケージの ARP だけが残っても対象アプリの残骸と誤認しないこと (PKG-INST-03: pass)
+      expect(findings.some((f) => f.id === "PKG-INST-03" && f.status === "pass")).toBe(true);
+      expect(findings.some((f) => f.id === "PKG-INST-03" && f.status === "fail")).toBe(false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("PackageVersion 不一致・未記録の旧版 sandbox-result.json ではポータブルでも合格にしない", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-ver-"));
+    try {
+      writeInstallerManifest(tmpDir, { installerType: "portable" });
+      const bundle = loadManifestBundle(tmpDir);
+      const base = makeBaseSandboxResult({
+        arpAfterInstall: [makeBaseSandboxResult().arpBefore[0]],
+        arpAfterUninstall: [makeBaseSandboxResult().arpBefore[0]],
+        cliProbes: [],
+      });
+
+      const oldVerFindings = evaluateSandboxResult(bundle, { ...base, packageVersion: "1.0.0" });
+      expect(oldVerFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(true);
+
+      const missingVerFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        packageVersion: undefined,
+      });
+      expect(missingVerFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(
+        true,
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("複数アーキテクチャで異なる ProductCode / AppsAndFeaturesEntries を持つ場合、選択アーキテクチャのみを検証する", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-multiarch-"));
+    try {
+      writeInstallerManifest(tmpDir, { installerType: "inno" });
+      writeFileSync(
+        join(tmpDir, "Example.MyApp.installer.yaml"),
+        [
+          "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+          "PackageIdentifier: Example.MyApp",
+          "PackageVersion: 1.2.3",
+          "Installers:",
+          "  - Architecture: x64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{11111111-2222-3333-4444-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-x64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "  - Architecture: arm64",
+          "    InstallerType: inno",
+          "    UpgradeBehavior: uninstallPrevious",
+          "    AppsAndFeaturesEntries:",
+          "      - DisplayName: MyApp",
+          "        Publisher: Example Corp",
+          "        DisplayVersion: 1.2.3",
+          '        ProductCode: "{99999999-8888-7777-6666-555555555555}"',
+          "    InstallerUrl: https://github.com/example/myapp/releases/download/v1.2.3/myapp-arm64.exe",
+          `    InstallerSha256: ${VALID_SHA}`,
+          "ManifestType: installer",
+          "ManifestVersion: 1.12.0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const bundle = loadManifestBundle(tmpDir);
+      // x64 実行結果なら arm64 の ProductCode を要求せず合格する
+      const x64Findings = evaluateSandboxResult(
+        bundle,
+        makeBaseSandboxResult({ installedArchitecture: "x64", cliProbes: [] }),
+      );
+      expect(x64Findings.filter((f) => f.status === "fail")).toHaveLength(0);
+      expect(x64Findings.some((f) => f.id === "PKG-INST-01" && f.status === "pass")).toBe(true);
+
+      // installedArchitecture 未記録ではどのアーキテクチャか特定できないため fail
+      const noArchFindings = evaluateSandboxResult(
+        bundle,
+        makeBaseSandboxResult({ installedArchitecture: undefined, cliProbes: [] }),
+      );
+      expect(noArchFindings.some((f) => f.id === "CMN-SBX-02" && f.status === "fail")).toBe(true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI 自動プローブは --version / --help の片方成功で pass し、明示指定の required コマンド失敗は fail にする", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "vg-sbx-cli-mode-"));
+    try {
+      writeInstallerManifest(tmpDir, { installerType: "portable" });
+      const bundle = loadManifestBundle(tmpDir);
+      const base = makeBaseSandboxResult({
+        arpAfterInstall: [makeBaseSandboxResult().arpBefore[0]],
+        arpAfterUninstall: [makeBaseSandboxResult().arpBefore[0]],
+      });
+
+      // --version のみ成功、--help は未対応(非0) → APP-CLI-02 pass
+      const partialFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          { command: "myapp", args: [], exitCode: 2, timedOut: false, required: false },
+          { command: "myapp", args: ["--version"], exitCode: 0, timedOut: false, required: false },
+          { command: "myapp", args: ["--help"], exitCode: 1, timedOut: false, required: false },
+        ],
+      });
+      expect(partialFindings.some((f) => f.id === "APP-CLI-02" && f.status === "pass")).toBe(true);
+      expect(partialFindings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(false);
+
+      // 利用者明示指定（required: true）の検証コマンドが失敗 → APP-CLI-02 fail
+      const requiredFailFindings = evaluateSandboxResult(bundle, {
+        ...base,
+        cliProbes: [
+          { command: "myapp", args: ["--version"], exitCode: 0, timedOut: false, required: false },
+          { command: "myapp", args: ["status"], exitCode: 1, timedOut: false, required: true },
+        ],
+      });
+      expect(requiredFailFindings.some((f) => f.id === "APP-CLI-02" && f.status === "fail")).toBe(
+        true,
+      );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
