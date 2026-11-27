@@ -1,6 +1,6 @@
 {
   "name": "@scottlz0310/winget-verify-gate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Pre-submission verification gate (STDIO CLI + MCP server with io.modelcontextprotocol/skills) for microsoft/winget-pkgs",
   "type": "module",

@@ -104,7 +104,7 @@ bun run collect:feedback --states merged,open,closed --lookback-days 60
 
 - [docs/winget-pkgs-submission-guide.md](docs/winget-pkgs-submission-guide.md) — 90 日窓 3,603 件（`MERGED` 1,462 + `CLOSED` 2,141）の分析に基づく配布形式 × アプリ種別チェックリスト・実 PR 事例付き実践ガイド
 - [docs/templates/winget-pkgs-pr-template.md](docs/templates/winget-pkgs-pr-template.md) — メンテナとの質問往復ゼロを狙う「先回り PR 本文テンプレート」（CLI 引数なし終了コード、通信・プライバシー開示、ビルド来歴・署名、Policy-Test 誤検知事前説明）
-- `packages/verify-gate/`（`bun run verify:gate`）— マニフェスト静的検証・URL/SHA-256 検証・PE バイナリ（`VCRUNTIME140.dll` 等）診断を担うローカル `stdio` CLI 核 ＋ `io.modelcontextprotocol/skills`（SEP-2640）対応 STDIO MCP サーバー（`check` / `binary` / `mcp` / `skill list|export`）
+- `packages/verify-gate/`（`bun run verify:gate`）— マニフェスト静的検証・URL/SHA-256 検証・PE バイナリ（`VCRUNTIME140.dll` 等）診断・Windows Sandbox 検証テンプレート生成＆ARP/CLI 実測突き合わせを担うローカル `stdio` CLI 核 ＋ `io.modelcontextprotocol/skills`（SEP-2640）対応 STDIO MCP サーバー（`check` / `binary` / `sandbox prepare|eval` / `mcp` / `skill list|export`）
 
 ---
 

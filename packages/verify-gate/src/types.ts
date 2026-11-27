@@ -67,3 +67,64 @@ export interface PeInspectionResult {
 }
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+export type ArpRegistryHive = "HKLM" | "HKCU";
+export type ArpRegistryView = "64bit" | "32bit";
+
+export interface ArpRegistryEntry {
+  registryKeyPath: string;
+  hive: ArpRegistryHive;
+  view: ArpRegistryView;
+  keyName: string;
+  displayName?: string;
+  publisher?: string;
+  displayVersion?: string;
+  uninstallString?: string;
+  quietUninstallString?: string;
+  productCode?: string;
+  upgradeCode?: string;
+}
+
+export interface CliProbeResult {
+  command: string;
+  args: string[];
+  exitCode: number | null;
+  timedOut: boolean;
+  stdoutSnippet?: string;
+  stderrSnippet?: string;
+  error?: string;
+}
+
+export interface SandboxCommandOutcome {
+  command: string;
+  exitCode: number;
+  logSnippet?: string;
+}
+
+export interface SandboxRunResult {
+  schemaVersion: 1;
+  packageIdentifier?: string;
+  packageVersion?: string;
+  executedAt: string;
+  localManifestFilesEnabled: boolean;
+  install: SandboxCommandOutcome;
+  uninstall?: SandboxCommandOutcome;
+  arpBefore: ArpRegistryEntry[];
+  arpAfterInstall: ArpRegistryEntry[];
+  arpAfterUninstall?: ArpRegistryEntry[];
+  cliProbes?: CliProbeResult[];
+}
+
+export interface SandboxPrepareResult {
+  packageIdentifier: string | null;
+  packageVersion: string | null;
+  manifestDir: string;
+  outputDir: string;
+  wsbPath: string;
+  sandboxScriptPath: string;
+  hostLauncherPath: string;
+  resultJsonPath: string;
+  probeCommands: string[];
+  recommendedOfficialCommand: string;
+  nextSteps: string[];
+}
