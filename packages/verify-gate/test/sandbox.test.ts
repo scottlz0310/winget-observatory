@@ -201,6 +201,11 @@ describe("Windows Sandbox integration (sandbox-plan & sandbox-evaluator)", () =>
       expect(existsSync(prepared.wsbPath)).toBe(true);
       expect(existsSync(prepared.sandboxScriptPath)).toBe(true);
       expect(existsSync(prepared.hostLauncherPath)).toBe(true);
+      expect(prepared.hostLauncherPath).toBe(join(outDir, "run-sandbox-test.ps1"));
+      const launcherText = readFileSync(prepared.hostLauncherPath, "utf8");
+      expect(launcherText).toContain("wsb.exe");
+      expect(launcherText).toContain("Containers-DisposableClientVM");
+      expect(launcherText).toContain("winget-verify-gate sandbox eval");
       expect(prepared.recommendedOfficialCommand).toContain("SandboxTest.ps1");
 
       const wsbText = readFileSync(prepared.wsbPath, "utf8");

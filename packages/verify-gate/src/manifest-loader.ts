@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 import type { ManifestBundle, ManifestFileKind, ParsedManifestFile } from "./types";
 
 const SCHEMA_COMMENT_PATTERN = /^\s*#\s*yaml-language-server:\s*\$schema=(https?:\/\/\S+)\s*$/im;
@@ -47,7 +48,7 @@ export function parseManifestFileContent(
 ): ParsedManifestFile {
   let parsed: unknown;
   try {
-    parsed = Bun.YAML.parse(yamlText);
+    parsed = parseYaml(yamlText);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`YAML パースに失敗しました (${fileName}): ${message}`);

@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-11-27
-
 ### Added
 
+- `@scottlz0310/winget-verify-gate` の npm パッケージ公開・GitHub Releases 単体実行バイナリ配布および導入導線を整備:
+  - `packages/verify-gate/scripts/build.ts`, `src/bin.ts`, `src/embedded-assets.ts`, `packages/verify-gate/package.json`: `Bun.YAML.parse` を `yaml` へ置換して Node.js 20+ / Bun 両対応化し、`SKILL.md`・`docs/winget-pkgs-submission-guide.md`・`docs/templates/winget-pkgs-pr-template.md` およびルート `package.json` のバージョンをビルド時にインライン埋め込みする npm バンドル（`dist/cli.mjs`）と単体バイナリ（`windows-x64.exe` / `windows-arm64.exe` / `linux-x64` / `darwin-arm64`）の統合ビルドを追加、`verify-gate --version` オプションとバージョン SSoT（`resolveVerifyGateVersion`）を実装
+  - `.github/workflows/ci.yml`, `.github/workflows/release.yml`: CI での配布バンドルビルド＆Node.js スモーク検証を追加し、リリース時は `draft` → 単体バイナリ 4 環境＋`SHA256SUMS.txt` アップロード → npm OIDC Trusted Publishing（`--provenance --access public`）→ レジストリ tarball バイト照合 → `finalize` で公開するパイプラインを整備
+  - `README.md`, `packages/verify-gate/README.md`: `bunx` / `npx`・GitHub Releases 単体バイナリ・ローカル実行の導入方法、MCP サーバー登録 JSON 例、`io.modelcontextprotocol/skills` / `skill export`・Windows Sandbox 検証導線を整備
 - `verify-gate` に Windows Sandbox 実機検証連携（.wsb / PowerShell 生成・ARP 自動ダンプ突き合わせ・CLI 終了コード実測評価）を追加（#155 PR 2/2）:
   - `packages/verify-gate/src/sandbox-plan.ts`: マニフェストから CLI 検証コマンド（`Commands` / `NestedInstallerFiles[].PortableCommandAlias`）と ARP 期待値（`AppsAndFeaturesEntries` / `ProductCode` / `UpgradeCode` / `PackageVersion`）を推論し、`verify-gate.wsb`（既定 `VGpu: Disable`・`ReadOnly` マウント・XML エスケープ済）・Sandbox 内自動検証スクリプト `verify-inside-sandbox.ps1`（`winget settings --enable LocalManifestFiles`・`winget install -m`・4 ハイブ ARP スナップショット・CLI 引数なし/`--version`/`--help` 実測・`winget uninstall` 残骸検査、UTF-8 with BOM）・ホスト側ランチャー `run-sandbox-test.ps1`（`Tools/SandboxTest.ps1` 併用対応）を生成
   - `packages/verify-gate/src/sandbox-evaluator.ts`: `sandbox-result.json`（`schemaVersion: 1`）の厳密バリデーション・ARP 差分抽出・マニフェスト突き合わせ（`CMN-SBX-01`/`02`, `NG-03`, `PKG-INST-01`, `PKG-INST-03`）および CLI 引数なし終了コード（`APP-CLI-01`）・推奨検証コマンド（`APP-CLI-02`）・`STATUS_DLL_NOT_FOUND (0xC0000135)` 検出（`PKG-PORT-01`）を実装
@@ -71,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `README.md`, `src/domain/forecast.ts`, `src/models/forecast.ts`: 残存していた旧称（「遭難の底」「優等生の底」「3 つの仮説」等）を 2×2 待機ライン体系へ統一
 
 ### Fixed
+
+- `packages/verify-gate/src/network-checks.ts`, `packages/verify-gate/src/sandbox-plan.ts`: 実機検証フィードバックを反映し、`CMN-03-NET` / `CMN-03-SHA256` / `CMN-04-NET` の表示 URL からリダイレクト先の署名クエリ文字列（`sig` / `jwt` 等）とフラグメントを除去（`sanitizeUrlForDisplay`）、および `run-sandbox-test.ps1` で Windows 11 24H2+ の `wsb.exe` / `WindowsApps` 配下検出と未有効化時の有効化コマンド案内を追加。
 
 - メンテナ初動介入・基準 PR 介入済み判定から CI 自動復旧ノイズおよびアサインのみ誤認を除外し、判定基準を人間レビュー・手動コメントのみに統一（#147）:
   - `src/domain/intervention.ts`, `src/models/depths.ts`: Issue #121 で導入していた `PrivilegedAutomationCommentCount` による特権ロール自動コメント除外および第三者アサイン単体での介入判定を撤回し、`Intervened` / `PrimaryBadge` / `FirstHumanInterventionAt` を全指標で「実質的な人間アクション（ボット・作成者本人を除いた人間レビューまたは手動コメント）」に統一。あわせて未編集の `(Automated message` コメント（`isAutomationComment`）および `@wingetbot run` 単体コメント（`isCiRerunCommandComment`）を除外対象へ追加（`Edit:` 等による人間手動追記の検知は継続維持）
@@ -402,8 +406,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Renovate 設定（`renovate.json`）
   - リポジトリドキュメント（`README.md`）
 
-[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.7.0...HEAD
-[0.7.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...v0.7.0
+[Unreleased]: https://github.com/scottlz0310/winget-observatory/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/scottlz0310/winget-observatory/compare/v0.3.0...v0.4.0

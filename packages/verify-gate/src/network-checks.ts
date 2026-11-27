@@ -17,6 +17,20 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/**
+ * 表示・レポート出力向けに URL からクエリ文字列・フラグメント・認証情報を除去する。
+ * GitHub Release リダイレクト先の署名付き URL（sig / jwt 等）がログへ残るのを防ぐ。
+ */
+export function sanitizeUrlForDisplay(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    const cutIdx = rawUrl.search(/[?#]/);
+    return cutIdx >= 0 ? rawUrl.slice(0, cutIdx) : rawUrl;
+  }
+}
+
 async function probeUrl(
   url: string,
   fetchImpl: FetchLike,
@@ -132,7 +146,7 @@ export async function runNetworkChecks(
           id: "CMN-03-SHA256",
           status: "fail",
           title: `Installers[${index}] のダウンロード・SHA-256 検証に失敗`,
-          detail: `URL="${url}" (${res.error ?? `HTTP ${res.status}`})`,
+          detail: `URL="${sanitizeUrlForDisplay(url)}" (${res.error ?? `HTTP ${res.status}`})`,
           remediation:
             "URL が公開状態で HTTP 200 を返し、資産が取得可能であることを確認してください。",
           file: installerHost?.fileName,
@@ -165,7 +179,7 @@ export async function runNetworkChecks(
           id: "CMN-03-NET",
           status: "fail",
           title: `Installers[${index}] の InstallerUrl が到達不能`,
-          detail: `URL="${url}" (${probe.error ?? `HTTP ${probe.status}`})`,
+          detail: `URL="${sanitizeUrlForDisplay(url)}" (${probe.error ?? `HTTP ${probe.status}`})`,
           remediation: "InstallerUrl が認証なしで HTTP 200 を返すことを確認してください。",
           file: installerHost?.fileName,
           guideRef: "CMN-03",
@@ -175,7 +189,7 @@ export async function runNetworkChecks(
           id: "CMN-03-NET",
           status: "pass",
           title: `Installers[${index}] の InstallerUrl 到達確認済み`,
-          detail: `HTTP ${probe.status} (${probe.finalUrl})`,
+          detail: `HTTP ${probe.status} (${sanitizeUrlForDisplay(probe.finalUrl)})`,
           file: installerHost?.fileName,
           guideRef: "CMN-03",
         });
@@ -204,7 +218,7 @@ export async function runNetworkChecks(
           id: "CMN-04-NET",
           status: "fail",
           title: `${field} が到達不能`,
-          detail: `${field}="${url}" (${probe.error ?? `HTTP ${probe.status}`})`,
+          detail: `${field}="${sanitizeUrlForDisplay(url)}" (${probe.error ?? `HTTP ${probe.status}`})`,
           remediation: `${field} が HTTP 200 を返す公開ページを指しているか確認してください。`,
           file: localeHost.fileName,
           guideRef: "CMN-04",

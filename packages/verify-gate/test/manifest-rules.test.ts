@@ -282,6 +282,37 @@ describe("manifest-rules and gate-runner", () => {
       expect(getCalls).toBeGreaterThan(0);
       expect(fallbackReport.passed).toBe(true);
 
+      // リダイレクト先 URL のクエリ文字列（GitHub Release アセットの sig/jwt 等）が表示から除去されること
+      const redirectReport = await runManifestGate(
+        { manifestDir: tmpDir, verifySha256: false },
+        {
+          fetchImpl: async () => {
+            const res = new Response(null, { status: 200 });
+            Object.defineProperty(res, "url", {
+              value:
+                "https://release-assets.githubusercontent.com/asset/1234?sig=SECRET_SIG&jwt=SECRET_JWT#frag",
+            });
+            return res;
+          },
+        },
+      );
+      const netFinding = redirectReport.findings.find(
+        (f) => f.id === "CMN-03-NET" && f.status === "pass",
+      );
+      expect(netFinding?.detail).toContain(
+        "https://release-assets.githubusercontent.com/asset/1234",
+      );
+      expect(netFinding?.detail).not.toContain("SECRET_SIG");
+      expect(netFinding?.detail).not.toContain("SECRET_JWT");
+      expect(netFinding?.detail).not.toContain("#frag");
+
+      const { sanitizeUrlForDisplay } = await import("../src/network-checks");
+      expect(sanitizeUrlForDisplay("https://user:pass@example.invalid/a/b?token=1#top")).toBe(
+        "https://example.invalid/a/b",
+      );
+      expect(sanitizeUrlForDisplay("not-a-valid-url?secret=1")).toBe("not-a-valid-url");
+      expect(sanitizeUrlForDisplay("plain-text")).toBe("plain-text");
+
       // ネットワーク例外は fail として捕捉されること
       const errorReport = await runManifestGate(
         { manifestDir: tmpDir, verifySha256: false },
