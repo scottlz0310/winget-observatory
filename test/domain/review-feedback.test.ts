@@ -177,8 +177,16 @@ describe("review-feedback domain logic", () => {
       true,
     ],
     [
-      'Verify: <img src="https://example.com/a.png" />\nIn-App Purchase: Processed by Stripe.\nPrivacy Policy: https://example.com/privacy',
+      'Verify: <img src="https://example.com/a.png" />\nIn-App Purchase: Processed by Lemon Squeezy, a Stripe company.\nPrivacy Policy: https://example.com/privacy',
       true,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nIn-App Purchase: Does this app require a subscription to start?',
+      false,
+    ],
+    [
+      'Verify: <img src="https://example.com/a.png" />\nIn-App Purchase: Processor is Buy Me a Coffee, but link 404s:',
+      false,
     ],
     [
       'Verify: <img src="https://example.com/a.png" />\nPrivacy Policy baked into application.\nEdit: Registry: <img src="https://example.com/b.png" />',
@@ -227,6 +235,10 @@ describe("review-feedback domain logic", () => {
     [
       "Automatic Validation ended with:\n> [Policy-Test-2.7](https://example.com) `Algo Speak - Potential adult content` (Deterministic automation)",
       true,
+    ],
+    [
+      "Automatic Validation ended with:\n> [Policy-Test-2.7](https://example.com) `Algo Speak - Potential adult content` (Deterministic automation)\n\nPlease fix the installer URL. It returns HTTP 404.",
+      false,
     ],
     [
       "Automatic Validation ended with:\nEdit: My automation isn't getting a valid output from the pipeline artifacts.",
@@ -912,20 +924,46 @@ describe("review-feedback domain logic", () => {
       state: "CLOSED",
       mergedAt: null,
     };
+    const v1ClosedFeedback: ReviewFeedbackRecord = {
+      ...(nonBlockingEntry as ReviewFeedbackRecord),
+      schemaVersion: 1,
+      number: 900005,
+      state: "CLOSED",
+      mergedAt: null,
+      closedAt: "2026-11-24T00:00:00Z",
+      triggers: ["needs-author-feedback-label"],
+      currentLabels: ["New-Package", "Scripted-Application"],
+      historicalFeedbackLabels: ["Needs-Author-Feedback"],
+      feedbackItems: [
+        {
+          source: "issue_comment",
+          author: "stephengillie",
+          authorAssociation: "COLLABORATOR",
+          createdAt: "2026-11-23T00:00:00Z",
+          body: "Unfortunately, we're not currently accepting scripted applications.",
+          hasImage: false,
+        },
+      ],
+      authorReplies: [],
+      categories: ["uncategorized"],
+      categoryMatches: [{ category: "uncategorized", matchedKeywords: [] }],
+    };
 
     const reclassified = reclassifyReviewFeedbackCorpus([
       v1NoiseFeedback,
       v1MixedFeedback,
       v1MergedSkip,
       v1ClosedSkip,
+      v1ClosedFeedback,
     ]);
 
     expect(reclassified.stats).toEqual({
-      totalProcessed: 4,
-      reclassifiedFeedbackCount: 1,
+      totalProcessed: 5,
+      reclassifiedFeedbackCount: 2,
       demotedToNoiseOnlyCount: 1,
       upgradedMergedSkippedCount: 1,
       keptLegacySkippedCount: 1,
+      keptLegacyFeedbackCount: 1,
       removedFeedbackCommentsCount: 2,
       removedAuthorRepliesCount: 2,
     });
@@ -948,8 +986,79 @@ describe("review-feedback domain logic", () => {
       expect(e2.hasBlockingFeedback).toBe(true);
     }
 
-    // MERGED スキップは v2 へ安全昇格、CLOSED 旧スキップは新トリガー再評価のため v1 維持
+    // MERGED スキップは v2 へ安全昇格、CLOSED 旧スキップ・旧 feedback は履歴補完・再取得のため v1 維持
     expect(byNum.get(900003)?.schemaVersion).toBe(CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION);
     expect(byNum.get(900004)?.schemaVersion).toBe(1);
+    const e5 = byNum.get(900005);
+    expect(e5?.entryType).toBe("feedback");
+    if (e5?.entryType === "feedback") {
+      expect(e5.schemaVersion).toBe(1);
+      expect(e5.triggers).toEqual([
+        "needs-author-feedback-label",
+        "closed-rejection-label",
+        "closed-maintainer-feedback",
+      ]);
+      expect(e5.historicalFeedbackLabels).toEqual([
+        "Needs-Author-Feedback",
+        "Scripted-Application",
+      ]);
+      expect(
+        canReuseCachedFeedbackEntry(e5, {
+          currentState: "CLOSED",
+          currentUpdatedAt: e5.updatedAt,
+        }),
+      ).toBe(false);
+    }
+
+    // 5. CLOSED で却下ラベル・変更要求なし＋挨拶または非ブロッキング助言のみのメンテナコメントは直接却下にしない
+    const closedThanksOnly = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900006,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: "Thanks for your contribution!",
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedThanksOnly.entryType).toBe("no-feedback");
+    if (closedThanksOnly.entryType === "no-feedback") {
+      expect(closedThanksOnly.skipReason).toBe("no-rejection-trigger");
+    }
+
+    const closedAdviceOnly = buildReviewFeedbackEntry({
+      pr: makeBasePr({
+        number: 900007,
+        state: "CLOSED",
+        mergedAt: null,
+        closedAt: "2026-11-24T00:00:00Z",
+        currentLabels: ["New-Package"],
+        labeledEvents: [{ label: "New-Package", createdAt: "2026-11-01T00:00:00Z" }],
+        comments: [
+          {
+            author: { __typename: "User", login: "denelon" },
+            authorAssociation: "COLLABORATOR",
+            body: "Thanks for contributing. No blockers have been found for this PR. Optional note: binary is unsigned.",
+            createdAt: "2026-11-20T00:00:00Z",
+          },
+        ],
+      }),
+      installer: emptyInstaller,
+      collectedAt: "2026-11-27T00:00:00.000Z",
+    });
+    expect(closedAdviceOnly.entryType).toBe("no-feedback");
+    if (closedAdviceOnly.entryType === "no-feedback") {
+      expect(closedAdviceOnly.skipReason).toBe("no-rejection-trigger");
+    }
   });
 });

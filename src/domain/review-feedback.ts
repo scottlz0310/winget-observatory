@@ -30,6 +30,7 @@ import {
   FEEDBACK_CATEGORY_RULES,
   type FeedbackCategoryRule,
   hasEmbeddedImage,
+  isActionableClosedRejectionComment,
   isAuthorNoiseComment,
   isAutomaticValidationNoiseComment,
   isFalsePositiveNoteOnlyComment,
@@ -47,6 +48,7 @@ export {
   FEEDBACK_CATEGORY_RULES,
   type FeedbackCategoryRule,
   hasEmbeddedImage,
+  isActionableClosedRejectionComment,
   isAuthorNoiseComment,
   isAutomaticValidationNoiseComment,
   isFalsePositiveNoteOnlyComment,
@@ -232,10 +234,12 @@ export function detectFeedbackTriggers(params: {
       }
     }
 
-    const hasPrivilegedFeedback = (params.feedbackItems ?? []).some((item) =>
-      isPrivilegedAuthorAssociation(item.authorAssociation),
+    const hasPrivilegedRejectionFeedback = (params.feedbackItems ?? []).some(
+      (item) =>
+        isPrivilegedAuthorAssociation(item.authorAssociation) &&
+        isActionableClosedRejectionComment(item.body),
     );
-    if (hasPrivilegedFeedback) {
+    if (hasPrivilegedRejectionFeedback) {
       triggers.push("closed-maintainer-feedback");
     }
   }
@@ -635,6 +639,7 @@ export interface ReclassifyCorpusResult {
     demotedToNoiseOnlyCount: number;
     upgradedMergedSkippedCount: number;
     keptLegacySkippedCount: number;
+    keptLegacyFeedbackCount: number;
     removedFeedbackCommentsCount: number;
     removedAuthorRepliesCount: number;
   };
@@ -642,10 +647,11 @@ export interface ReclassifyCorpusResult {
 
 /**
  * 既存コーパスエントリを GitHub API 再取得なしで現行ルール（v2）へオフライン再評価する。
- * - `feedback` レコードは保持済みの `feedbackItems` / `authorReplies` を現行ノイズ除外・深刻度・カテゴリで再評価し、
- *   残存指摘が 0 件になれば `no-feedback`（`skipReason: "noise-only-feedback"`）へ降格する。
- * - `MERGED` の `no-feedback` は v2 でトリガーが拡大していないため `CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION` へ安全に昇格する。
- * - `CLOSED` / `OPEN` の旧版 `no-feedback` は v2 の新トリガー判定に API 詳細が必要なため旧 `schemaVersion` を維持し、次回取得対象に残す。
+ * - `MERGED` の `feedback` / `no-feedback` は v2 でトリガーが拡大していないため安全に v2 へ昇格し、
+ *   残存指摘が 0 件になった `feedback` は `no-feedback`（`skipReason: "noise-only-feedback"`）へ降格する。
+ * - `CLOSED` / `OPEN` の旧版（`schemaVersion < 2`）は、タイムラインの `labeledEvents` 全履歴を保持していないため、
+ *   `feedback` については保存済みラベル・コメントから確定可能な `closed-*` トリガー・深刻度・カテゴリを再計算しつつ、
+ *   `schemaVersion` は旧値のまま維持して次回収集時の API 再取得対象に残す（`no-feedback` も同様に旧値維持）。
  */
 export function reclassifyReviewFeedbackCorpus(
   entries: readonly ReviewFeedbackCorpusEntry[],
@@ -655,6 +661,7 @@ export function reclassifyReviewFeedbackCorpus(
   let demotedToNoiseOnlyCount = 0;
   let upgradedMergedSkippedCount = 0;
   let keptLegacySkippedCount = 0;
+  let keptLegacyFeedbackCount = 0;
   let removedFeedbackCommentsCount = 0;
   let removedAuthorRepliesCount = 0;
 
@@ -677,6 +684,12 @@ export function reclassifyReviewFeedbackCorpus(
       }
       continue;
     }
+
+    const canPromoteSchemaVersion =
+      entry.state === "MERGED" || entry.schemaVersion >= CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION;
+    const nextSchemaVersion = canPromoteSchemaVersion
+      ? CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION
+      : entry.schemaVersion;
 
     const cleanedFeedbackItems: ReviewFeedbackComment[] = [];
     for (const item of entry.feedbackItems) {
@@ -701,8 +714,11 @@ export function reclassifyReviewFeedbackCorpus(
 
     if (cleanedFeedbackItems.length === 0) {
       demotedToNoiseOnlyCount++;
+      if (!canPromoteSchemaVersion) {
+        keptLegacySkippedCount++;
+      }
       result.push({
-        schemaVersion: CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
+        schemaVersion: nextSchemaVersion,
         entryType: "no-feedback",
         repository: entry.repository,
         number: entry.number,
@@ -718,14 +734,46 @@ export function reclassifyReviewFeedbackCorpus(
       continue;
     }
 
+    // 保存済みラベル・指摘コメントから確定可能なトリガー・履歴ラベルを補完再計算する
+    let nextTriggers = [...entry.triggers];
+    let nextHistoricalLabels = [...entry.historicalFeedbackLabels];
+    if (entry.state === "CLOSED") {
+      const triggerSet = new Set<FeedbackTriggerKind>(nextTriggers);
+      const labelSet = new Set<string>(nextHistoricalLabels);
+      const savedClosedRejectionLabels = [
+        ...new Set([...entry.currentLabels, ...entry.historicalFeedbackLabels]),
+      ].filter(isClosedRejectionLabel);
+      if (savedClosedRejectionLabels.length > 0) {
+        triggerSet.add("closed-rejection-label");
+        for (const label of savedClosedRejectionLabels) {
+          labelSet.add(label);
+        }
+      }
+      const hasPrivilegedRejectionFeedback = cleanedFeedbackItems.some(
+        (item) =>
+          isPrivilegedAuthorAssociation(item.authorAssociation) &&
+          isActionableClosedRejectionComment(item.body),
+      );
+      if (hasPrivilegedRejectionFeedback) {
+        triggerSet.add("closed-maintainer-feedback");
+      }
+      nextTriggers = [...triggerSet];
+      nextHistoricalLabels = [...labelSet];
+    }
+
     const { categories, categoryMatches } = categorizeFeedback({
       feedbackItems: cleanedFeedbackItems,
       authorReplies: cleanedAuthorReplies,
     });
     reclassifiedFeedbackCount++;
+    if (!canPromoteSchemaVersion) {
+      keptLegacyFeedbackCount++;
+    }
     result.push({
       ...entry,
-      schemaVersion: CURRENT_REVIEW_FEEDBACK_SCHEMA_VERSION,
+      schemaVersion: nextSchemaVersion,
+      triggers: nextTriggers,
+      historicalFeedbackLabels: nextHistoricalLabels,
       feedbackItems: cleanedFeedbackItems,
       authorReplies: cleanedAuthorReplies,
       categories,
@@ -742,6 +790,7 @@ export function reclassifyReviewFeedbackCorpus(
       demotedToNoiseOnlyCount,
       upgradedMergedSkippedCount,
       keptLegacySkippedCount,
+      keptLegacyFeedbackCount,
       removedFeedbackCommentsCount,
       removedAuthorRepliesCount,
     },

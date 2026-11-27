@@ -194,14 +194,29 @@ export function isWingetbotCommandOnlyComment(body: string | null | undefined): 
   return /^@wingetbot\s+(?:waivers|run|installationmetadata)\b[^\r\n]*$/i.test(normalized);
 }
 
-const VERIFY_MEMO_ONLY_LINE_PATTERNS: readonly RegExp[] = [
-  /^(?:Edit\s*[:;]\s*)?Privacy\s+Po(?:li|il)cy\s*:\s*\S+\s*$/i,
+const VERIFY_MEMO_SIMPLE_LINE_PATTERNS: readonly RegExp[] = [
+  /^(?:Edit\s*[:;]\s*)?Privacy\s+Po(?:li|il)cy\s*:\s*https?:\/\/\S+\s*$/i,
   /^(?:Edit\s*[:;]\s*)?Privacy\s+Policy\s+(?:baked\s+into\s+application\.?|in\s+(?:PackageUrl|InstallerUrl)\s*:?)\s*$/i,
   /^(?:Edit\s*[:;]\s*)?Internet\s+Translation\s*:?\s*$/i,
-  /^(?:Edit\s*[:;]\s*)?In-App\s+Purchase\s*:[^\r\n]*$/i,
   /^(?:Edit\s*[:;]\s*)?Registry\s*:?\s*$/i,
   /^Edit\s*[:;]?\s*$/i,
 ];
+
+const VERIFY_MEMO_IN_APP_PURCHASE_PATTERN =
+  /^(?:Edit\s*[:;]\s*)?In-App\s+Purchase\s*:\s*(?:(?:Processed\s+by|Payment\s+processors?\s+(?:is|are)|Processor\s+(?:is|appears\s+to\s+be))\s+[A-Za-z0-9 ,./&'-]+|[A-Za-z0-9 ,./&'-]+\s+is\s+processor|https?:\/\/\S+)\.?:?\s*$/i;
+
+const IN_APP_PURCHASE_ISSUE_GUARD_PATTERN =
+  /[?]|\b(?:but|404|fail(?:s|ed|ing)?|error|cannot|missing|broken|require(?:s|d)?|should|please)\b/i;
+
+function isVerifyMemoOnlyLine(line: string): boolean {
+  if (VERIFY_MEMO_SIMPLE_LINE_PATTERNS.some((re) => re.test(line))) {
+    return true;
+  }
+  return (
+    VERIFY_MEMO_IN_APP_PURCHASE_PATTERN.test(line) &&
+    !IN_APP_PURCHASE_ISSUE_GUARD_PATTERN.test(line)
+  );
+}
 
 /**
  * `Verify: <img ...>` のような動作確認スクリーンショット単体、または定型確認メモ
@@ -248,7 +263,7 @@ export function isVerifyMemoOnlyComment(body: string | null | undefined): boolea
   }
 
   // 画像開始（Verify なし）の場合は定型メモ行（Internet Translation 等）が 1 つ以上明示されているときのみ除外
-  return lines.every((line) => VERIFY_MEMO_ONLY_LINE_PATTERNS.some((re) => re.test(line)));
+  return lines.every(isVerifyMemoOnlyLine);
 }
 
 /**
@@ -276,9 +291,13 @@ export function isFalsePositiveNoteOnlyComment(body: string | null | undefined):
 const AUTOMATIC_VALIDATION_REAL_FAILURE_PATTERN =
   /\b(?:exit\s+code|STATUS_DLL_NOT_FOUND|0xC0000135|C0000135|hash\s+doesn't\s+match|hash\s+verification\s+failed|within\s+the\s+timeout|Zip\s+file\s+expired)\b|-1073741515\b/i;
 
+const AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN =
+  /^(?:Edit\s*[:;]\s*)?My\s+automation\s+isn't\s+getting\s+a\s+valid\s+output\b[^\r\n]*$/i;
+
 /**
  * `Automatic Validation ended with:` で始まるコメントのうち、
- * 実行時エラー・ハッシュ不一致等の実障害ログを含まない Policy-Test 誤検知転載・自動検証出力エラーのみか判定する。
+ * 定型の転載行（`>` 引用行の Policy-Test 誤検知出力）または自動検証出力エラー行のみで構成されているかを判定する。
+ * 引用の後ろに人間による修正依頼・質問等の非引用行が追記されている場合、または実障害ログを含む場合は false（保持）を返す。
  */
 export function isAutomaticValidationNoiseComment(body: string | null | undefined): boolean {
   if (typeof body !== "string") {
@@ -288,20 +307,59 @@ export function isAutomaticValidationNoiseComment(body: string | null | undefine
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/\r\n/g, "\n")
     .trim();
-  if (!/^Automatic\s+Validation\s+ended\s+with\s*:/i.test(normalized)) {
+  const lines = normalized.split("\n");
+  const firstLine = lines[0]?.trim() ?? "";
+  const headerMatch = /^Automatic\s+Validation\s+ended\s+with\s*:(.*)$/i.exec(firstLine);
+  if (!headerMatch) {
     return false;
   }
   if (AUTOMATIC_VALIDATION_REAL_FAILURE_PATTERN.test(normalized)) {
     return false;
   }
+
+  const remainingLines: string[] = [];
+  const headerRest = headerMatch[1].trim();
+  if (headerRest) {
+    remainingLines.push(headerRest);
+  }
+  for (const rawLine of lines.slice(1)) {
+    const trimmed = rawLine.trim();
+    if (trimmed) {
+      remainingLines.push(trimmed);
+    }
+  }
+  if (remainingLines.length === 0) {
+    return false;
+  }
+
+  let hasArtifactError = false;
+  const quotedLines: string[] = [];
+  for (const line of remainingLines) {
+    if (line.startsWith(">")) {
+      quotedLines.push(line);
+      continue;
+    }
+    if (AUTOMATIC_VALIDATION_ARTIFACT_ERROR_LINE_PATTERN.test(line)) {
+      hasArtifactError = true;
+      continue;
+    }
+    // 定型転載・自動検証出力エラー以外の非引用行（人間追記）が 1 行でもあれば保持
+    return false;
+  }
+
+  if (hasArtifactError && quotedLines.length === 0) {
+    return true;
+  }
+  if (quotedLines.length === 0) {
+    return false;
+  }
+
+  const quotedBody = quotedLines.join("\n");
   const hasPolicyTestOutput =
     /Policy-Test-\d|All\s+banking\s+applications\s+require\s+review|Algo\s+Speak|Adult\s+Reference\s+or\s+Theme|Targeted\s+Brand|Possible\s+CP\/CE\s+term/i.test(
-      normalized,
+      quotedBody,
     );
-  const isAutomationArtifactError = /My\s+automation\s+isn't\s+getting\s+a\s+valid\s+output/i.test(
-    normalized,
-  );
-  return hasPolicyTestOutput || isAutomationArtifactError;
+  return hasPolicyTestOutput || hasArtifactError;
 }
 
 /**
@@ -339,6 +397,23 @@ export function classifyFeedbackCommentSeverity(
     return "non-blocking";
   }
   return "blocking";
+}
+
+const CLOSED_REJECTION_ACTIONABLE_PATTERN =
+  /\b(?:not\s+(?:currently\s+)?accepting|cannot\s+(?:be\s+)?(?:approved|accepted|proceed)|must\s+be|should\s+be\s+(?:removed|updated|fixed|changed|added)|please\s+(?:fix|update|remove|add|address|correct|provide|use|ensure)|required\s*:|blocking|policy\s+\d+\.\d+|policy-test-|deprecated|not\s+recommended|fails?\s+to|invalid|mismatch|missing|unavailable|unreachable|404|exit\s+code|Manual\s+Validation\s+ended\s+with|Automatic\s+Validation\s+ended\s+with)\b|Close\s+with\s+reason\s*:\s*(?!Stale\b)/i;
+
+/**
+ * `CLOSED`（未マージ終了）PR の特権メンテナコメントが、単なる挨拶や任意助言ではなく、
+ * 却下・修正要求・障害指摘の根拠を含むかを判定する。
+ */
+export function isActionableClosedRejectionComment(body: string | null | undefined): boolean {
+  if (typeof body !== "string" || isFeedbackNoiseComment(body)) {
+    return false;
+  }
+  if (classifyFeedbackCommentSeverity(body) === "non-blocking") {
+    return false;
+  }
+  return CLOSED_REJECTION_ACTIONABLE_PATTERN.test(body);
 }
 
 /**
